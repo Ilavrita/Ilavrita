@@ -1,0 +1,8 @@
+* text=auto eol=lf
+
+*.png binary
+*.docx binary
+
+assets/** linguist-documentation
+docs/** linguist-documentation
+third_party/** linguist-vendored

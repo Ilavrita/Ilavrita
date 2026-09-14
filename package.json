@@ -1,0 +1,33 @@
+{
+  "name": "@ilavrita/monorepo",
+  "version": "0.0.1",
+  "private": true,
+  "description": "Open-source healthcare infrastructure. FHIR-native, self-hostable, edge to enterprise.",
+  "license": "AGPL-3.0-only",
+  "homepage": "https://ilavrita.health",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Ilavrita/Ilavrita.git"
+  },
+  "bugs": {
+    "url": "https://github.com/Ilavrita/Ilavrita/issues"
+  },
+  "packageManager": "pnpm@10.19.0",
+  "engines": {
+    "node": ">=22",
+    "pnpm": ">=10"
+  },
+  "scripts": {
+    "bootstrap": "./scripts/bootstrap.sh",
+    "build": "turbo run build",
+    "test": "turbo run test",
+    "lint": "turbo run lint",
+    "typecheck": "turbo run typecheck",
+    "dev": "turbo run dev",
+    "clean": "turbo run clean && rm -rf node_modules .turbo"
+  },
+  "devDependencies": {
+    "turbo": "2.6.1",
+    "typescript": "5.9.3"
+  }
+}

@@ -1,0 +1,34 @@
+# Build output
+/bin/
+/dist/
+*.exe
+*.test
+*.out
+
+# Go
+vendor/
+coverage.out
+coverage.html
+
+# Node / Turborepo
+node_modules/
+.turbo/
+*.tsbuildinfo
+
+# Runtime data (SQLite database, uploaded files, logs)
+/pb_data/
+/ilavrita_data/
+*.db
+*.db-shm
+*.db-wal
+
+# Local configuration and secrets
+.env
+.env.*
+!.env.example
+
+# Editors and operating system noise
+.DS_Store
+.idea/
+.vscode/*
+!.vscode/extensions.json

@@ -1,0 +1,46 @@
+version: "2"
+
+linters:
+  default: standard
+  enable:
+    - bodyclose
+    - depguard
+    - errorlint
+    - gosec
+    - misspell
+    - revive
+    - unconvert
+
+  settings:
+    # FR-025: FHIR services depend on Ilavrita interfaces, never on PocketBase
+    # directly. Only the PocketBase storage backend and the server entrypoint may
+    # import the runtime foundation.
+    depguard:
+      rules:
+        fhir-domain:
+          list-mode: lax
+          files:
+            - "**/packages/fhir/**"
+            - "**/packages/search/**"
+            - "**/packages/storage/**"
+            - "**/packages/tenancy/**"
+            - "**/packages/authz/**"
+            - "**/packages/audit/**"
+            - "**/packages/files/**"
+          deny:
+            - pkg: github.com/pocketbase
+              desc: the FHIR domain must depend on Ilavrita interfaces, not on the PocketBase runtime
+
+    revive:
+      rules:
+        - name: exported
+        - name: package-comments
+
+formatters:
+  enable:
+    - gofmt
+    - goimports
+
+issues:
+  max-issues-per-linter: 0
+  max-same-issues: 0

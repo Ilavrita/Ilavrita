@@ -1,0 +1,14 @@
+.git
+.github
+.turbo
+node_modules
+bin
+dist
+docs
+assets
+test
+*.md
+.env
+.env.*
+pb_data
+ilavrita_data
