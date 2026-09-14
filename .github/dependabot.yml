@@ -6,7 +6,7 @@ updates:
       interval: weekly
     commit-message:
       prefix: "chore(deps)"
-    labels: ["type:dependencies"]
+    labels: ["type:dependencies", "area:server"]
     groups:
       go-minor-and-patch:
         update-types: ["minor", "patch"]
@@ -17,7 +17,7 @@ updates:
       interval: weekly
     commit-message:
       prefix: "chore(deps)"
-    labels: ["type:dependencies"]
+    labels: ["type:dependencies", "area:sdk"]
     groups:
       npm-minor-and-patch:
         update-types: ["minor", "patch"]
@@ -28,7 +28,7 @@ updates:
       interval: weekly
     commit-message:
       prefix: "ci(deps)"
-    labels: ["type:dependencies"]
+    labels: ["type:dependencies", "area:ci"]
 
   - package-ecosystem: docker
     directory: /build/docker
@@ -36,4 +36,4 @@ updates:
       interval: weekly
     commit-message:
       prefix: "chore(deps)"
-    labels: ["type:dependencies"]
+    labels: ["type:dependencies", "area:docker"]

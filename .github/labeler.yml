@@ -1,0 +1,77 @@
+# Path-based pull request labels, applied by .github/workflows/labeler.yml.
+# Labels describe where a change lands, so reviewers can find the ones that
+# touch the boundaries they own.
+
+"area:fhir":
+  - changed-files:
+      - any-glob-to-any-file: packages/fhir/**
+
+"area:search":
+  - changed-files:
+      - any-glob-to-any-file: packages/search/**
+
+"area:storage":
+  - changed-files:
+      - any-glob-to-any-file: packages/storage/**
+
+"area:server":
+  - changed-files:
+      - any-glob-to-any-file: apps/ilavrita/**
+
+"area:sdk":
+  - changed-files:
+      - any-glob-to-any-file: packages/sdk-typescript/**
+
+"area:console":
+  - changed-files:
+      - any-glob-to-any-file: apps/console/**
+
+"area:ci":
+  - changed-files:
+      - any-glob-to-any-file:
+          - .github/workflows/**
+          - .github/actions/**
+          - .actrc
+          - .goreleaser.yaml
+          - cliff.toml
+
+"area:docker":
+  - changed-files:
+      - any-glob-to-any-file:
+          - build/docker/**
+          - compose.yaml
+          - .dockerignore
+
+"area:pocketbase":
+  - changed-files:
+      - any-glob-to-any-file:
+          - third_party/**
+          - .gitmodules
+
+"type:docs":
+  - changed-files:
+      - any-glob-to-any-file:
+          - docs/**
+          - "**/*.md"
+
+"type:test":
+  - changed-files:
+      - any-glob-to-any-file:
+          - test/**
+          - "**/*_test.go"
+
+"type:security":
+  - changed-files:
+      - any-glob-to-any-file:
+          - SECURITY.md
+          - docs/security.md
+          - docs/license-compliance.md
+          - .fossa.yml
+
+"type:dependencies":
+  - changed-files:
+      - any-glob-to-any-file:
+          - go.mod
+          - go.sum
+          - pnpm-lock.yaml
+          - "**/package.json"

@@ -1,4 +1,7 @@
 # Applied by .github/workflows/labels.yml whenever this file changes.
+# Colours come from the Ilavrita palette in assets/brand/README.md.
+
+# --- What kind of change ---------------------------------------------------
 - name: "type:bug"
   color: "B91C1C"
   description: Behaves differently from how it is documented
@@ -17,18 +20,90 @@
 - name: "type:dependencies"
   color: "DCCBFF"
   description: Dependency update
+- name: "type:refactor"
+  color: "C4B5FD"
+  description: Behaviour-preserving change
+- name: "type:test"
+  color: "C4B5FD"
+  description: Tests only
+- name: "type:build"
+  color: "DCCBFF"
+  description: Build, packaging or release tooling
+
+# --- Which part of the system ----------------------------------------------
+- name: "area:fhir"
+  color: "4F46E5"
+  description: FHIR types and the public boundary
+- name: "area:search"
+  color: "4F46E5"
+  description: Query parsing, planning and indexing
+- name: "area:storage"
+  color: "4F46E5"
+  description: Persistence interfaces and backends
+- name: "area:server"
+  color: "4F46E5"
+  description: HTTP surface and runtime wiring
+- name: "area:sdk"
+  color: "7C3AED"
+  description: TypeScript SDK
+- name: "area:console"
+  color: "7C3AED"
+  description: Operator console
+- name: "area:ci"
+  color: "EDEFF7"
+  description: Workflows and automation
+- name: "area:docker"
+  color: "EDEFF7"
+  description: Container image and deployment
+- name: "area:pocketbase"
+  color: "A78BFA"
+  description: The vendored PocketBase fork
+
+# --- Triage state ----------------------------------------------------------
 - name: "needs:triage"
   color: "EDEFF7"
   description: Not yet assessed by a maintainer
 - name: "needs:info"
   color: "EDEFF7"
   description: Waiting on the reporter
+- name: "needs:design"
+  color: "EDEFF7"
+  description: Needs a decision before it can be built
+- name: "blocked"
+  color: "B91C1C"
+  description: Cannot proceed until something else lands
+
+# --- Invitations -----------------------------------------------------------
 - name: "good first issue"
   color: "16A34A"
   description: Suitable for a first contribution
 - name: "help wanted"
   color: "16A34A"
   description: Maintainers would welcome help here
+
+# --- Release impact --------------------------------------------------------
 - name: "breaking"
   color: "B91C1C"
   description: Changes published behaviour
+- name: "release-gate"
+  color: "7F1D1D"
+  description: Must be resolved before the next release
+
+# --- Pull request size -----------------------------------------------------
+# Applied automatically. Large pull requests are harder to review well, not
+# forbidden.
+- name: "size:XS"
+  color: "EDEFF7"
+  description: Under 10 changed lines
+- name: "size:S"
+  color: "DCCBFF"
+  description: Under 50 changed lines
+- name: "size:M"
+  color: "C4B5FD"
+  description: Under 200 changed lines
+- name: "size:L"
+  color: "A78BFA"
+  description: Under 800 changed lines
+- name: "size:XL"
+  color: "7C3AED"
+  description: 800 changed lines or more
