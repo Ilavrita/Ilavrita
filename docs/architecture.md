@@ -17,7 +17,7 @@ Ilavrita today keeps working when the storage layer changes.
 flowchart TD
     client["FHIR client"] --> http["HTTP surface<br/>apps/ilavrita"]
     http --> services["FHIR services<br/>packages/fhir, packages/search"]
-    services --> policy["Tenancy, authorization, audit<br/>packages/tenancy, authz, audit"]
+    services --> policy["Tenancy, authorization, audit<br/>packages/project, authz, audit"]
     policy --> boundary["Storage interfaces<br/>packages/storage"]
     boundary --> sqlite["SQLite backend<br/>packages/storage/pocketbase"]
     boundary -.planned.-> postgres["PostgreSQL backend"]
@@ -51,7 +51,7 @@ performance, so it gets an explicit pipeline rather than ad-hoc query building:
 
 ```
 query string -> parser -> search AST -> SearchParameter registry
-             -> tenant and authorization predicates -> planner
+             -> Project and authorization predicates -> planner
              -> backend query compiler -> searchset Bundle
 ```
 
@@ -69,14 +69,21 @@ Search indexes are derived data. They are physically separate from the canonical
 JSON and can be rebuilt from it, so losing an index costs a reindex, never a
 resource.
 
-## Tenancy
+## Projects
 
-Every canonical resource, version, index entry, file reference and audit record
-carries a tenant boundary that the server derives. It is never read from a
-client-supplied FHIR field, and it is applied in the query layer rather than
-after results are fetched.
+A **Project** is the isolation boundary: the primary tenant, security,
+configuration and FHIR data boundary. The hierarchy is Instance -> Super Project
+-> Project -> ProjectMembership -> Profile -> Resource.
 
-Cross-tenant exposure of health data is the worst failure this system can have,
+Every canonical resource, version, index entry, file reference, audit record and
+job belongs to exactly one Project, and the identifier is derived server-side
+rather than read from a client-supplied FHIR field. It is applied in the query
+layer rather than after results are fetched.
+
+`storage.ResourceKey` carries the Project as part of the key rather than as an
+optional argument, so no storage call can be made without it (FR-045).
+
+Cross-Project exposure of health data is the worst failure this system can have,
 which is why the boundary lives in storage rather than in each service.
 
 ## Current state

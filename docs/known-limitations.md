@@ -25,7 +25,7 @@ Every other `/fhir/R4` route answers `501 Not Implemented` as an
 | Bundle batch and transaction | Not implemented |
 | Conditional create, update, delete | Not implemented |
 | Validation and `$validate` | Not implemented |
-| Multi-tenancy | Interface only, not enforced |
+| Project isolation | Interface only, not enforced |
 | Authentication and authorization | Not implemented for FHIR routes |
 | Audit trail | Not implemented |
 | Binary and DocumentReference payloads | Not implemented |
@@ -61,5 +61,5 @@ They are not a supported interface. Anything built against them will break.
 
 ## Operational consequence
 
-**Do not put patient data in Ilavrita.** There is no authorization, no tenant
+**Do not put patient data in Ilavrita.** There is no authorization, no Project
 enforcement and no audit trail. Use synthetic data only.

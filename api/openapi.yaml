@@ -22,7 +22,7 @@ info:
     [known limitations](https://github.com/Ilavrita/Ilavrita/blob/dev/docs/known-limitations.md).
 
     Do not store patient data in this build. It enforces no authorization, no
-    tenant boundary and no audit trail.
+    Project boundary and no audit trail.
   version: 0.0.1
   license:
     name: AGPL-3.0-only

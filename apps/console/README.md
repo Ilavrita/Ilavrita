@@ -1,6 +1,6 @@
 # @ilavrita/console
 
-Operator console for configuration visibility, tenant administration, reindexing,
+Operator console for configuration visibility, Project administration, reindexing,
 health and resource inspection (FR-041).
 
 Not implemented yet. The console is deliberately subordinate to the HTTP API:

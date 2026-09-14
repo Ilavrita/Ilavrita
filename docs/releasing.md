@@ -52,7 +52,7 @@ produce the same text, which is what makes a release record worth trusting.
 
 A `0.x` scaffold release needs only the steps above. A release claiming stable
 FHIR behaviour additionally requires the evidence the product requirements call
-for: conformance and integration results, tenant-isolation tests, an upgrade test
+for: conformance and integration results, Project-isolation tests, an upgrade test
 from the previous supported version, a restore test, a security review, migration
 and rollback notes, and a documented list of known limitations.
 

@@ -29,7 +29,7 @@
 > behaviour it has not implemented and tested.
 >
 > **Do not put patient data in this build.** It enforces no authorization, no
-> tenant boundary and no audit trail.
+> Project boundary and no audit trail.
 
 ## Contents
 
@@ -70,7 +70,7 @@ and an architecture that does not have to be rewritten to reach a clustered one.
 | FHIR search | Not implemented |
 | Bundle batch and transaction | Not implemented |
 | Validation and `$validate` | Not implemented |
-| Multi-tenancy, authorization, audit | Interfaces only, not enforced |
+| Project isolation, authorization, audit | Interfaces only, not enforced |
 | Binary and DocumentReference payloads | Not implemented |
 | Migrations, backup, restore | Not implemented |
 | PostgreSQL, SMART, Bulk Data, HL7v2, DICOM | Out of scope for v0.1 |
@@ -208,7 +208,7 @@ packages/fhir              FHIR R4 types published at the boundary
 packages/search            query parsing and planning
 packages/storage           the persistence interfaces services depend on
 packages/storage/pocketbase  SQLite backend — the only package that may import PocketBase
-packages/tenancy           tenant isolation
+packages/project           Project isolation boundary
 packages/authz             authorization decisions
 packages/audit             security event records
 packages/files             Binary and DocumentReference payload storage
@@ -287,7 +287,7 @@ Pull requests are labelled automatically by area and size.
 
 Report vulnerabilities through [SECURITY.md](SECURITY.md), never a public issue.
 
-[docs/security.md](docs/security.md) describes the intended controls — tenant
+[docs/security.md](docs/security.md) describes the intended controls — Project
 isolation enforced in the query layer, authorization before results are returned,
 audit evidence independent of the FHIR `AuditEvent` resource, and no resource
 bodies in logs. **None of it is implemented yet.**

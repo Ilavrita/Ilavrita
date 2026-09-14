@@ -39,7 +39,7 @@ otherwise, and tell you when the fix ships.
 In scope: this repository, the [Ilavrita PocketBase fork](https://github.com/Ilavrita/pocketbase),
 and official container images under the `ilavrita` namespace.
 
-Particularly interested in: cross-tenant access of any kind, authorization
+Particularly interested in: cross-Project access of any kind, authorization
 bypass, injection, unsafe file access, secret exposure, and patient data
 reaching logs, error responses or backups.
 
