@@ -1,0 +1,34 @@
+# Applied by .github/workflows/labels.yml whenever this file changes.
+- name: "type:bug"
+  color: "B91C1C"
+  description: Behaves differently from how it is documented
+- name: "type:conformance"
+  color: "7C3AED"
+  description: Deviates from the FHIR specification
+- name: "type:feature"
+  color: "4F46E5"
+  description: New capability
+- name: "type:docs"
+  color: "A78BFA"
+  description: Documentation
+- name: "type:security"
+  color: "7F1D1D"
+  description: Security relevant
+- name: "type:dependencies"
+  color: "DCCBFF"
+  description: Dependency update
+- name: "needs:triage"
+  color: "EDEFF7"
+  description: Not yet assessed by a maintainer
+- name: "needs:info"
+  color: "EDEFF7"
+  description: Waiting on the reporter
+- name: "good first issue"
+  color: "16A34A"
+  description: Suitable for a first contribution
+- name: "help wanted"
+  color: "16A34A"
+  description: Maintainers would welcome help here
+- name: "breaking"
+  color: "B91C1C"
+  description: Changes published behaviour
