@@ -6,6 +6,8 @@
 # breaks every JavaScript action that runs after it. Real GitHub runners keep
 # node on a path that survives, so this only bites locally. Linking node where
 # setup-go leaves it reachable makes local runs behave like CI.
+# Local developer tooling only, so a floating tag is acceptable here; the
+# released image in Dockerfile is digest-pinned.
 FROM catthehacker/ubuntu:act-latest
 
 RUN ln -sf "$(command -v node)" /usr/local/bin/node \

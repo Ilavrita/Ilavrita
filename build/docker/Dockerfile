@@ -2,7 +2,10 @@
 
 # Ilavrita compiles against the pinned PocketBase fork in third_party, so the
 # build context must include the initialised submodule.
-FROM golang:1.27-alpine AS build
+# Base images are pinned by digest. A tag is mutable, so tag-only pinning
+# means the image you audited and the image you shipped can differ.
+# Dependabot keeps these current.
+FROM golang:1.27-alpine@sha256:cf6fca6641884b8433441b2b0652976f975e1d0fdd26d177eaaf8596087f3125 AS build
 
 ARG VERSION=dev
 ARG REVISION=unknown
@@ -25,7 +28,7 @@ RUN go build \
       -o /out/ilavrita \
       ./apps/ilavrita
 
-FROM gcr.io/distroless/static-debian12:nonroot
+FROM gcr.io/distroless/static-debian12:nonroot@sha256:afa5c872c891853ca7fcf1f12c3edb23f7eeef36189728842dd51042ff57f7ab
 
 LABEL org.opencontainers.image.title="Ilavrita" \
       org.opencontainers.image.description="Open healthcare infrastructure. FHIR-native, self-hostable, edge to enterprise." \
