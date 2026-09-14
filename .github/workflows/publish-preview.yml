@@ -1,0 +1,77 @@
+name: Publish preview
+
+# Publishes a prerelease of the npm packages without cutting a release.
+#
+# The release workflow publishes from tags on main, and that stays the only path
+# to the "latest" dist-tag. This one exists for previews and for claiming the
+# namespace before the first release, so it refuses anything that is not a
+# prerelease and never touches "latest".
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Prerelease version, such as 0.0.1-dev
+        required: true
+        type: string
+      dist-tag:
+        description: npm dist-tag to publish under (never "latest")
+        required: true
+        default: dev
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    name: npm
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      # npm provenance is signed with this workflow's OIDC identity, which is
+      # what lets a consumer verify the tarball came from this repository.
+      id-token: write
+    steps:
+      - name: Refuse a stable version or the latest tag
+        run: |
+          version="${{ inputs.version }}"
+          dist="${{ inputs.dist-tag }}"
+
+          case "$version" in
+            *-*) ;;
+            *) echo "::error::${version} is not a prerelease; stable versions are released from main" >&2; exit 1 ;;
+          esac
+
+          if [ "$dist" = "latest" ]; then
+            echo "::error::latest is set only by a release cut from main" >&2
+            exit 1
+          fi
+
+          echo "publishing ${version} under dist-tag ${dist}"
+
+      - uses: actions/checkout@v6
+
+      - uses: pnpm/action-setup@v6
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: pnpm
+          registry-url: https://registry.npmjs.org
+
+      - run: pnpm install --frozen-lockfile
+
+      - name: Set the version
+        run: ./scripts/set-package-versions.sh "${{ inputs.version }}"
+
+      - run: pnpm --filter @ilavrita/sdk build
+
+      # tsconfig first: sdk depends on it, and a published package whose
+      # dependency does not resolve is broken from the moment it lands.
+      - name: Publish
+        run: |
+          for package in packages/tsconfig packages/sdk-typescript; do
+            ( cd "$package" && npm publish --provenance --access public --tag "${{ inputs.dist-tag }}" )
+          done
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
