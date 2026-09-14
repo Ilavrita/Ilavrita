@@ -69,7 +69,9 @@ jobs:
 
       - name: Check the registry is reachable
         run: |
-          echo "publishing to $(npm config get registry)"
+          # The default registry is not the one these packages use; the scoped
+          # setting is what actually routes the publish.
+          echo "scoped registry: $(npm config get @ilavrita:registry)"
           echo "authenticated as: $(npm whoami --registry https://npm.pkg.github.com 2>/dev/null || echo '<whoami unavailable>')"
         env:
           NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
