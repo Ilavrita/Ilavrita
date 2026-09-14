@@ -28,7 +28,7 @@ jobs:
     steps:
       # Size is advisory. A large pull request is harder to review carefully,
       # which is worth saying out loud rather than enforcing.
-      - uses: actions/github-script@v8
+      - uses: actions/github-script@v9
         with:
           script: |
             const sizes = [
