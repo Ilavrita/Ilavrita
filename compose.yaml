@@ -1,0 +1,15 @@
+# Development convenience. Terminate TLS in front of this before exposing it.
+services:
+  ilavrita:
+    build:
+      context: .
+      dockerfile: build/docker/Dockerfile
+    image: ghcr.io/ilavrita/ilavrita:dev
+    ports:
+      - "8090:8090"
+    volumes:
+      - ilavrita-data:/data
+    restart: unless-stopped
+
+volumes:
+  ilavrita-data:
