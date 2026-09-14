@@ -293,7 +293,8 @@ bodies in logs. **None of it is implemented yet.**
 
 Dependencies are scanned by CodeQL, GitHub dependency review and FOSSA. Findings
 are reviewed and recorded in [docs/license-compliance.md](docs/license-compliance.md)
-rather than silently ignored.
+rather than silently ignored — including the FOSSA checks that are currently red,
+where 27 of 28 are explained and one is a genuine open advisory.
 
 > Ilavrita holds no certification, and running it does not make an organisation
 > compliant with HIPAA, GDPR, EHDS or any other regime. It provides technical

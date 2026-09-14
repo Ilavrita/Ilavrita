@@ -1,16 +1,15 @@
-# FOSSA licence and vulnerability scanning.
+# Scope for local FOSSA runs (`fossa analyze`).
 #
-# Only the two manifests Ilavrita actually ships are analysed. The vendored
-# PocketBase fork carries its own go.mod and an admin-UI package.json, and
-# scanning those separately double-counts dependencies our own go.mod already
-# resolves through the replace directive, and adds upstream UI build tooling
-# that never reaches a release artefact.
+# Pull request scanning is done by the FOSSA GitHub App, which reports into the
+# project `git+github.com/Ilavrita/Ilavrita`. The CLI uses a different fetcher
+# and would create a parallel `custom+` project for the same code, so no project
+# identity is declared here and CI does not run the CLI.
+#
+# Only the two manifests Ilavrita ships are analysed. The vendored PocketBase
+# fork carries its own go.mod and an admin-UI package.json; scanning those
+# double-counts dependencies our go.mod already resolves through the replace
+# directive, and adds upstream UI build tooling that never reaches a release.
 version: 3
-
-project:
-  id: github.com/Ilavrita/Ilavrita
-  name: Ilavrita
-  link: https://github.com/Ilavrita/Ilavrita
 
 targets:
   only:
