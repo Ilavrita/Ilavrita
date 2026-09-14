@@ -292,6 +292,10 @@ isolation enforced in the query layer, authorization before results are returned
 audit evidence independent of the FHIR `AuditEvent` resource, and no resource
 bodies in logs. **None of it is implemented yet.**
 
+Releases are signed and attested — container images with Cosign plus build
+provenance and an SBOM bound to the digest, npm packages with npm provenance.
+[docs/supply-chain.md](docs/supply-chain.md) has the verification commands.
+
 Dependencies are scanned by CodeQL, GitHub dependency review and FOSSA. Findings
 are reviewed and recorded in [docs/license-compliance.md](docs/license-compliance.md)
 rather than silently ignored — including the FOSSA checks that are currently red,
