@@ -1,0 +1,75 @@
+name: Bug report
+description: Something behaves differently from how it is documented.
+labels: ["type:bug", "needs:triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Never include patient data. Use synthetic resources, and redact
+        identifiers, tokens and hostnames before posting.
+
+        For a security vulnerability, use
+        [private reporting](https://github.com/Ilavrita/Ilavrita/security/advisories/new)
+        instead of this form.
+
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Before reporting
+      options:
+        - label: I checked [known limitations](https://github.com/Ilavrita/Ilavrita/blob/dev/docs/known-limitations.md) and this is not simply unimplemented.
+          required: true
+        - label: This report contains no patient data.
+          required: true
+
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: What you observed, and what you expected instead.
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: How to reproduce
+      description: Smallest set of steps that shows the problem. Include the request and response if it is an API issue.
+      placeholder: |
+        1. Start the server with ...
+        2. curl -i http://127.0.0.1:8090/fhir/R4/...
+        3. Response is ...
+    validations:
+      required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: Ilavrita version
+      description: Output of `GET /version`, or the commit you built from.
+    validations:
+      required: true
+
+  - type: dropdown
+    id: deployment
+    attributes:
+      label: How are you running it
+      options:
+        - Built from source
+        - Container image
+        - Other
+    validations:
+      required: true
+
+  - type: input
+    id: platform
+    attributes:
+      label: Operating system and architecture
+      placeholder: Ubuntu 24.04 / arm64
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant logs
+      description: Redact anything sensitive. Include the request id if you have it.
+      render: shell

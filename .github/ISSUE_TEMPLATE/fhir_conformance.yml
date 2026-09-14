@@ -1,0 +1,60 @@
+name: FHIR conformance deviation
+description: Ilavrita behaves differently from the FHIR specification.
+labels: ["type:conformance", "needs:triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Use this when behaviour Ilavrita advertises in its CapabilityStatement
+        disagrees with the specification. If the interaction is simply not
+        implemented yet, that is expected — see
+        [known limitations](https://github.com/Ilavrita/Ilavrita/blob/dev/docs/known-limitations.md).
+
+        Never include patient data.
+
+  - type: input
+    id: spec-reference
+    attributes:
+      label: Specification reference
+      description: Link to the exact section of the FHIR R4 specification.
+      placeholder: https://hl7.org/fhir/R4/http.html#update
+    validations:
+      required: true
+
+  - type: input
+    id: interaction
+    attributes:
+      label: Interaction
+      placeholder: PUT /fhir/R4/Patient/{id}
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: What the specification requires
+    validations:
+      required: true
+
+  - type: textarea
+    id: actual
+    attributes:
+      label: What Ilavrita does
+      description: Include the request and the full response, with synthetic data.
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: advertised
+    attributes:
+      label: CapabilityStatement
+      options:
+        - label: The CapabilityStatement at `/fhir/R4/metadata` advertises this interaction.
+          required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: Ilavrita version
+    validations:
+      required: true

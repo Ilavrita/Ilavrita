@@ -1,0 +1,24 @@
+name: Documentation problem
+description: Something in the documentation is wrong, missing or misleading.
+labels: ["type:docs", "needs:triage"]
+body:
+  - type: input
+    id: location
+    attributes:
+      label: Where
+      description: Link to the page or file.
+    validations:
+      required: true
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: What is wrong
+      description: A statement that is inaccurate, a step that does not work, or something a reader needs and cannot find.
+    validations:
+      required: true
+
+  - type: textarea
+    id: suggestion
+    attributes:
+      label: What it should say

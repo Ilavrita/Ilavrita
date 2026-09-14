@@ -1,0 +1,11 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Question or discussion
+    url: https://github.com/Ilavrita/Ilavrita/discussions
+    about: Ask how something works, or share what you are building.
+  - name: Report a vulnerability
+    url: https://github.com/Ilavrita/Ilavrita/security/advisories/new
+    about: Report a security issue privately. Never open a public issue for one.
+  - name: Commercial licensing
+    url: mailto:oss@ilavrita.health
+    about: Ask about licensing Ilavrita outside the AGPL.

@@ -1,0 +1,50 @@
+name: Feature request
+description: Propose a capability Ilavrita should have.
+labels: ["type:feature", "needs:triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Ilavrita has a deliberately narrow v0.1 scope and an explicit list of
+        non-goals — see the [roadmap](https://github.com/Ilavrita/Ilavrita/blob/dev/ROADMAP.md).
+        A proposal that widens the scope needs product approval, so please
+        describe the problem before the solution.
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: The problem
+      description: What are you trying to do, and what stops you today?
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: What you propose
+    validations:
+      required: true
+
+  - type: input
+    id: standard
+    attributes:
+      label: Relevant standard
+      description: If this maps to a FHIR capability or implementation guide, link it.
+
+  - type: dropdown
+    id: phase
+    attributes:
+      label: Where you think this belongs
+      options:
+        - Phase 1 — FHIR core
+        - Phase 2 — developer platform
+        - Phase 3 — application platform
+        - Phase 4 — enterprise and interoperability
+        - Not sure
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives you considered
