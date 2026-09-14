@@ -1,0 +1,250 @@
+# Ilavrita HTTP surface.
+#
+# This document describes the HTTP contract: routes, status codes and payload
+# shapes. It is not a conformance claim. What Ilavrita supports as a FHIR server
+# is declared at runtime by the CapabilityStatement at /fhir/R4/metadata, and
+# that document — not this one — is what a FHIR client should trust.
+#
+# Every route here is implemented. Routes are added as behaviour ships, so that
+# this file never describes something the server cannot do.
+openapi: 3.1.0
+
+info:
+  title: Ilavrita
+  summary: Open healthcare infrastructure. FHIR-native, self-hostable, edge to enterprise.
+  description: |
+    Ilavrita is an open-source FHIR R4 server.
+
+    **This build implements no FHIR interaction.** `GET /fhir/R4/metadata` returns
+    a CapabilityStatement that declares no supported resources, and every other
+    route beneath `/fhir/R4` answers `501 Not Implemented` as an
+    `OperationOutcome`. See
+    [known limitations](https://github.com/Ilavrita/Ilavrita/blob/dev/docs/known-limitations.md).
+
+    Do not store patient data in this build. It enforces no authorization, no
+    tenant boundary and no audit trail.
+  version: 0.0.1
+  license:
+    name: AGPL-3.0-only
+    identifier: AGPL-3.0-only
+  contact:
+    name: Ilavrita
+    url: https://ilavrita.health
+    email: oss@ilavrita.health
+
+servers:
+  - url: http://127.0.0.1:8090
+    description: Local development
+
+# No route requires authentication, because authentication is not implemented
+# (FR-027). This is stated explicitly rather than left unsaid, so that a reader
+# does not mistake an omission for a redaction.
+security: []
+
+tags:
+  - name: Operations
+    description: |
+      Health and build information. These live outside the FHIR namespace so that
+      monitoring a deployment never depends on the healthcare API surface.
+  - name: FHIR
+    description: The FHIR R4 surface, rooted at `/fhir/R4`.
+
+paths:
+  /healthz:
+    get:
+      tags: [Operations]
+      summary: Liveness
+      description: Reports that the process is up and serving.
+      operationId: getHealth
+      responses:
+        "200":
+          description: The server is serving requests.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HealthReport"
+
+  /version:
+    get:
+      tags: [Operations]
+      summary: Build identity
+      description: |
+        Reports the running version and the commit it was built from. This is how
+        a running instance is matched to a source tag and a release artefact.
+      operationId: getVersion
+      responses:
+        "200":
+          description: Build information.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/VersionReport"
+
+  /fhir/R4/metadata:
+    get:
+      tags: [FHIR]
+      summary: CapabilityStatement
+      description: |
+        Declares what this server actually supports. A resource appears here only
+        once the matching interaction is implemented and covered by tests, so an
+        empty `rest[].resource` means no FHIR interaction is available.
+      operationId: getCapabilityStatement
+      responses:
+        "200":
+          description: The server's capability declaration.
+          content:
+            application/fhir+json:
+              schema:
+                $ref: "#/components/schemas/CapabilityStatement"
+
+  /fhir/R4/{path}:
+    parameters:
+      - name: path
+        in: path
+        required: true
+        description: Any path beneath the FHIR base, such as `Patient/123`.
+        schema:
+          type: string
+    get:
+      tags: [FHIR]
+      summary: Not implemented
+      description: |
+        No FHIR interaction is implemented yet. Failures are returned as
+        `OperationOutcome` rather than as a framework error, so a client only
+        ever parses FHIR-shaped responses.
+      operationId: fhirNotImplemented
+      responses:
+        "501":
+          $ref: "#/components/responses/NotImplemented"
+
+components:
+  schemas:
+    HealthReport:
+      type: object
+      required: [status]
+      properties:
+        status:
+          type: string
+          const: ok
+      examples:
+        - status: ok
+
+    VersionReport:
+      type: object
+      required: [version, revision, fhirVersion]
+      properties:
+        version:
+          type: string
+          description: Release version, or `dev` for an untagged build.
+        revision:
+          type: string
+          description: Commit the binary was built from.
+        fhirVersion:
+          type: string
+          description: FHIR release this server targets.
+      examples:
+        - version: 0.0.1
+          revision: 4386b36ac1f4b0f0c5f7a1f0f6b2f4c1d8e9a0b1
+          fhirVersion: 4.0.1
+
+    CapabilityStatement:
+      type: object
+      description: |
+        A FHIR CapabilityStatement, narrowed to the fields Ilavrita populates. The
+        full resource is defined by the FHIR specification.
+      required: [resourceType, status, kind, fhirVersion, format, software, rest]
+      properties:
+        resourceType:
+          type: string
+          const: CapabilityStatement
+        status:
+          type: string
+          enum: [draft, active, retired, unknown]
+        kind:
+          type: string
+          enum: [instance, capability, requirements]
+        fhirVersion:
+          type: string
+        format:
+          type: array
+          items:
+            type: string
+        software:
+          type: object
+          required: [name, version]
+          properties:
+            name:
+              type: string
+            version:
+              type: string
+        rest:
+          type: array
+          items:
+            type: object
+            required: [mode]
+            properties:
+              mode:
+                type: string
+                enum: [client, server]
+              resource:
+                type: array
+                description: Empty until an interaction ships with test coverage.
+                items:
+                  type: object
+                  required: [type]
+                  properties:
+                    type:
+                      type: string
+                    interaction:
+                      type: array
+                      items:
+                        type: string
+
+    OperationOutcome:
+      type: object
+      description: |
+        The only error shape returned on FHIR routes. Runtime, database and
+        framework errors are translated into this type, so internal detail never
+        reaches a client.
+      required: [resourceType, issue]
+      properties:
+        resourceType:
+          type: string
+          const: OperationOutcome
+        issue:
+          type: array
+          minItems: 1
+          items:
+            $ref: "#/components/schemas/Issue"
+
+    Issue:
+      type: object
+      required: [severity, code]
+      properties:
+        severity:
+          type: string
+          enum: [fatal, error, warning, information]
+        code:
+          type: string
+          enum: [not-supported, not-found, invalid, security, conflict, exception]
+        diagnostics:
+          type: string
+          description: |
+            Written for the API consumer. Never carries resource bodies, stack
+            traces or internal identifiers.
+
+  responses:
+    NotImplemented:
+      description: The interaction exists in FHIR but is not implemented here.
+      content:
+        application/fhir+json:
+          schema:
+            $ref: "#/components/schemas/OperationOutcome"
+          examples:
+            notImplemented:
+              value:
+                resourceType: OperationOutcome
+                issue:
+                  - severity: error
+                    code: not-supported
+                    diagnostics: This interaction is not implemented. See the CapabilityStatement at /fhir/R4/metadata.

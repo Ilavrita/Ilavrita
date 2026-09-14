@@ -1,0 +1,17 @@
+# Linting rules for api/openapi.yaml.
+#
+# The spec documents only responses the server can actually produce. The two
+# rules disabled below require every operation to declare 2XX and 4XX responses,
+# which would mean inventing failure modes that do not exist — `/healthz` cannot
+# return a 4XX, and the FHIR catch-all returns 501 for everything. An accurate
+# spec is worth more than a uniformly shaped one.
+extends:
+  - recommended
+
+rules:
+  operation-4xx-response: off
+  operation-2xx-response: off
+
+apis:
+  ilavrita:
+    root: api/openapi.yaml

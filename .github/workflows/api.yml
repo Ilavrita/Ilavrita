@@ -1,0 +1,54 @@
+name: API
+
+on:
+  push:
+    branches: [main, dev]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: api-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  describe:
+    name: Description
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          submodules: recursive
+
+      - uses: pnpm/action-setup@v6
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - run: pnpm install --frozen-lockfile
+
+      - name: Validate
+        run: pnpm api:lint
+
+      # A description that has drifted from the implementation is worse than
+      # none, because callers trust it and are wrong.
+      - name: Check the description against the server
+        run: ./scripts/verify-openapi.sh
+
+      - name: Render the reference
+        run: pnpm api:docs
+
+      - uses: actions/upload-artifact@v5
+        with:
+          name: api-reference
+          path: docs/api.html
+          if-no-files-found: error

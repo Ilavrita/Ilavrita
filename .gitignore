@@ -27,6 +27,10 @@ node_modules/
 .env.*
 !.env.example
 
+# Generated API reference
+docs/api.html
+api/openapi.bundled.json
+
 # Editors and operating system noise
 .DS_Store
 .idea/

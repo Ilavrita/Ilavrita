@@ -50,6 +50,18 @@ ci-image: ## Build the runner image act uses for local workflow runs
 ci-local: ci-image ## Run the CI workflow locally with act
 	act push -W .github/workflows/ci.yml
 
+.PHONY: api-lint
+api-lint: ## Validate the OpenAPI description
+	pnpm api:lint
+
+.PHONY: api-docs
+api-docs: ## Render the API reference to docs/api.html
+	pnpm api:docs
+
+.PHONY: api-verify
+api-verify: ## Check the OpenAPI description against a running server
+	./scripts/verify-openapi.sh
+
 .PHONY: docker
 docker: ## Build the container image
 	docker build -f build/docker/Dockerfile -t ilavrita/ilavrita:$(VERSION) .

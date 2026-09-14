@@ -8,6 +8,9 @@ importers:
 
   .:
     devDependencies:
+      '@redocly/cli':
+        specifier: 2.52.1
+        version: 2.52.1
       turbo:
         specifier: 2.10.12
         version: 2.10.12
@@ -33,6 +36,11 @@ importers:
   packages/tsconfig: {}
 
 packages:
+
+  '@redocly/cli@2.52.1':
+    resolution: {integrity: sha512-gwfx1WelVDHU/cw+GkpLV9+xksOI3obJGgL1nUVrAFUyXNDxM+aifXDUZk7BfbOIpF69Sea2ant0cOqbQfg/KQ==}
+    engines: {node: '>=22.12.0 || >=20.19.0 <21.0.0', npm: '>=10'}
+    hasBin: true
 
   '@turbo/darwin-64@2.10.12':
     resolution: {integrity: sha512-9nKgKoF6ZOUsM+or0OtNf+TTJSfGvDNP7ZFv/ZGWVwOSCkumyctQiTeHwB4UNljHTnC41AqylgbunLDHoccNrA==}
@@ -194,6 +202,8 @@ packages:
     hasBin: true
 
 snapshots:
+
+  '@redocly/cli@2.52.1': {}
 
   '@turbo/darwin-64@2.10.12':
     optional: true
