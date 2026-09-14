@@ -35,6 +35,7 @@ What Ilavrita does *not* yet do is tracked separately in
 - Add the v0.1 product requirements document
 - Add architecture overview and decision records
 - Add deployment, security, limitations and release guides
+- Generate changelog from commit history
 
 
 ### Testing
@@ -48,6 +49,7 @@ What Ilavrita does *not* yet do is tracked separately in
 - Add container image and compose definition
 - Add act configuration for running workflows locally
 - Generate the changelog and release notes with git-cliff
+- Add an act runner image so local workflow runs match ci
 
 
 ### Continuous integration
