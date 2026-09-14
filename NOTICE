@@ -1,0 +1,15 @@
+Ilavrita
+Copyright (C) 2026 Vestcodes and the Ilavrita contributors
+
+This program is free software: you can redistribute it and/or modify it under
+the terms of the GNU Affero General Public License as published by the Free
+Software Foundation, either version 3 of the License, or (at your option) any
+later version. See LICENSE for the full text.
+
+This product includes software developed by the PocketBase project
+(https://github.com/pocketbase/pocketbase), used under the MIT License.
+Ilavrita builds against its own fork of PocketBase, vendored at
+third_party/pocketbase. The upstream copyright and permission notice is retained
+verbatim at LICENSES/PocketBase-MIT.txt.
+
+Per-dependency attribution is recorded in THIRD_PARTY_NOTICES.md.
