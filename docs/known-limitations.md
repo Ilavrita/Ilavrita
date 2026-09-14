@@ -50,6 +50,15 @@ HL7v2, and DICOM or DICOMweb.
 Ilavrita holds no certification and makes no compliance claim. Running it does
 not make an organisation compliant with HIPAA, GDPR, EHDS or any other regime.
 
+## The PocketBase surface
+
+PocketBase serves its own REST API at `/api` and an admin console at `/_`.
+Ilavrita does not publish these as product surface (FR-029), and they are
+disabled by default. Set `ILAVRITA_EXPOSE_POCKETBASE=true` to restore them for
+local development.
+
+They are not a supported interface. Anything built against them will break.
+
 ## Operational consequence
 
 **Do not put patient data in Ilavrita.** There is no authorization, no tenant

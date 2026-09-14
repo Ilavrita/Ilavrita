@@ -116,10 +116,22 @@ A crafted TIFF file can crash the decoder. The dependency reaches us through
 PocketBase, which uses it for thumbnail generation, and upstream has published no
 fixed release.
 
-No Ilavrita route reaches the decoder today, because `/fhir/R4` exposes no image
-handling. That changes when Binary and DocumentReference payloads are implemented
+Reachability was assessed twice, and the first assessment was wrong. `/fhir/R4`
+exposes no image handling, but the process also served PocketBase's own
+`/api/files/…` thumbnail route, which reaches the decoder directly. That surface
+is now disabled by default (FR-029) and can only be restored with
+`ILAVRITA_EXPOSE_POCKETBASE=true`, so a default deployment does not reach the
+decoder.
+
+The advisory itself is narrow: `AV:L`, user interaction required, availability
+impact only, EPSS 0.4%, and NVD notes it is unclear whether any common use case
+carries a security consequence. The realistic effect is a panic on one request,
+not data exposure.
+
+It becomes material when Binary and DocumentReference payloads are implemented
 (FR-032) — untrusted clinical documents are exactly the input this advisory is
-about — so it is a **release gate for any build that accepts uploaded images**.
+about — so it remains a **release gate for any build that accepts uploaded
+images**.
 
 ## Clearing them
 

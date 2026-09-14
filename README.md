@@ -188,7 +188,8 @@ rule in [`.golangci.yml`](.golangci.yml) rather than by convention:
 1. **Only `packages/storage/pocketbase` imports the PocketBase runtime.**
 2. **No SQL above the storage backend.** Higher layers reason in FHIR terms.
 3. **No PocketBase concept reaches `/fhir/R4`** — not a collection name, not an
-   admin route, not an error shape.
+   admin route, not an error shape. PocketBase's own API (`/api`) and admin
+   console (`/_`) are disabled unless `ILAVRITA_EXPOSE_POCKETBASE=true`.
 4. **Never advertise what is not implemented.** If the CapabilityStatement says a
    resource is supported, a test proves it.
 

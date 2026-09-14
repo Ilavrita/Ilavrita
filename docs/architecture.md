@@ -36,6 +36,11 @@ backend is in use, and nothing below it knows about FHIR.
 3. **No PocketBase concept reaches `/fhir/R4`.** Not a collection name, not an
    admin route, not an error shape. Failures are translated to
    `OperationOutcome`.
+
+   This is enforced at the process level too: PocketBase's own REST API (`/api`)
+   and admin console (`/_`) are disabled unless `ILAVRITA_EXPOSE_POCKETBASE=true`.
+   Registering our routes on its router is not enough — the runtime registers its
+   own, and they would otherwise be served alongside ours.
 4. **Administrative and FHIR surfaces are separate.** Different routes,
    different authorization policies.
 

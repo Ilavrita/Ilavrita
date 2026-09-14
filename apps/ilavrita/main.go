@@ -22,6 +22,7 @@ func main() {
 	app := pocketbase.New()
 
 	app.OnServe().BindFunc(func(serve *core.ServeEvent) error {
+		registerRuntimeBoundary(serve.Router)
 		registerOperationalRoutes(serve.Router)
 		registerFHIRRoutes(serve.Router)
 
