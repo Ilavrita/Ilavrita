@@ -11,8 +11,6 @@ project:
   id: github.com/Ilavrita/Ilavrita
   name: Ilavrita
   link: https://github.com/Ilavrita/Ilavrita
-  team: Ilavrita
-  policy: Ilavrita
 
 targets:
   only:

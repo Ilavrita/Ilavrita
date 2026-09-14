@@ -80,7 +80,15 @@ fossa test
 
 CI runs the same two commands from
 [`.github/workflows/fossa.yml`](../.github/workflows/fossa.yml) using the
-`FOSSA_API_KEY` repository secret.
+`FOSSA_API_KEY` secret, which is registered for both Actions and Dependabot —
+Dependabot runs cannot read ordinary Actions secrets.
+
+`fossa analyze` blocks on failure. `fossa test` currently reports without
+blocking, because every finding it returns today is one of the reviewed items
+above and would otherwise redden every pull request. Once they are marked
+resolved in the FOSSA policy, remove `continue-on-error` from that step so a
+genuinely new finding stops a merge. Until then, this page — not CI — is what
+makes a finding "handled".
 
 ## When a new finding appears
 
