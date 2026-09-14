@@ -74,7 +74,7 @@ jobs:
           MIT licence. See `NOTICE` and `THIRD_PARTY_NOTICES.md` in the archive.
           NOTES
 
-      - uses: goreleaser/goreleaser-action@v6
+      - uses: goreleaser/goreleaser-action@v7
         with:
           version: "~> v2"
           args: release --clean --release-notes RELEASE_NOTES.md
@@ -113,7 +113,7 @@ jobs:
             type=sha
 
       - id: push
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: .
           file: build/docker/Dockerfile
