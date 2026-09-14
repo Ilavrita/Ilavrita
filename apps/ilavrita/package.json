@@ -1,0 +1,14 @@
+{
+  "name": "@ilavrita/server",
+  "version": "0.0.1",
+  "private": true,
+  "description": "Ilavrita FHIR server.",
+  "license": "AGPL-3.0-only",
+  "scripts": {
+    "build": "go build -o bin/ilavrita .",
+    "test": "go test ./...",
+    "lint": "golangci-lint run ./...",
+    "dev": "go run . serve",
+    "clean": "rm -rf bin"
+  }
+}

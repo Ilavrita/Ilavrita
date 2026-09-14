@@ -1,0 +1,7 @@
+{
+  "name": "@ilavrita/console",
+  "version": "0.0.1",
+  "private": true,
+  "description": "Minimal operator console for Ilavrita. Not implemented yet.",
+  "license": "AGPL-3.0-only"
+}
