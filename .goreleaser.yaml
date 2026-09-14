@@ -1,0 +1,82 @@
+version: 2
+
+project_name: ilavrita
+
+before:
+  hooks:
+    # Fails the release early if the build ever stops using the Ilavrita fork.
+    - ./scripts/verify-fork.sh
+
+builds:
+  - id: ilavrita
+    main: ./apps/ilavrita
+    binary: ilavrita
+    # SQLite comes from a pure-Go driver, so cross-compilation needs no C toolchain.
+    env:
+      - CGO_ENABLED=0
+    flags:
+      - -trimpath
+    ldflags:
+      - -s -w
+      - -X main.version={{ .Version }}
+      - -X main.revision={{ .FullCommit }}
+    goos: [linux, darwin, windows]
+    goarch: [amd64, arm64]
+
+archives:
+  - id: ilavrita
+    formats: [tar.gz]
+    format_overrides:
+      - goos: windows
+        formats: [zip]
+    files:
+      - README.md
+      - LICENSE
+      - NOTICE
+      - THIRD_PARTY_NOTICES.md
+      - LICENSES/*
+
+checksum:
+  name_template: checksums.txt
+
+sboms:
+  - artifacts: archive
+
+changelog:
+  use: github
+  sort: asc
+  groups:
+    - title: Features
+      regexp: '^feat(\(.+\))?!?:'
+      order: 0
+    - title: Fixes
+      regexp: '^fix(\(.+\))?!?:'
+      order: 1
+    - title: Performance
+      regexp: '^perf(\(.+\))?!?:'
+      order: 2
+    - title: Documentation
+      regexp: '^docs(\(.+\))?!?:'
+      order: 3
+    - title: Other
+      order: 99
+  filters:
+    exclude:
+      - '^test:'
+      - '^ci:'
+      - '^chore\(deps\):'
+
+release:
+  draft: false
+  prerelease: auto
+  footer: |
+    ## Container image
+
+    ```bash
+    docker pull ghcr.io/ilavrita/ilavrita:{{ .Tag }}
+    ```
+
+    Verify an archive against `checksums.txt` before running it.
+
+    Ilavrita is licensed under AGPL-3.0 and includes PocketBase under the MIT
+    licence. See `NOTICE` and `THIRD_PARTY_NOTICES.md` in the archive.
