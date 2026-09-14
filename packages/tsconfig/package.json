@@ -10,7 +10,7 @@
   ],
   "publishConfig": {
     "access": "public",
-    "provenance": true
+    "registry": "https://npm.pkg.github.com"
   },
   "scripts": {
     "prepack": "cp ../../LICENSE ../../NOTICE ."

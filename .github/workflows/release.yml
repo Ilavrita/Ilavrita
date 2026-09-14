@@ -166,9 +166,9 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
-      # npm provenance is signed with the workflow's OIDC identity, which is what
-      # lets a consumer verify the tarball came from this repository and tag.
-      id-token: write
+      # GitHub Packages authenticates with the workflow's own token, so there is
+      # no long-lived npm credential to store or rotate.
+      packages: write
     steps:
       - uses: actions/checkout@v6
 
@@ -178,7 +178,8 @@ jobs:
         with:
           node-version: 22
           cache: pnpm
-          registry-url: https://registry.npmjs.org
+          registry-url: https://npm.pkg.github.com
+          scope: "@ilavrita"
 
       - run: pnpm install --frozen-lockfile
 
@@ -198,18 +199,15 @@ jobs:
             echo "tag=latest" >> "$GITHUB_OUTPUT"
           fi
 
-      # npm rather than pnpm: pnpm accepts --provenance without documenting it and
-      # without any way to confirm an attestation was produced, and provenance
-      # that silently does not exist is worse than none. The workspace: protocol
-      # is already resolved by the version script above, which is the only reason
-      # pnpm was needed here.
+      # npm rather than pnpm: pnpm would leave the workspace: protocol for the
+      # registry to choke on, and the version script above already resolved it.
       #
       # tsconfig goes first: sdk depends on it, and a published package whose
       # dependency does not resolve is broken from the moment it lands.
       - name: Publish
         run: |
           for package in packages/tsconfig packages/sdk-typescript; do
-            ( cd "$package" && npm publish --provenance --access public --tag "${{ steps.dist.outputs.tag }}" )
+            ( cd "$package" && npm publish --tag "${{ steps.dist.outputs.tag }}" )
           done
         env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

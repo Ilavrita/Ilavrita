@@ -12,8 +12,8 @@ verifies against a public transparency log.
 | --- | --- | --- |
 | Platform binaries | GitHub release | `checksums.txt`, SBOM per archive |
 | Container image | `ghcr.io/ilavrita/ilavrita` | Cosign signature, build provenance, SBOM, all bound to the digest |
-| `@ilavrita/sdk` | npm | npm provenance attestation |
-| `@ilavrita/tsconfig` | npm | npm provenance attestation |
+| `@ilavrita/sdk` | GitHub Packages | Published from CI only; see the caveat below |
+| `@ilavrita/tsconfig` | GitHub Packages | Published from CI only; see the caveat below |
 
 ## Verifying a binary
 
@@ -58,21 +58,35 @@ If the signature verifies but the identity regex does not match a
 `refs/tags/v*` workflow run in `Ilavrita/Ilavrita`, treat the image as untrusted:
 that is the case the regex exists to catch.
 
-## Verifying an npm package
+## Installing and verifying an npm package
 
-```bash
-npm audit signatures
+The packages are published to **GitHub Packages**, not npmjs.com. Installing
+requires authentication even though the packages are public, so point the scope
+at the registry and authenticate with a GitHub token:
+
+```
+@ilavrita:registry=https://npm.pkg.github.com
+//npm.pkg.github.com/:_authToken=${GITHUB_TOKEN}
 ```
 
-Or inspect the attestation directly:
-
 ```bash
-npm view @ilavrita/sdk --json | jq '.dist.attestations'
+npm install @ilavrita/sdk
 ```
 
-Provenance ties the tarball to the workflow run and commit that built it.
-Packages are published from CI only; a release published any other way carries no
-provenance and should not be trusted.
+> [!NOTE]
+> **These packages carry no provenance attestation.** Provenance is an npmjs.com
+> registry feature — attestations are stored at `versions[].dist.attestations`
+> there and checked with `npm audit signatures`. GitHub Packages stores no
+> equivalent, so that command reports nothing useful for these packages.
+>
+> What you can rely on is that they are published only by
+> [`publish-preview.yml`](../.github/workflows/publish-preview.yml) and
+> [`release.yml`](../.github/workflows/release.yml) using the workflow's own
+> token. There is no long-lived npm credential that could publish them from
+> elsewhere.
+>
+> The container image is unaffected: it keeps its Cosign signature, build
+> provenance and SBOM, because those live in the OCI registry rather than npm.
 
 ## What is pinned
 

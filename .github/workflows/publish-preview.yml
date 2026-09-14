@@ -28,9 +28,9 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
-      # npm provenance is signed with this workflow's OIDC identity, which is
-      # what lets a consumer verify the tarball came from this repository.
-      id-token: write
+      # GitHub Packages authenticates with the workflow's own token, so there is
+      # no long-lived npm credential to store or rotate.
+      packages: write
     steps:
       - name: Refuse a stable version or the latest tag
         run: |
@@ -57,7 +57,8 @@ jobs:
         with:
           node-version: 22
           cache: pnpm
-          registry-url: https://registry.npmjs.org
+          registry-url: https://npm.pkg.github.com
+          scope: "@ilavrita"
 
       - run: pnpm install --frozen-lockfile
 
@@ -66,39 +67,19 @@ jobs:
 
       - run: pnpm --filter @ilavrita/sdk build
 
-      # The registry answers "Scope not found" both when a scope does not exist
-      # and when the token cannot see it, so a publish failure alone does not say
-      # which. Establishing the identity first turns that into a usable message.
-      - name: Check the token can reach the scope
+      - name: Check the registry is reachable
         run: |
-          identity=$(npm whoami 2>/dev/null || true)
-
-          if [ -z "$identity" ]; then
-            echo "::error::NPM_TOKEN is not valid; npm whoami returned nothing"
-            exit 1
-          fi
-
-          echo "authenticated as: ${identity}"
-
-          if ! npm access list packages @ilavrita >/dev/null 2>&1; then
-            echo "::error::'${identity}' cannot publish to the @ilavrita scope."
-            echo "Either that account is not a member of the ilavrita organisation with"
-            echo "write access, or NPM_TOKEN is a granular token that does not include"
-            echo "the organisation. A granular token created before the organisation"
-            echo "existed cannot reference it and has to be reissued."
-            exit 1
-          fi
-
-          echo "@ilavrita scope is writable"
+          echo "publishing to $(npm config get registry)"
+          echo "authenticated as: $(npm whoami --registry https://npm.pkg.github.com 2>/dev/null || echo '<whoami unavailable>')"
         env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       # tsconfig first: sdk depends on it, and a published package whose
       # dependency does not resolve is broken from the moment it lands.
       - name: Publish
         run: |
           for package in packages/tsconfig packages/sdk-typescript; do
-            ( cd "$package" && npm publish --provenance --access public --tag "${{ inputs.dist-tag }}" )
+            ( cd "$package" && npm publish --tag "${{ inputs.dist-tag }}" )
           done
         env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
