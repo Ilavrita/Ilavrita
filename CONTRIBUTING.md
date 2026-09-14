@@ -116,11 +116,16 @@ machine, which is faster than pushing to find out something is broken.
 
 ```bash
 brew install act          # or see the act README
+make ci-local             # build the runner image and run the CI workflow
 act -l                    # list jobs
-act push -j go            # run one job
+act push -j go            # run a single job
 ```
 
-Settings live in [`.actrc`](.actrc). Two known differences from real CI: the
-`Post setup-go` cache step fails under act because `node` is missing from the
-container's PATH — harmless, and it appears after every real step has already
-run — and the CodeQL job cannot run locally at all.
+Settings live in [`.actrc`](.actrc), and `make ci-image` builds the runner image
+act uses. The stock act image loses `node` from `PATH` once `actions/setup-go`
+runs, which breaks every JavaScript action after it; the image in
+[`build/docker/act-runner.Dockerfile`](build/docker/act-runner.Dockerfile) fixes
+that so local runs match CI.
+
+CodeQL and dependency review cannot run locally — both need GitHub's own
+services.
