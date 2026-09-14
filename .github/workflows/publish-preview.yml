@@ -66,18 +66,30 @@ jobs:
 
       - run: pnpm --filter @ilavrita/sdk build
 
-      # "Scope not found" from the registry is indistinguishable from a wrong
-      # token by reading the publish error alone, so establish the identity and
-      # its scope access before attempting a write.
+      # The registry answers "Scope not found" both when a scope does not exist
+      # and when the token cannot see it, so a publish failure alone does not say
+      # which. Establishing the identity first turns that into a usable message.
       - name: Check the token can reach the scope
         run: |
-          echo "authenticated as: $(npm whoami || echo '<whoami failed>')"
+          identity=$(npm whoami 2>/dev/null || true)
 
-          echo "--- organisations this token can see ---"
-          npm org ls ilavrita 2>&1 | head -20 || echo "<cannot list org 'ilavrita'>"
+          if [ -z "$identity" ]; then
+            echo "::error::NPM_TOKEN is not valid; npm whoami returned nothing"
+            exit 1
+          fi
 
-          echo "--- packages already in the scope ---"
-          npm access list packages @ilavrita 2>&1 | head -20 || echo "<cannot list scope packages>"
+          echo "authenticated as: ${identity}"
+
+          if ! npm access list packages @ilavrita >/dev/null 2>&1; then
+            echo "::error::'${identity}' cannot publish to the @ilavrita scope."
+            echo "Either that account is not a member of the ilavrita organisation with"
+            echo "write access, or NPM_TOKEN is a granular token that does not include"
+            echo "the organisation. A granular token created before the organisation"
+            echo "existed cannot reference it and has to be reissued."
+            exit 1
+          fi
+
+          echo "@ilavrita scope is writable"
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
