@@ -19,13 +19,21 @@ release may change behaviour — `0.x` is not a stability promise.
 
 Release notes are derived from commit subjects, so the one-line Conventional
 Commit format described in [CONTRIBUTING.md](../CONTRIBUTING.md) is what makes a
-readable changelog possible.
+readable changelog possible. Generation is deterministic: the same commits always
+produce the same text, which is what makes a release record worth trusting.
 
 ## Cutting a release
 
 1. Confirm CI is green on `dev`.
-2. Update [CHANGELOG.md](../CHANGELOG.md): move `Unreleased` into a new version
-   section with the date, and record known limitations honestly.
+2. Regenerate the changelog and commit it:
+
+   ```bash
+   make changelog
+   ```
+
+   [CHANGELOG.md](../CHANGELOG.md) is generated from commit history by
+   [git-cliff](https://git-cliff.org) — never hand-edit it. The same generator
+   produces the GitHub release body, so the two cannot drift apart.
 3. Merge `dev` into `main`.
 4. Tag and push:
 

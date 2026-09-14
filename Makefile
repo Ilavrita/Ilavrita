@@ -38,6 +38,18 @@ fmt: ## Format Go sources
 tidy: ## Reconcile go.mod and go.sum
 	go mod tidy
 
+.PHONY: changelog
+changelog: ## Regenerate CHANGELOG.md from commit history
+	git-cliff --output CHANGELOG.md
+
+.PHONY: ci-image
+ci-image: ## Build the runner image act uses for local workflow runs
+	docker build --platform linux/amd64 -f build/docker/act-runner.Dockerfile -t ilavrita/act-runner:local .
+
+.PHONY: ci-local
+ci-local: ci-image ## Run the CI workflow locally with act
+	act push -W .github/workflows/ci.yml
+
 .PHONY: docker
 docker: ## Build the container image
 	docker build -f build/docker/Dockerfile -t ilavrita/ilavrita:$(VERSION) .

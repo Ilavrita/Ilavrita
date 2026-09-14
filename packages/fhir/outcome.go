@@ -3,6 +3,7 @@ package fhir
 // IssueSeverity classifies how badly an operation failed.
 type IssueSeverity string
 
+// Severity levels an OperationOutcome issue can carry.
 const (
 	SeverityFatal       IssueSeverity = "fatal"
 	SeverityError       IssueSeverity = "error"
@@ -14,6 +15,7 @@ const (
 // issue-type value set.
 type IssueCode string
 
+// Issue codes Ilavrita reports today.
 const (
 	CodeNotSupported IssueCode = "not-supported"
 	CodeNotFound     IssueCode = "not-found"

@@ -48,10 +48,36 @@ jobs:
 
       - uses: anchore/sbom-action/download-syft@v0
 
+      # CHANGELOG.md and the GitHub release body are generated from the same
+      # commit history by the same tool, so the two can never disagree.
+      - name: Generate release notes
+        uses: orhun/git-cliff-action@v4
+        with:
+          config: cliff.toml
+          args: --latest --strip all
+        env:
+          OUTPUT: RELEASE_NOTES.md
+
+      - name: Append install notes
+        run: |
+          cat >> RELEASE_NOTES.md <<'NOTES'
+
+          ## Container image
+
+          ```bash
+          docker pull ghcr.io/ilavrita/ilavrita:${{ github.ref_name }}
+          ```
+
+          Verify an archive against `checksums.txt` before running it.
+
+          Ilavrita is licensed under AGPL-3.0 and includes PocketBase under the
+          MIT licence. See `NOTICE` and `THIRD_PARTY_NOTICES.md` in the archive.
+          NOTES
+
       - uses: goreleaser/goreleaser-action@v6
         with:
           version: "~> v2"
-          args: release --clean
+          args: release --clean --release-notes RELEASE_NOTES.md
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 

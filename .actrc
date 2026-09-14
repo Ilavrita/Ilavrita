@@ -1,0 +1,12 @@
+# Local GitHub Actions runs via https://github.com/nektos/act
+#
+# Apple Silicon needs the amd64 architecture, because several actions publish no
+# arm64 build and fail in confusing ways without it.
+--container-architecture=linux/amd64
+
+# Built by `make ci-image`. The stock act image loses node from PATH once
+# actions/setup-go runs, which breaks every JavaScript action after it.
+-P ubuntu-latest=ilavrita/act-runner:local
+
+# The runner image is built locally, so act must not try to pull it.
+--pull=false

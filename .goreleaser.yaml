@@ -42,41 +42,11 @@ checksum:
 sboms:
   - artifacts: archive
 
+# Release notes come from git-cliff so that CHANGELOG.md and the GitHub
+# release carry identical text from a single generator.
 changelog:
-  use: github
-  sort: asc
-  groups:
-    - title: Features
-      regexp: '^feat(\(.+\))?!?:'
-      order: 0
-    - title: Fixes
-      regexp: '^fix(\(.+\))?!?:'
-      order: 1
-    - title: Performance
-      regexp: '^perf(\(.+\))?!?:'
-      order: 2
-    - title: Documentation
-      regexp: '^docs(\(.+\))?!?:'
-      order: 3
-    - title: Other
-      order: 99
-  filters:
-    exclude:
-      - '^test:'
-      - '^ci:'
-      - '^chore\(deps\):'
+  disable: true
 
 release:
   draft: false
   prerelease: auto
-  footer: |
-    ## Container image
-
-    ```bash
-    docker pull ghcr.io/ilavrita/ilavrita:{{ .Tag }}
-    ```
-
-    Verify an archive against `checksums.txt` before running it.
-
-    Ilavrita is licensed under AGPL-3.0 and includes PocketBase under the MIT
-    licence. See `NOTICE` and `THIRD_PARTY_NOTICES.md` in the archive.
