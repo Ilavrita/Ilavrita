@@ -1,0 +1,22 @@
+# FOSSA licence and vulnerability scanning.
+#
+# Only the two manifests Ilavrita actually ships are analysed. The vendored
+# PocketBase fork carries its own go.mod and an admin-UI package.json, and
+# scanning those separately double-counts dependencies our own go.mod already
+# resolves through the replace directive, and adds upstream UI build tooling
+# that never reaches a release artefact.
+version: 3
+
+project:
+  id: github.com/Ilavrita/Ilavrita
+  name: Ilavrita
+  link: https://github.com/Ilavrita/Ilavrita
+  team: Ilavrita
+  policy: Ilavrita
+
+targets:
+  only:
+    - type: gomod
+      path: ./
+    - type: pnpm
+      path: ./

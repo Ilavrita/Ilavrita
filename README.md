@@ -11,6 +11,7 @@
 <p align="center">
   <a href="https://github.com/Ilavrita/Ilavrita/actions/workflows/ci.yml"><img src="https://github.com/Ilavrita/Ilavrita/actions/workflows/ci.yml/badge.svg" alt="CI" /></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-AGPL--3.0-4F46E5" alt="AGPL-3.0" /></a>
+  <a href="https://app.fossa.com/projects/git%2Bgithub.com%2FIlavrita%2FIlavrita?ref=badge_shield"><img src="https://app.fossa.com/api/projects/git%2Bgithub.com%2FIlavrita%2FIlavrita.svg?type=shield" alt="FOSSA licence scan" /></a>
   <a href="https://golang.org"><img src="https://img.shields.io/badge/go-1.27-7C3AED" alt="Go 1.27" /></a>
   <a href="https://hl7.org/fhir/R4/"><img src="https://img.shields.io/badge/FHIR-R4%204.0.1-A78BFA" alt="FHIR R4" /></a>
 </p>

@@ -1,0 +1,43 @@
+name: Licence scan
+
+on:
+  push:
+    branches: [main, dev]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: fossa-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  scan:
+    name: FOSSA
+    runs-on: ubuntu-latest
+    # Forks cannot read the API key, and a scan without one fails for a reason
+    # that has nothing to do with the contributor's change.
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          submodules: recursive
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - uses: fossas/fossa-action@v1
+        with:
+          api-key: ${{ secrets.FOSSA_API_KEY }}
+
+      # Findings that were reviewed and explained live in
+      # docs/license-compliance.md. A new finding should fail here and be
+      # resolved or recorded there, rather than accumulate unread.
+      - uses: fossas/fossa-action@v1
+        with:
+          api-key: ${{ secrets.FOSSA_API_KEY }}
+          run-tests: true
