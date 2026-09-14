@@ -1,8 +1,23 @@
 {
   "name": "@ilavrita/tsconfig",
   "version": "0.0.1",
-  "private": true,
   "description": "Shared TypeScript configuration.",
   "license": "AGPL-3.0-only",
-  "files": ["base.json"]
+  "files": [
+    "base.json",
+    "LICENSE",
+    "NOTICE"
+  ],
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
+  },
+  "scripts": {
+    "prepack": "cp ../../LICENSE ../../NOTICE ."
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Ilavrita/Ilavrita.git",
+    "directory": "packages/tsconfig"
+  }
 }
