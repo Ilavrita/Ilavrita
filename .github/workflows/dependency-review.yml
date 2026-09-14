@@ -1,0 +1,22 @@
+name: Dependency review
+
+on:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  review:
+    name: Review
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/dependency-review-action@v4
+        with:
+          fail-on-severity: high
+          # Ilavrita ships under AGPL-3.0 and must stay able to offer a
+          # commercial licence, so copyleft-incompatible terms are rejected here
+          # rather than discovered at release time.
+          deny-licenses: GPL-2.0, LGPL-2.0, SSPL-1.0, BUSL-1.1
