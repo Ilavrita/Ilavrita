@@ -134,3 +134,82 @@ jobs:
           subject-name: ghcr.io/ilavrita/ilavrita
           subject-digest: ${{ steps.push.outputs.digest }}
           push-to-registry: true
+
+      - uses: sigstore/cosign-installer@v4
+
+      # Signed by digest, never by tag: a tag can be moved to a different image,
+      # and a signature that follows the tag would then vouch for something else.
+      # Keyless, so there is no private key to store or rotate.
+      - name: Sign the image
+        run: cosign sign --yes "ghcr.io/ilavrita/ilavrita@${{ steps.push.outputs.digest }}"
+
+      - uses: anchore/sbom-action@v0
+        with:
+          image: ghcr.io/ilavrita/ilavrita@${{ steps.push.outputs.digest }}
+          format: spdx-json
+          output-file: image-sbom.spdx.json
+          upload-artifact: false
+
+      # Says what is inside the image, attested to the same digest, so an
+      # operator can answer "which version of this dependency did we ship?"
+      # without trusting a rebuild.
+      - uses: actions/attest-sbom@v3
+        with:
+          subject-name: ghcr.io/ilavrita/ilavrita
+          subject-digest: ${{ steps.push.outputs.digest }}
+          sbom-path: image-sbom.spdx.json
+          push-to-registry: true
+
+  packages:
+    name: npm
+    needs: guard
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      # npm provenance is signed with the workflow's OIDC identity, which is what
+      # lets a consumer verify the tarball came from this repository and tag.
+      id-token: write
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: pnpm/action-setup@v6
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: pnpm
+          registry-url: https://registry.npmjs.org
+
+      - run: pnpm install --frozen-lockfile
+
+      - name: Take the version from the tag
+        run: ./scripts/set-package-versions.sh "${{ github.ref_name }}"
+
+      - run: pnpm --filter @ilavrita/sdk build
+
+      # A prerelease must not become the default install for everyone, so it goes
+      # out under the "next" tag instead of "latest".
+      - name: Choose a dist-tag
+        id: dist
+        run: |
+          if printf '%s' "${{ github.ref_name }}" | grep -q -- '-'; then
+            echo "tag=next" >> "$GITHUB_OUTPUT"
+          else
+            echo "tag=latest" >> "$GITHUB_OUTPUT"
+          fi
+
+      # npm rather than pnpm: pnpm accepts --provenance without documenting it and
+      # without any way to confirm an attestation was produced, and provenance
+      # that silently does not exist is worse than none. The workspace: protocol
+      # is already resolved by the version script above, which is the only reason
+      # pnpm was needed here.
+      #
+      # tsconfig goes first: sdk depends on it, and a published package whose
+      # dependency does not resolve is broken from the moment it lands.
+      - name: Publish
+        run: |
+          for package in packages/tsconfig packages/sdk-typescript; do
+            ( cd "$package" && npm publish --provenance --access public --tag "${{ steps.dist.outputs.tag }}" )
+          done
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
