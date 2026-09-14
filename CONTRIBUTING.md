@@ -86,8 +86,10 @@ docs: correct the backup restore order
 Types in use: `feat`, `fix`, `perf`, `refactor`, `docs`, `test`, `build`, `ci`,
 `chore`. A `!` after the type, as in `feat(fhir)!:`, marks a breaking change.
 
-Keep commits small and atomic — one logical change each. Release notes are
-derived from these messages, so a vague subject line becomes a vague changelog.
+Keep commits small and atomic — one logical change each. `CHANGELOG.md` and the
+release notes are generated from these subjects by
+[git-cliff](https://git-cliff.org), so a vague subject line becomes a vague
+changelog. Never hand-edit `CHANGELOG.md`; run `make changelog`.
 
 ## Pull requests
 
@@ -106,3 +108,19 @@ fixes are welcome now, and issues, testing and review always are.
 ## Security
 
 Do not open a public issue for a vulnerability. Follow [SECURITY.md](SECURITY.md).
+
+## Running CI locally
+
+[`act`](https://github.com/nektos/act) runs the GitHub Actions workflows on your
+machine, which is faster than pushing to find out something is broken.
+
+```bash
+brew install act          # or see the act README
+act -l                    # list jobs
+act push -j go            # run one job
+```
+
+Settings live in [`.actrc`](.actrc). Two known differences from real CI: the
+`Post setup-go` cache step fails under act because `node` is missing from the
+container's PATH — harmless, and it appears after every real step has already
+run — and the CodeQL job cannot run locally at all.

@@ -38,6 +38,10 @@ fmt: ## Format Go sources
 tidy: ## Reconcile go.mod and go.sum
 	go mod tidy
 
+.PHONY: changelog
+changelog: ## Regenerate CHANGELOG.md from commit history
+	git-cliff --output CHANGELOG.md
+
 .PHONY: docker
 docker: ## Build the container image
 	docker build -f build/docker/Dockerfile -t ilavrita/ilavrita:$(VERSION) .
