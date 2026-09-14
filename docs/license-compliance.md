@@ -79,18 +79,39 @@ about — so it is a **release gate for any build that accepts uploaded images**
 
 ## Clearing them
 
-FOSSA's REST API is read-only for issues. Verified 2026-09-14: every
-issue-resolution endpoint returns `404`, and policy writes return
-`403 User not permissioned`. The work below has to be done in the FOSSA
-dashboard.
+FOSSA's REST API is read-only for issues. Verified 2026-09-14 against fourteen
+endpoint variants: every issue read succeeds, every issue write returns `404`,
+and policy writes return `403 User not permissioned`. The work below has to be
+done in the FOSSA dashboard.
 
-1. **The two AGPL self-flags** — resolve as "this is the project's own declared
-   licence".
-2. **The twenty-five dependency flags** — set a licence conclusion of
-   `BSD-3-Clause` on `modernc.org/libc`, `modernc.org/sqlite`, `golang.org/x/text`
-   and `golang.org/x/crypto`, citing the evidence above.
-3. **CVE-2023-36308** — leave open. It is real, and it should stay visible until
-   upstream publishes a fix or the dependency is replaced.
+It is smaller than the issue count suggests. The ten "Denied by Policy" issues
+sit on **three packages**, and FOSSA applies a licence conclusion per package —
+so that is three actions, not ten.
+
+### 1. Conclude the dependency licences (three actions)
+
+For each package below, open it in the project's dependency list, choose
+**Conclude licence**, set `BSD-3-Clause`, and paste the note.
+
+| Package | Issues cleared | Note to paste |
+| --- | --- | --- |
+| `modernc.org/libc@v1.74.4` | Abstyles, APSL-1.0/1.1/1.2/2.0, and the GPL/LGPL/CDDL flags | Module is BSD-3-Clause. `LICENSE-3RD-PARTY.md` lists only Go (BSD-3-Clause), musl libc (MIT), go-netdb and NixOS/nixpkgs. The APSL text is in `*_darwin_*.go` (excluded from Linux builds by build constraints) and the GPL text is in `testdata/`, which is never compiled. |
+| `golang.org/x/text@v0.42.0` | CC-BY-SA-1.0/2.0/2.5/3.0 | Module is BSD-3-Clause ("Copyright 2009 The Go Authors"). The CC-BY-SA notices are in bundled Unicode data files, not the licence grant. |
+| `modernc.org/sqlite@v1.57.0` | APSL-1.0, GPL-3.0-or-later, Apache-2.0-WITH-LLVM-exception | Module is BSD-3-Clause ("Copyright (c) 2017 The Sqlite Authors"). The flags come from bundled `LICENSE-SQLITE` and `LICENSE-SQLITE_VEC` notices. |
+
+`golang.org/x/crypto@v0.57.0` carries one flag for `openssl-ssleay`. The module is
+BSD-3-Clause and contains no OpenSSL or SSLeay licence text at all; conclude it as
+BSD-3-Clause on the same basis.
+
+### 2. Resolve the two AGPL self-flags
+
+These are on Ilavrita itself, not a dependency. Resolve with: *this is the
+project's own declared licence.*
+
+### 3. Leave CVE-2023-36308 open
+
+It is real, it has no fixed version, and it should stay visible until upstream
+publishes one or the dependency is replaced.
 
 ### Why the policy is not being changed
 
