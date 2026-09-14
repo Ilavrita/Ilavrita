@@ -1,0 +1,6 @@
+# Local GitHub Actions runs via https://github.com/nektos/act
+#
+# Apple Silicon needs the amd64 architecture, because several actions publish
+# no arm64 build and fail in confusing ways without it.
+--container-architecture=linux/amd64
+-P ubuntu-latest=catthehacker/ubuntu:act-latest
