@@ -23,7 +23,7 @@ linters:
             - "**/packages/fhir/**"
             - "**/packages/search/**"
             - "**/packages/storage/**"
-            - "**/packages/tenancy/**"
+            - "**/packages/project/**"
             - "**/packages/authz/**"
             - "**/packages/audit/**"
             - "**/packages/files/**"

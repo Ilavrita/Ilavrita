@@ -1,7 +1,8 @@
 package storage
 
-// TenantID scopes every stored record to one tenant.
-type TenantID string
+// ProjectID scopes every stored record to one Project, which is Ilavrita's
+// isolation boundary (FR-045).
+type ProjectID string
 
 // ResourceType is a FHIR resource type name, such as "Patient".
 type ResourceType string
@@ -15,9 +16,12 @@ type LogicalID string
 // never changes or gets reused (FR-006).
 type VersionID string
 
-// ResourceKey addresses a single resource within a tenant.
+// ResourceKey addresses a single resource within a Project.
+//
+// Project is part of the key rather than an optional argument, so no storage
+// call can be made without it (FR-045).
 type ResourceKey struct {
-	Tenant TenantID
-	Type   ResourceType
-	ID     LogicalID
+	Project ProjectID
+	Type    ResourceType
+	ID      LogicalID
 }
