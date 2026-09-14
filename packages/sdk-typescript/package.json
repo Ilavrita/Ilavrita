@@ -1,0 +1,26 @@
+{
+  "name": "@ilavrita/sdk",
+  "version": "0.0.1",
+  "description": "TypeScript client for the Ilavrita FHIR API.",
+  "license": "AGPL-3.0-only",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "files": ["dist"],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Ilavrita/Ilavrita.git",
+    "directory": "packages/sdk-typescript"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "test": "echo \"@ilavrita/sdk has no tests yet\"",
+    "lint": "tsc -p tsconfig.json --noEmit",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "clean": "rm -rf dist"
+  },
+  "devDependencies": {
+    "@ilavrita/tsconfig": "workspace:*",
+    "typescript": "5.9.3"
+  }
+}
