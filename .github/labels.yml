@@ -66,6 +66,9 @@
 - name: "needs:info"
   color: "EDEFF7"
   description: Waiting on the reporter
+- name: "needs:review"
+  color: "EDEFF7"
+  description: Held for human review; not auto-merged
 - name: "needs:design"
   color: "EDEFF7"
   description: Needs a decision before it can be built
