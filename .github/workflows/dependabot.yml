@@ -1,0 +1,55 @@
+name: Dependabot
+
+# Patch and minor updates merge themselves once the required checks pass. Major
+# updates never do: a major version is the upstream's own signal that something
+# changed in a way it expects to break callers, and no amount of green CI proves
+# a behaviour change we have no test for.
+on:
+  pull_request_target:
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: read
+
+jobs:
+  triage:
+    name: Triage
+    runs-on: ubuntu-latest
+    if: github.actor == 'dependabot[bot]'
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - id: metadata
+        uses: dependabot/fetch-metadata@v2
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      # --auto queues the merge behind the branch's required status checks, so a
+      # dependency that breaks the build simply never merges. That is the whole
+      # safety property here; without required checks this job would be reckless.
+      - name: Enable auto-merge for patch and minor updates
+        if: |
+          steps.metadata.outputs.update-type == 'version-update:semver-patch' ||
+          steps.metadata.outputs.update-type == 'version-update:semver-minor'
+        run: |
+          gh pr merge "$PR_URL" --auto --squash
+          gh pr comment "$PR_URL" --body \
+            "Queued for auto-merge: this is a \`${UPDATE_TYPE#version-update:semver-}\` update and will merge once the required checks pass."
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_URL: ${{ github.event.pull_request.html_url }}
+          UPDATE_TYPE: ${{ steps.metadata.outputs.update-type }}
+
+      - name: Hold major updates for review
+        if: steps.metadata.outputs.update-type == 'version-update:semver-major'
+        run: |
+          gh pr edit "$PR_URL" --add-label "needs:review"
+          gh pr comment "$PR_URL" --body \
+            "Held for review: \`${DEPENDENCY}\` is a **major** version bump, so it is not auto-merged even with green checks.
+
+          Verify it before merging — \`make ci-local\` runs the workflows against the change, and \`docs/dependencies.md\` describes what to look for."
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_URL: ${{ github.event.pull_request.html_url }}
+          DEPENDENCY: ${{ steps.metadata.outputs.dependency-names }}
