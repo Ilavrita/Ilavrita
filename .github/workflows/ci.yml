@@ -24,7 +24,7 @@ jobs:
         with:
           submodules: recursive
 
-      - uses: actions/setup-go@v6
+      - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
           cache: true
@@ -52,7 +52,7 @@ jobs:
         with:
           submodules: recursive
 
-      - uses: actions/setup-go@v6
+      - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
           cache: true
@@ -76,7 +76,7 @@ jobs:
           node-version: 22
           cache: pnpm
 
-      - uses: actions/setup-go@v6
+      - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
           cache: true
