@@ -47,7 +47,7 @@ jobs:
       - name: Render the reference
         run: pnpm api:docs
 
-      - uses: actions/upload-artifact@v5
+      - uses: actions/upload-artifact@v7
         with:
           name: api-reference
           path: docs/api.html
