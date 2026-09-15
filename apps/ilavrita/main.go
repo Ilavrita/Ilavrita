@@ -1,8 +1,5 @@
-// Command ilavrita runs the Ilavrita healthcare server.
-//
-// The process is the Ilavrita PocketBase fork carrying the Ilavrita HTTP
-// surface. PocketBase supplies the runtime; the healthcare API belongs to
-// Ilavrita and is mounted separately from anything PocketBase exposes.
+// Command ilavrita runs the Ilavrita healthcare server. PocketBase supplies the
+// runtime; the healthcare API belongs to Ilavrita and is mounted separately.
 package main
 
 import (

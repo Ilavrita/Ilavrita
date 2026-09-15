@@ -8,14 +8,9 @@ import (
 	"github.com/pocketbase/pocketbase/tools/router"
 )
 
-// PocketBase serves its own REST API and admin console alongside whatever the
-// host application registers. Ilavrita does not publish those as product
-// surface (FR-029), and leaving them reachable also exposes the file and
-// thumbnail endpoints, which is the only path by which CVE-2023-36308 in the
-// image decoder can be reached.
-//
-// They stay available for development behind an explicit opt-in, because
-// working on the storage backend needs them.
+// PocketBase serves its own API and admin console alongside our routes. Those are
+// not product surface (FR-029) and reach the image decoder behind CVE-2023-36308,
+// so they are off unless explicitly opted into for development.
 const exposeRuntimeVariable = "ILAVRITA_EXPOSE_POCKETBASE"
 
 var runtimePrefixes = []string{"/api/", "/_/"}

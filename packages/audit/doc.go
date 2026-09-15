@@ -1,6 +1,3 @@
-// Package audit records security-relevant events.
-//
-// Audit evidence is written by the server and is independent of the FHIR
-// AuditEvent resource, so a client can never edit away the record of its own
-// actions (FR-030).
+// Package audit records security-relevant events, independently of the FHIR
+// AuditEvent resource so a client cannot edit the record of its own actions.
 package audit

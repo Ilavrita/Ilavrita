@@ -25,9 +25,8 @@ const (
 	CodeException    IssueCode = "exception"
 )
 
-// OperationOutcome is the only error shape permitted on FHIR routes. Runtime,
-// database and framework errors are translated into this type so that internal
-// detail never reaches a client (FR-007).
+// OperationOutcome is the only error shape permitted on FHIR routes. Runtime and
+// database errors are translated here so internal detail never reaches a client.
 type OperationOutcome struct {
 	ResourceType string  `json:"resourceType"`
 	Issue        []Issue `json:"issue"`
@@ -40,10 +39,8 @@ type Issue struct {
 	Diagnostics string        `json:"diagnostics,omitempty"`
 }
 
-// NewOperationOutcome builds a single-issue outcome.
-//
-// Diagnostics are written for the API consumer. They must never carry resource
-// bodies, stack traces or internal identifiers.
+// NewOperationOutcome builds a single-issue outcome. Diagnostics must never carry
+// resource bodies, stack traces or internal identifiers.
 func NewOperationOutcome(severity IssueSeverity, code IssueCode, diagnostics string) OperationOutcome {
 	return OperationOutcome{
 		ResourceType: "OperationOutcome",

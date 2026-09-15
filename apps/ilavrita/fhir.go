@@ -22,17 +22,13 @@ func registerFHIRRoutes(routes *router.Router[*core.RequestEvent]) {
 	base.Any(everythingElse, rejectUnimplemented)
 }
 
-// describeCapabilities publishes what this build actually supports. The
-// statement stays empty of resources until an interaction ships with test
-// coverage behind it (FR-001, SM-008).
+// describeCapabilities publishes what this build actually supports.
 func describeCapabilities(request *core.RequestEvent) error {
 	return respondFHIR(request, http.StatusOK, fhir.NewCapabilityStatement(version))
 }
 
-// rejectUnimplemented answers every FHIR route that has no behaviour yet.
-//
-// Returning an OperationOutcome rather than a framework error keeps the promise
-// that clients only ever see FHIR-shaped failures.
+// rejectUnimplemented answers every FHIR route with no behaviour yet, as an
+// OperationOutcome so clients only ever parse FHIR-shaped failures.
 func rejectUnimplemented(request *core.RequestEvent) error {
 	outcome := fhir.NewOperationOutcome(
 		fhir.SeverityError,

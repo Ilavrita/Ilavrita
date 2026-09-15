@@ -19,11 +19,8 @@ type SoftwareCapability struct {
 	Version string `json:"version"`
 }
 
-// CapabilityStatement is the machine-readable declaration of what this server
-// can actually do.
-//
-// It is the contract clients test against, so it must never advertise an
-// interaction that is not implemented and covered by tests (FR-001, SM-008).
+// CapabilityStatement declares what this server can actually do. It must never
+// advertise an interaction that is not implemented and covered by tests.
 type CapabilityStatement struct {
 	ResourceType string             `json:"resourceType"`
 	Status       string             `json:"status"`
@@ -34,10 +31,8 @@ type CapabilityStatement struct {
 	Rest         []RestCapability   `json:"rest"`
 }
 
-// NewCapabilityStatement describes the current build.
-//
-// The resource list is empty because no FHIR interaction is implemented yet.
-// Entries are added only once the matching behaviour ships with test coverage.
+// NewCapabilityStatement describes the current build. The resource list is empty
+// until an interaction ships with test coverage behind it.
 func NewCapabilityStatement(softwareVersion string) CapabilityStatement {
 	return CapabilityStatement{
 		ResourceType: "CapabilityStatement",

@@ -8,20 +8,15 @@ type ResourceRepository interface {
 	Write(ctx context.Context, record ResourceRecord) error
 }
 
-// VersionStore reads the immutable history of a resource.
-//
-// History is recorded as its own evidence rather than reconstructed from audit
-// logs, which are written for a different purpose and may be pruned (FR-006).
+// VersionStore reads the immutable history of a resource. History is its own
+// evidence, not reconstructed from audit logs, which may be pruned.
 type VersionStore interface {
 	ReadVersion(ctx context.Context, key ResourceKey, version VersionID) (ResourceRecord, error)
 	ListVersions(ctx context.Context, key ResourceKey) ([]ResourceRecord, error)
 }
 
-// Transactor runs work inside a single commit boundary.
-//
-// A resource write, its new version, its search indexes and its audit record
-// belong to one transaction. A failure before commit must leave no partial
-// state visible (FR-009, FR-023).
+// Transactor runs work inside a single commit boundary. A write, its version, its
+// indexes and its audit record commit together or not at all.
 type Transactor interface {
 	WithinTransaction(ctx context.Context, work func(ctx context.Context) error) error
 }
