@@ -1,5 +1,7 @@
 package storage
 
+import "fmt"
+
 // ProjectID scopes every stored record to one Project, which is Ilavrita's
 // isolation boundary (FR-045).
 type ProjectID string
@@ -21,4 +23,19 @@ type ResourceKey struct {
 	Project ProjectID
 	Type    ResourceType
 	ID      LogicalID
+}
+
+// NewResourceKey rejects a key missing any part, so an empty Project can never
+// reach a query as a silently matching value.
+func NewResourceKey(project ProjectID, resourceType ResourceType, id LogicalID) (ResourceKey, error) {
+	switch {
+	case project == "":
+		return ResourceKey{}, fmt.Errorf("storage: resource key needs a project")
+	case resourceType == "":
+		return ResourceKey{}, fmt.Errorf("storage: resource key needs a resource type")
+	case id == "":
+		return ResourceKey{}, fmt.Errorf("storage: resource key needs a logical id")
+	}
+
+	return ResourceKey{Project: project, Type: resourceType, ID: id}, nil
 }
