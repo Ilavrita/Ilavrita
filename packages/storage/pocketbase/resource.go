@@ -1,0 +1,744 @@
+package pocketbase
+
+import (
+	"context"
+	"database/sql"
+	"errors"
+	"fmt"
+	"slices"
+	"strings"
+	"time"
+
+	"github.com/Ilavrita/Ilavrita/packages/storage"
+)
+
+// storeKind is the Kind this store authorizes against. FHIR and platform rows
+// live in physically separate tables, so a store is bound to one family and a
+// Grant for the other can never satisfy a check here.
+const storeKind = storage.KindFHIR
+
+// ErrScopeEscape reports that a returned row fell outside the Scope it was read
+// under. It means a predicate was dropped, so it fails the request rather than
+// filtering the row away.
+var ErrScopeEscape = errors.New("pocketbase: row escaped the scope it was read under")
+
+// Columns every compiled arm selects, in the order scanRecord reads them. The
+// history arms carry version_seq so the wrapper can order by it.
+const (
+	currentColumns = "r.project_id, r.res_type, r.res_id, r.version_id, r.last_updated, r.deleted, r.content"
+	historyColumns = "h.project_id AS project_id, h.res_type AS res_type, h.res_id AS res_id," +
+		" h.version_id AS version_id, h.last_updated AS last_updated, h.deleted AS deleted," +
+		" h.content AS content, h.version_seq AS version_seq"
+	recordColumns = "project_id, res_type, res_id, version_id, last_updated, deleted, content"
+)
+
+// The relations a compiled arm may read. Each names its own tenant column, which
+// is what lets every arm bind its Project as a literal.
+const (
+	currentRelation = "fhir_resource r"
+	historyRelation = "fhir_resource_history h"
+
+	currentKeyPredicate = "r.project_id = ? AND r.res_type = ? AND r.res_id = ?"
+	historyKeyPredicate = "h.project_id = ? AND h.res_type = ? AND h.res_id = ?"
+
+	// Binds the history row to the logical id's current epoch, so a recreated id
+	// never serves the previous owner's versions.
+	currentEpochPredicate = "h.identity_epoch = (SELECT e.identity_epoch FROM fhir_resource e" +
+		" WHERE e.project_id = ? AND e.res_type = ? AND e.res_id = ?)"
+
+	compartmentPredicate = "EXISTS (SELECT 1 FROM fhir_resource_compartment c" +
+		" WHERE c.project_id = ? AND c.comp_type = ? AND c.comp_id = ?" +
+		" AND c.res_type = ? AND c.res_id = ?)"
+
+	// Version-dimensioned, so a Compartment is checked against the version being
+	// returned rather than against whatever the current row now says.
+	historyCompartmentPredicate = "EXISTS (SELECT 1 FROM fhir_resource_history_compartment hc" +
+		" WHERE hc.project_id = ? AND hc.comp_type = ? AND hc.comp_id = ?" +
+		" AND hc.res_type = ? AND hc.res_id = ? AND hc.version_seq = h.version_seq)"
+)
+
+// The SET clauses the scoped writes differ by. Each ends at AND so the Scope's
+// own predicate is the last thing the WHERE clause carries.
+const (
+	recreatePrefix = "UPDATE fhir_resource SET" +
+		" version_seq = version_seq + 1, version_id = CAST(version_seq + 1 AS TEXT)," +
+		" identity_epoch = identity_epoch + 1, last_updated = ?, deleted = 0, content = ?" +
+		" WHERE project_id = ? AND res_type = ? AND res_id = ? AND deleted = 1 AND "
+
+	updatePrefix = "UPDATE fhir_resource SET" +
+		" version_seq = version_seq + 1, version_id = CAST(version_seq + 1 AS TEXT)," +
+		" last_updated = ?, content = ?" +
+		" WHERE project_id = ? AND res_type = ? AND res_id = ? AND version_id = ? AND deleted = 0 AND "
+
+	deletePrefix = "UPDATE fhir_resource SET" +
+		" version_seq = version_seq + 1, version_id = CAST(version_seq + 1 AS TEXT)," +
+		" last_updated = ?, deleted = 1, content = NULL" +
+		" WHERE project_id = ? AND res_type = ? AND res_id = ? AND version_id = ? AND deleted = 0 AND "
+)
+
+// ResourceStore implements the storage interfaces for FHIR resources on SQLite.
+// Version ids and last-updated instants are assigned by the store; the matching
+// fields on a record handed to a write are ignored.
+type ResourceStore struct {
+	db *sql.DB
+}
+
+var (
+	_ storage.ResourceRepository = (*ResourceStore)(nil)
+	_ storage.VersionStore       = (*ResourceStore)(nil)
+	_ storage.Transactor         = (*ResourceStore)(nil)
+)
+
+// NewResourceStore binds a store to an open database. The caller owns the pool
+// and is responsible for opening it with foreign keys enforced.
+func NewResourceStore(db *sql.DB) *ResourceStore {
+	return &ResourceStore{db: db}
+}
+
+// arm is one Grant compiled to SQL. Every relation it reads binds the Grant's
+// Project as a literal, so a compiled arm holds one bound Project per table and
+// no predicate can be relative to another row's Project.
+type arm struct {
+	conditions []string
+	args       []any
+}
+
+// relation adds a table the arm reads. The Project is always the first bound
+// argument, which is why a relation cannot be added without one.
+func (a *arm) relation(project storage.ProjectID, predicate string, rest ...any) {
+	a.conditions = append(a.conditions, predicate)
+	a.args = append(a.args, string(project))
+	a.args = append(a.args, rest...)
+}
+
+// filter adds a predicate over a relation the arm already reads.
+func (a *arm) filter(predicate string, args ...any) {
+	a.conditions = append(a.conditions, predicate)
+	a.args = append(a.args, args...)
+}
+
+func (a *arm) query(columns, relation string) (string, []any) {
+	return "SELECT " + columns + " FROM " + relation + " WHERE " + strings.Join(a.conditions, " AND "), a.args
+}
+
+// union compiles the arms into one statement. No arm compiles to a constantly
+// false query, which is what an empty Scope must produce: a query matching no
+// rows rather than an unpredicated one.
+func union(columns, relation string, arms []arm) (string, []any) {
+	if len(arms) == 0 {
+		return "SELECT " + columns + " FROM " + relation + " WHERE 1 = 0", nil
+	}
+
+	texts := make([]string, 0, len(arms))
+
+	var args []any
+
+	for index := range arms {
+		text, armArgs := arms[index].query(columns, relation)
+		texts = append(texts, text)
+		args = append(args, armArgs...)
+	}
+
+	return strings.Join(texts, " UNION "), args
+}
+
+// authorizedGrants keeps the Grants that allow this exact operation on this key.
+// The candidate Projects come from Scope.Projects(), so a Scope that reaches no
+// Project yields no Grant and therefore no arm.
+func authorizedGrants(scope storage.Scope, key storage.ResourceKey, action storage.Action) []storage.Grant {
+	projects := scope.Projects()
+	kept := make([]storage.Grant, 0, len(projects))
+
+	for _, grant := range scope.Grants() {
+		if !slices.Contains(projects, grant.Project) || grant.Project != key.Project {
+			continue
+		}
+
+		if !scope.Allows(grant.Project, storeKind, key.Type, action) {
+			continue
+		}
+
+		if grant.Kind != storeKind || grant.Type != key.Type || grant.Action != action {
+			continue
+		}
+
+		kept = append(kept, grant)
+	}
+
+	return kept
+}
+
+// currentArm compiles one Grant against the current-state table.
+func currentArm(grant storage.Grant, key storage.ResourceKey) arm {
+	var compiled arm
+
+	compiled.relation(grant.Project, currentKeyPredicate, string(key.Type), string(key.ID))
+
+	if grant.Compartment != nil {
+		compiled.relation(grant.Project, compartmentPredicate,
+			string(grant.Compartment.Type), string(grant.Compartment.ID),
+			string(key.Type), string(key.ID))
+	}
+
+	return compiled
+}
+
+// historyArm compiles one Grant against the history table. The Compartment is
+// checked per version, never inherited from the current row.
+func historyArm(grant storage.Grant, key storage.ResourceKey) arm {
+	var compiled arm
+
+	compiled.relation(grant.Project, historyKeyPredicate, string(key.Type), string(key.ID))
+	compiled.relation(grant.Project, currentEpochPredicate, string(key.Type), string(key.ID))
+
+	if grant.Compartment != nil {
+		compiled.relation(grant.Project, historyCompartmentPredicate,
+			string(grant.Compartment.Type), string(grant.Compartment.ID),
+			string(key.Type), string(key.ID))
+	}
+
+	return compiled
+}
+
+func currentArms(scope storage.Scope, key storage.ResourceKey, action storage.Action) []arm {
+	grants := authorizedGrants(scope, key, action)
+	arms := make([]arm, 0, len(grants))
+
+	for _, grant := range grants {
+		arms = append(arms, currentArm(grant, key))
+	}
+
+	return arms
+}
+
+func historyArms(scope storage.Scope, key storage.ResourceKey, action storage.Action) []arm {
+	grants := authorizedGrants(scope, key, action)
+	arms := make([]arm, 0, len(grants))
+
+	for _, grant := range grants {
+		arms = append(arms, historyArm(grant, key))
+	}
+
+	return arms
+}
+
+// currentStatement compiles a by-key read of the current row.
+func currentStatement(scope storage.Scope, key storage.ResourceKey, action storage.Action) (string, []any) {
+	text, args := union(currentColumns, currentRelation, currentArms(scope, key, action))
+
+	return text + " LIMIT 1", args
+}
+
+// versionStatement compiles a read of one named version.
+func versionStatement(scope storage.Scope, key storage.ResourceKey, version storage.VersionID) (string, []any) {
+	arms := historyArms(scope, key, storage.ActionHistory)
+	for index := range arms {
+		arms[index].filter("h.version_id = ?", string(version))
+	}
+
+	text, args := union(historyColumns, historyRelation, arms)
+
+	return "SELECT " + recordColumns + " FROM (" + text + ") LIMIT 1", args
+}
+
+// versionsStatement compiles a read of every visible version, newest first.
+func versionsStatement(scope storage.Scope, key storage.ResourceKey) (string, []any) {
+	text, args := union(historyColumns, historyRelation, historyArms(scope, key, storage.ActionHistory))
+
+	return "SELECT " + recordColumns + " FROM (" + text + ") ORDER BY version_seq DESC", args
+}
+
+// authorizedExists compiles the arm set into an EXISTS a write can require, so
+// a write and a read of the same row share one authorization predicate.
+func authorizedExists(scope storage.Scope, key storage.ResourceKey, action storage.Action) (string, []any) {
+	text, args := union("1", currentRelation, currentArms(scope, key, action))
+
+	return "EXISTS (" + text + ")", args
+}
+
+// writeStatement assembles a scoped write: a SET clause, the key, and the same
+// authorization predicate a read of that row would compile to.
+func writeStatement(
+	prefix string,
+	scope storage.Scope,
+	key storage.ResourceKey,
+	action storage.Action,
+) (string, []any) {
+	exists, args := authorizedExists(scope, key, action)
+
+	return prefix + exists + " RETURNING version_seq, identity_epoch", args
+}
+
+// Read returns the current version of a resource. A row outside the Scope is
+// reported as missing, so a caller cannot probe for ids it may not read.
+func (s *ResourceStore) Read(ctx context.Context, scope storage.Scope, key storage.ResourceKey) (storage.ResourceRecord, error) {
+	if err := validateKey(key); err != nil {
+		return storage.ResourceRecord{}, err
+	}
+
+	return s.readCurrent(ctx, scope, key, storage.ActionRead)
+}
+
+func (s *ResourceStore) readCurrent(
+	ctx context.Context,
+	scope storage.Scope,
+	key storage.ResourceKey,
+	action storage.Action,
+) (storage.ResourceRecord, error) {
+	text, args := currentStatement(scope, key, action)
+
+	record, deleted, err := scanRecord(s.conn(ctx).QueryRowContext(ctx, text, args...))
+	if err != nil {
+		return storage.ResourceRecord{}, err
+	}
+
+	if err := assertInScope(scope, record, action); err != nil {
+		return storage.ResourceRecord{}, err
+	}
+
+	if deleted {
+		return storage.ResourceRecord{}, storage.ErrDeleted
+	}
+
+	return record, nil
+}
+
+// ReadVersion returns one immutable version. It authorizes under ActionHistory,
+// never ActionRead: a read Grant may have been minted against the current
+// compartment, which an older version need not share.
+func (s *ResourceStore) ReadVersion(
+	ctx context.Context,
+	scope storage.Scope,
+	key storage.ResourceKey,
+	version storage.VersionID,
+) (storage.ResourceRecord, error) {
+	if err := validateKey(key); err != nil {
+		return storage.ResourceRecord{}, err
+	}
+
+	if version == "" {
+		return storage.ResourceRecord{}, fmt.Errorf("pocketbase: read version needs a version id")
+	}
+
+	text, args := versionStatement(scope, key, version)
+
+	record, deleted, err := scanRecord(s.conn(ctx).QueryRowContext(ctx, text, args...))
+	if err != nil {
+		return storage.ResourceRecord{}, err
+	}
+
+	if err := assertInScope(scope, record, storage.ActionHistory); err != nil {
+		return storage.ResourceRecord{}, err
+	}
+
+	if deleted {
+		return storage.ResourceRecord{}, storage.ErrDeleted
+	}
+
+	return record, nil
+}
+
+// ListVersions returns every version the Scope authorizes, newest first. A
+// resource with no visible version is reported as missing.
+func (s *ResourceStore) ListVersions(
+	ctx context.Context,
+	scope storage.Scope,
+	key storage.ResourceKey,
+) ([]storage.ResourceRecord, error) {
+	if err := validateKey(key); err != nil {
+		return nil, err
+	}
+
+	text, args := versionsStatement(scope, key)
+
+	rows, err := s.conn(ctx).QueryContext(ctx, text, args...)
+	if err != nil {
+		return nil, fmt.Errorf("pocketbase: list versions: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	var records []storage.ResourceRecord
+
+	for rows.Next() {
+		record, _, err := scanRecord(rows)
+		if err != nil {
+			return nil, err
+		}
+
+		if err := assertInScope(scope, record, storage.ActionHistory); err != nil {
+			return nil, err
+		}
+
+		records = append(records, record)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("pocketbase: list versions: %w", err)
+	}
+
+	if len(records) == 0 {
+		return nil, storage.ErrNotFound
+	}
+
+	return records, nil
+}
+
+// Create writes a resource that does not exist yet. It never falls through to an
+// update: a taken id is a conflict, so a create can not overwrite a row the
+// caller was never able to read.
+func (s *ResourceStore) Create(ctx context.Context, scope storage.Scope, record storage.ResourceRecord) error {
+	if err := validateWrite(record); err != nil {
+		return err
+	}
+
+	grants := authorizedGrants(scope, record.Key, storage.ActionWrite)
+	if len(grants) == 0 {
+		return storage.ErrDenied
+	}
+
+	// A caller who cannot read the type must not learn from a create whether an
+	// id is taken, and storage cannot project a new row's compartments, so a
+	// compartment-restricted Grant may not create at all.
+	if !scope.Allows(record.Key.Project, storeKind, record.Key.Type, storage.ActionRead) {
+		return storage.ErrDenied
+	}
+
+	if !slices.ContainsFunc(grants, func(g storage.Grant) bool { return g.Compartment == nil }) {
+		return storage.ErrDenied
+	}
+
+	return s.WithinTransaction(ctx, func(ctx context.Context) error {
+		return s.create(ctx, scope, record)
+	})
+}
+
+func (s *ResourceStore) create(ctx context.Context, scope storage.Scope, record storage.ResourceRecord) error {
+	const insert = "INSERT INTO fhir_resource" +
+		" (project_id, res_type, res_id, version_id, version_seq, identity_epoch, last_updated, deleted, content)" +
+		" VALUES (?, ?, ?, '1', 1, 0, ?, 0, ?)" +
+		" ON CONFLICT (project_id, res_type, res_id) DO NOTHING" +
+		" RETURNING version_seq, identity_epoch"
+
+	stamp := time.Now().UTC()
+	key := record.Key
+
+	var seq, epoch int64
+
+	err := s.conn(ctx).QueryRowContext(ctx, insert,
+		string(key.Project), string(key.Type), string(key.ID),
+		stamp.UnixMilli(), string(record.Content),
+	).Scan(&seq, &epoch)
+
+	switch {
+	case err == nil:
+		return s.writeVersion(ctx, key, seq, epoch, stamp, record.Content)
+	case errors.Is(err, sql.ErrNoRows):
+		return s.recreate(ctx, scope, record, stamp)
+	default:
+		return fmt.Errorf("pocketbase: create resource: %w", err)
+	}
+}
+
+// recreate takes over a logical id whose current row is a tombstone the caller
+// is authorized to write. The epoch bump is what stops the new owner inheriting
+// the previous owner's versions.
+func (s *ResourceStore) recreate(
+	ctx context.Context,
+	scope storage.Scope,
+	record storage.ResourceRecord,
+	stamp time.Time,
+) error {
+	update, existsArgs := writeStatement(recreatePrefix, scope, record.Key, storage.ActionWrite)
+	key := record.Key
+	args := append([]any{stamp.UnixMilli(), string(record.Content),
+		string(key.Project), string(key.Type), string(key.ID)}, existsArgs...)
+
+	var seq, epoch int64
+
+	switch err := s.conn(ctx).QueryRowContext(ctx, update, args...).Scan(&seq, &epoch); {
+	case errors.Is(err, sql.ErrNoRows):
+		return storage.ErrAlreadyExists
+	case err != nil:
+		return fmt.Errorf("pocketbase: recreate resource: %w", err)
+	}
+
+	// The previous owner's compartment projection must not describe the new
+	// resource; the history rows it produced stay behind the old epoch.
+	const clear = "DELETE FROM fhir_resource_compartment WHERE project_id = ? AND res_type = ? AND res_id = ?"
+
+	if _, err := s.conn(ctx).ExecContext(ctx, clear,
+		string(key.Project), string(key.Type), string(key.ID)); err != nil {
+		return fmt.Errorf("pocketbase: clear compartments: %w", err)
+	}
+
+	return s.writeVersion(ctx, key, seq, epoch, stamp, record.Content)
+}
+
+// Update replaces the current version. The statement carries both the expected
+// version and the Scope's own predicate, so a stale caller and an unauthorized
+// one are both refused by the same WHERE clause.
+func (s *ResourceStore) Update(
+	ctx context.Context,
+	scope storage.Scope,
+	record storage.ResourceRecord,
+	expect storage.VersionID,
+) error {
+	if err := validateWrite(record); err != nil {
+		return err
+	}
+
+	if expect == "" {
+		return fmt.Errorf("pocketbase: update needs an expected version")
+	}
+
+	stamp := time.Now().UTC()
+
+	return s.WithinTransaction(ctx, func(ctx context.Context) error {
+		return s.mutate(ctx, scope, record.Key, mutation{
+			action:  storage.ActionWrite,
+			prefix:  updatePrefix,
+			stamp:   stamp,
+			leading: []any{stamp.UnixMilli(), string(record.Content)},
+			expect:  expect,
+			content: record.Content,
+		})
+	})
+}
+
+// Delete soft-deletes a resource, leaving the row and its compartment
+// projection in place so the tombstone stays attributable.
+func (s *ResourceStore) Delete(
+	ctx context.Context,
+	scope storage.Scope,
+	key storage.ResourceKey,
+	expect storage.VersionID,
+) error {
+	if err := validateKey(key); err != nil {
+		return err
+	}
+
+	if expect == "" {
+		return fmt.Errorf("pocketbase: delete needs an expected version")
+	}
+
+	stamp := time.Now().UTC()
+
+	return s.WithinTransaction(ctx, func(ctx context.Context) error {
+		return s.mutate(ctx, scope, key, mutation{
+			action:  storage.ActionDelete,
+			prefix:  deletePrefix,
+			stamp:   stamp,
+			leading: []any{stamp.UnixMilli()},
+			expect:  expect,
+		})
+	})
+}
+
+// mutation is what Update and Delete differ by: the action they authorize under,
+// their SET clause and the body the new version carries. One stamp serves the
+// row and its version, so the two can never disagree about when it was written.
+type mutation struct {
+	action  storage.Action
+	prefix  string
+	stamp   time.Time
+	leading []any
+	expect  storage.VersionID
+	content []byte
+}
+
+func (s *ResourceStore) mutate(
+	ctx context.Context,
+	scope storage.Scope,
+	key storage.ResourceKey,
+	change mutation,
+) error {
+	if len(authorizedGrants(scope, key, change.action)) == 0 {
+		return storage.ErrDenied
+	}
+
+	statement, existsArgs := writeStatement(change.prefix, scope, key, change.action)
+
+	args := append([]any{}, change.leading...)
+	args = append(args, string(key.Project), string(key.Type), string(key.ID), string(change.expect))
+	args = append(args, existsArgs...)
+
+	var seq, epoch int64
+
+	switch err := s.conn(ctx).QueryRowContext(ctx, statement, args...).Scan(&seq, &epoch); {
+	case errors.Is(err, sql.ErrNoRows):
+		return s.explainMiss(ctx, scope, key, change.action)
+	case err != nil:
+		return fmt.Errorf("pocketbase: mutate resource: %w", err)
+	}
+
+	return s.writeVersion(ctx, key, seq, epoch, change.stamp, change.content)
+}
+
+// explainMiss says why a scoped write matched nothing, re-reading inside the
+// same transaction under the same Scope. An unauthorized row reads as missing,
+// which is the same answer an absent one gives.
+func (s *ResourceStore) explainMiss(
+	ctx context.Context,
+	scope storage.Scope,
+	key storage.ResourceKey,
+	action storage.Action,
+) error {
+	if _, err := s.readCurrent(ctx, scope, key, action); err != nil {
+		return err
+	}
+
+	return storage.ErrVersionConflict
+}
+
+// writeVersion appends the immutable version row and projects the resource's
+// compartments onto it, so a later history read has a per-version fact to check.
+func (s *ResourceStore) writeVersion(
+	ctx context.Context,
+	key storage.ResourceKey,
+	seq, epoch int64,
+	stamp time.Time,
+	content []byte,
+) error {
+	const insert = "INSERT INTO fhir_resource_history" +
+		" (project_id, res_type, res_id, version_seq, version_id, identity_epoch," +
+		" last_updated, deleted, content) VALUES (?, ?, ?, ?, CAST(? AS TEXT), ?, ?, ?, ?)"
+
+	deleted := 0
+	body := any(string(content))
+
+	if content == nil {
+		deleted = 1
+		body = nil
+	}
+
+	if _, err := s.conn(ctx).ExecContext(ctx, insert,
+		string(key.Project), string(key.Type), string(key.ID), seq, seq, epoch,
+		stamp.UnixMilli(), deleted, body,
+	); err != nil {
+		return fmt.Errorf("pocketbase: append version: %w", err)
+	}
+
+	return s.projectCompartments(ctx, key, seq)
+}
+
+func (s *ResourceStore) projectCompartments(ctx context.Context, key storage.ResourceKey, seq int64) error {
+	const project = "INSERT INTO fhir_resource_history_compartment" +
+		" (project_id, comp_type, comp_id, res_type, res_id, version_seq)" +
+		" SELECT project_id, comp_type, comp_id, res_type, res_id, ?" +
+		" FROM fhir_resource_compartment" +
+		" WHERE project_id = ? AND res_type = ? AND res_id = ?"
+
+	if _, err := s.conn(ctx).ExecContext(ctx, project,
+		seq, string(key.Project), string(key.Type), string(key.ID)); err != nil {
+		return fmt.Errorf("pocketbase: project compartments: %w", err)
+	}
+
+	return nil
+}
+
+// WithinTransaction runs work inside one commit boundary. A nested call joins
+// the boundary already open rather than starting a second one.
+func (s *ResourceStore) WithinTransaction(ctx context.Context, work func(ctx context.Context) error) error {
+	if _, open := ctx.Value(transactionKey{}).(*sql.Tx); open {
+		return work(ctx)
+	}
+
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("pocketbase: begin transaction: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	if err := work(context.WithValue(ctx, transactionKey{}, tx)); err != nil {
+		return err
+	}
+
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("pocketbase: commit transaction: %w", err)
+	}
+
+	return nil
+}
+
+// transactionKey carries the open transaction down to the statements that must
+// commit with it.
+type transactionKey struct{}
+
+// executor is the part of *sql.DB and *sql.Tx the statements here need.
+type executor interface {
+	ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error)
+	QueryContext(ctx context.Context, query string, args ...any) (*sql.Rows, error)
+	QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row
+}
+
+func (s *ResourceStore) conn(ctx context.Context) executor {
+	if tx, open := ctx.Value(transactionKey{}).(*sql.Tx); open {
+		return tx
+	}
+
+	return s.db
+}
+
+// row is what a compiled statement returns, satisfied by *sql.Row and *sql.Rows.
+type row interface {
+	Scan(dest ...any) error
+}
+
+func scanRecord(src row) (storage.ResourceRecord, bool, error) {
+	var (
+		project, resType, resID, version string
+		lastUpdated                      int64
+		deleted                          int
+		content                          []byte
+	)
+
+	switch err := src.Scan(&project, &resType, &resID, &version, &lastUpdated, &deleted, &content); {
+	case errors.Is(err, sql.ErrNoRows):
+		return storage.ResourceRecord{}, false, storage.ErrNotFound
+	case err != nil:
+		return storage.ResourceRecord{}, false, fmt.Errorf("pocketbase: scan resource: %w", err)
+	}
+
+	return storage.ResourceRecord{
+		Key: storage.ResourceKey{
+			Project: storage.ProjectID(project),
+			Type:    storage.ResourceType(resType),
+			ID:      storage.LogicalID(resID),
+		},
+		Version:     storage.VersionID(version),
+		LastUpdated: time.UnixMilli(lastUpdated).UTC(),
+		Deleted:     deleted == 1,
+		Content:     content,
+	}, deleted == 1, nil
+}
+
+// assertInScope re-checks a returned row's Project, type and action against the
+// Scope it was read under. It does not re-check the Grant's Compartment, so a
+// dropped compartment predicate reaches the caller uncaught (AUTH-3).
+func assertInScope(scope storage.Scope, record storage.ResourceRecord, action storage.Action) error {
+	if scope.Allows(record.Key.Project, storeKind, record.Key.Type, action) {
+		return nil
+	}
+
+	return fmt.Errorf("%w: %s/%s in %s", ErrScopeEscape, record.Key.Type, record.Key.ID, record.Key.Project)
+}
+
+func validateKey(key storage.ResourceKey) error {
+	if _, err := storage.NewResourceKey(key.Project, key.Type, key.ID); err != nil {
+		return fmt.Errorf("pocketbase: %w", err)
+	}
+
+	return nil
+}
+
+func validateWrite(record storage.ResourceRecord) error {
+	if err := validateKey(record.Key); err != nil {
+		return err
+	}
+
+	if len(record.Content) == 0 {
+		return fmt.Errorf("pocketbase: a written resource needs content")
+	}
+
+	return nil
+}
