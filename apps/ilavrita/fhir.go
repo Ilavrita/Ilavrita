@@ -24,7 +24,7 @@ func registerFHIRRoutes(routes *router.Router[*core.RequestEvent]) {
 
 // describeCapabilities publishes what this build actually supports.
 func describeCapabilities(request *core.RequestEvent) error {
-	return respondFHIR(request, http.StatusOK, fhir.NewCapabilityStatement(version))
+	return respondFHIR(request, http.StatusOK, fhir.NewCapabilityStatement(version, startedAt, baseURL(request)))
 }
 
 // rejectUnimplemented answers every FHIR route with no behaviour yet, as an
@@ -43,4 +43,15 @@ func respondFHIR(request *core.RequestEvent, status int, payload any) error {
 	request.Response.Header().Set(contentTypeField, fhir.ContentType)
 
 	return request.JSON(status, payload)
+}
+
+// baseURL reflects the address the client actually reached, so a deployment
+// behind a proxy still advertises a URL that resolves.
+func baseURL(request *core.RequestEvent) string {
+	scheme := "http"
+	if request.Request.TLS != nil {
+		scheme = "https"
+	}
+
+	return scheme + "://" + request.Request.Host + fhir.BasePath
 }

@@ -4,6 +4,7 @@ package main
 
 import (
 	"log"
+	"time"
 
 	"github.com/pocketbase/pocketbase"
 	"github.com/pocketbase/pocketbase/core"
@@ -14,6 +15,10 @@ var (
 	version  = "dev"
 	revision = "unknown"
 )
+
+// startedAt dates the CapabilityStatement, which R4 requires. It is fixed for
+// the life of the process so the document does not change on every request.
+var startedAt = time.Now()
 
 func main() {
 	app := pocketbase.New()
