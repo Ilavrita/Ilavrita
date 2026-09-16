@@ -22,6 +22,18 @@ var (
 	// ErrInvalidPrincipal reports a membership with no single named principal.
 	ErrInvalidPrincipal = errors.New("project: membership needs exactly one named principal")
 
+	// ErrMissingEmail reports an identity built with no address. Nothing can be
+	// invited, resolved or deduplicated without one.
+	ErrMissingEmail = errors.New("project: a user needs an email address")
+
+	// ErrInvalidEmail reports input NormaliseEmail refused. An address it cannot
+	// be sure of is rejected, never repaired into one it can.
+	ErrInvalidEmail = errors.New("project: invalid email address")
+
+	// ErrInvalidCredentialState reports a state and a credential that contradict
+	// each other, such as an active identity that never set a password.
+	ErrInvalidCredentialState = errors.New("project: user state and credential disagree")
+
 	// ErrInvalidProfile reports a profile reference missing its type or its id.
 	ErrInvalidProfile = errors.New("project: profile needs a resource type and a logical id")
 

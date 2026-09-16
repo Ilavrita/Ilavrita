@@ -13,6 +13,11 @@ go 1.27
 // Run `make bootstrap` (or `git submodule update --init --recursive`) before building.
 require github.com/pocketbase/pocketbase v0.0.0
 
+// IDNA (UTS #46) is how packages/project normalises an email domain. One code
+// path encodes every domain, so an ASCII lookalike cannot skip the validation a
+// Unicode domain gets.
+require golang.org/x/net v0.59.0
+
 require (
 	github.com/asaskevich/govalidator v0.0.0-20230301143203-a9d515a09cc2 // indirect
 	github.com/disintegration/imaging v1.6.2 // indirect
@@ -36,7 +41,6 @@ require (
 	github.com/spf13/pflag v1.0.10 // indirect
 	golang.org/x/crypto v0.57.0 // indirect
 	golang.org/x/image v0.46.0 // indirect
-	golang.org/x/net v0.59.0 // indirect
 	golang.org/x/oauth2 v0.36.0 // indirect
 	golang.org/x/sync v0.23.0 // indirect
 	golang.org/x/sys v0.48.0 // indirect
