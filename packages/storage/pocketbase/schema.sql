@@ -305,6 +305,98 @@ CREATE INDEX IF NOT EXISTS ix_platform_history_type
   ON platform_resource_history (project_id, res_type, last_updated DESC, res_id, version_seq);
 
 -- ===========================================================================
+-- Access policies
+-- ===========================================================================
+
+-- An AccessPolicy is the only thing a membership binding or a data link points
+-- at. One Project owns it, and (project_id, id) is the parent key that keeps a
+-- restriction resolvable only in its owner (LNK-6).
+
+-- tenant: project_id
+CREATE TABLE IF NOT EXISTS access_policies (
+  project_id TEXT NOT NULL REFERENCES projects (id) ON DELETE RESTRICT ON UPDATE RESTRICT,
+  id         TEXT NOT NULL,
+  name       TEXT NOT NULL,
+  created_at BIGINT NOT NULL,
+  updated_at BIGINT NOT NULL,
+  version    BIGINT NOT NULL DEFAULT 1,
+
+  PRIMARY KEY (project_id, id),
+
+  CHECK (id <> ''),
+  CHECK (project_id <> '' AND project_id <> 'system')
+);
+
+-- A policy declares the parameters it takes, so a rule can only name one a
+-- binding is asked for, and a binding that omits one is refused rather than
+-- resolved to a default subject (FR-055).
+
+-- tenant: project_id
+CREATE TABLE IF NOT EXISTS access_policy_parameters (
+  project_id TEXT NOT NULL,
+  policy_id  TEXT NOT NULL,
+  name       TEXT NOT NULL,
+
+  PRIMARY KEY (project_id, policy_id, name),
+
+  CHECK (name <> ''),
+
+  FOREIGN KEY (project_id, policy_id)
+    REFERENCES access_policies (project_id, id) ON DELETE CASCADE ON UPDATE RESTRICT
+);
+
+-- One row per rule, each naming exactly one (kind, resource type, action), the
+-- same shape as project_link_types: a triple absent here mints no Grant, and no
+-- rule carries a type list a later read could widen against (LNK-3).
+
+-- The restriction is one of three shapes; a rule with neither a compartment nor
+-- an explicit unrestricted marker is unrepresentable (LNK-5). Which types may
+-- carry an unrestricted rule is validated in packages/authz, which owns the list.
+
+-- tenant: project_id
+CREATE TABLE IF NOT EXISTS access_policy_rules (
+  project_id        TEXT NOT NULL,
+  policy_id         TEXT NOT NULL,
+  ordinal           BIGINT NOT NULL,
+  kind              TEXT NOT NULL CHECK (kind IN ('fhir', 'platform')),
+  res_type          TEXT NOT NULL,
+  action            TEXT NOT NULL CHECK (action IN ('read', 'write', 'delete', 'search', 'history')),
+  unrestricted      INTEGER NOT NULL DEFAULT 0 CHECK (unrestricted IN (0, 1)),
+  compartment_type  TEXT,
+  compartment_id    TEXT,
+  compartment_param TEXT,
+
+  PRIMARY KEY (project_id, policy_id, ordinal),
+
+  CHECK (ordinal >= 0),
+  CHECK (res_type <> ''),
+  CHECK (compartment_type IS NULL OR compartment_type <> ''),
+  CHECK (compartment_id IS NULL OR compartment_id <> ''),
+  CHECK (compartment_param IS NULL OR compartment_param <> ''),
+
+  -- An unrestricted rule says so and names no subject; a restricted one names a
+  -- subject type plus either a literal id or one parameter, never both.
+  CHECK (
+    (unrestricted = 1 AND compartment_type IS NULL AND compartment_id IS NULL AND compartment_param IS NULL)
+    OR (unrestricted = 0 AND compartment_type IS NOT NULL AND compartment_id IS NOT NULL AND compartment_param IS NULL)
+    OR (unrestricted = 0 AND compartment_type IS NOT NULL AND compartment_id IS NULL AND compartment_param IS NOT NULL)
+  ),
+
+  FOREIGN KEY (project_id, policy_id)
+    REFERENCES access_policies (project_id, id) ON DELETE CASCADE ON UPDATE RESTRICT,
+
+  -- A rule names only a parameter the policy declares. NULL is a rule that takes
+  -- none, the one case this key does not constrain.
+  FOREIGN KEY (project_id, policy_id, compartment_param)
+    REFERENCES access_policy_parameters (project_id, policy_id, name)
+    ON DELETE RESTRICT ON UPDATE RESTRICT
+);
+
+-- Resolution asks one policy for one exact triple, so the probe follows the key.
+CREATE INDEX IF NOT EXISTS ix_access_policy_rules_probe
+  ON access_policy_rules (project_id, policy_id, kind, res_type, action);
+
+-- ===========================================================================
 -- Project links
 -- ===========================================================================
 
@@ -362,7 +454,17 @@ CREATE TABLE IF NOT EXISTS project_links (
       OR (grantee_approved_by IS NOT NULL AND grantee_approved_at IS NOT NULL)),
 
   CHECK (expires_at IS NULL OR expires_at > created_at),
-  CHECK (history_from IS NULL OR activated_at IS NOT NULL)
+  CHECK (history_from IS NULL OR activated_at IS NOT NULL),
+
+  -- A data link's restriction is the grantor's own policy; an administrative
+  -- link names none, so administrative reach has no policy to widen (FR-052).
+  CHECK (kind <> 'data' OR grantor_access_policy_id IS NOT NULL),
+  CHECK (kind <> 'administrative' OR grantor_access_policy_id IS NULL),
+
+  -- The policy is looked up in the grantor, so a grantee's same-named policy
+  -- cannot lower the restriction it reaches through (LNK-6).
+  FOREIGN KEY (grantor_project, grantor_access_policy_id)
+    REFERENCES access_policies (project_id, id) ON DELETE RESTRICT ON UPDATE RESTRICT
 );
 
 -- The approver columns hold membership ids with no foreign key: a Super Admin
@@ -462,6 +564,12 @@ CREATE TABLE IF NOT EXISTS project_memberships (
   via_link_grantee_project TEXT,
   via_link_kind            TEXT,
 
+  -- Denormalized so a policy binding's composite foreign key can see it: a
+  -- link-minted membership must never carry a binding (CP-1).
+  link_sourced             INTEGER NOT NULL GENERATED ALWAYS AS (
+    CASE WHEN via_link_grantee_project IS NULL THEN 0 ELSE 1 END
+  ) STORED,
+
   created_at               BIGINT NOT NULL,
   updated_at               BIGINT NOT NULL,
   activated_at             BIGINT,
@@ -547,6 +655,45 @@ CREATE INDEX IF NOT EXISTS ix_pm_super ON project_memberships (project_id, state
 -- principal is the only thing known at probe time; every query it feeds re-pins
 -- the Project
 CREATE INDEX IF NOT EXISTS ix_pm_principal ON project_memberships (principal_id, state, project_id);
+
+-- Parent key for the policy binding's composite foreign key. It is an index
+-- rather than a table constraint because link_sourced is a generated column.
+CREATE UNIQUE INDEX IF NOT EXISTS ux_pm_link_sourced
+  ON project_memberships (project_id, id, link_sourced);
+
+-- A binding is one AccessPolicy on one membership, in the membership's own
+-- Project: project_id leads the key and both foreign keys carry it, so a
+-- membership cannot bind a policy another Project owns.
+
+-- tenant: project_id
+CREATE TABLE IF NOT EXISTS project_membership_policies (
+  project_id              TEXT NOT NULL,
+  membership_id           TEXT NOT NULL,
+  policy_id               TEXT NOT NULL,
+  ordinal                 BIGINT NOT NULL DEFAULT 0,
+
+  -- The values this binding supplies to the policy's declared parameters (FR-055).
+  policy_params           TEXT NOT NULL DEFAULT '{}',
+
+  -- Always 0, so the composite foreign key below makes a binding on a
+  -- link-minted membership a constraint violation, not a promise (CP-1).
+  membership_link_sourced INTEGER NOT NULL DEFAULT 0 CHECK (membership_link_sourced = 0),
+
+  PRIMARY KEY (project_id, membership_id, policy_id),
+
+  CHECK (ordinal >= 0),
+
+  FOREIGN KEY (project_id, membership_id, membership_link_sourced)
+    REFERENCES project_memberships (project_id, id, link_sourced)
+    ON DELETE CASCADE ON UPDATE RESTRICT,
+
+  FOREIGN KEY (project_id, policy_id)
+    REFERENCES access_policies (project_id, id) ON DELETE RESTRICT ON UPDATE RESTRICT
+);
+
+-- One membership's bindings resolve in ordinal order.
+CREATE INDEX IF NOT EXISTS ix_pmp_membership_ordinal
+  ON project_membership_policies (project_id, membership_id, ordinal);
 
 -- The link-conferrable capability set is a closed allowlist enforced by a CHECK,
 -- so no second write path can confer membership or policy writes, and each row
