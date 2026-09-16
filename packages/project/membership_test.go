@@ -253,3 +253,45 @@ func TestMembershipTransitionRefusesAForbiddenMove(t *testing.T) {
 		t.Fatalf("reactivating a revoked membership = %v, want ErrInvalidTransition", err)
 	}
 }
+
+func TestStandingIsHeldOnlyWhileActiveAndDirect(t *testing.T) {
+	tests := []struct {
+		name   string
+		state  MembershipState
+		stands bool
+	}{
+		{name: "active", state: MembershipActive, stands: true},
+		{name: "invited", state: MembershipInvited},
+		{name: "suspended", state: MembershipSuspended},
+		{name: "revoked", state: MembershipRevoked},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := memberConfig("prj_clinic", KindStandard)
+			cfg.State = tc.state
+
+			if got := mustMembership(t, cfg).HoldsStanding(); got != tc.stands {
+				t.Errorf("HoldsStanding() = %v, want %v for a %s membership", got, tc.stands, tc.state)
+			}
+		})
+	}
+}
+
+// TestALinkMintedMembershipHoldsNoStanding is FR-052 at the domain edge: an
+// administrative link mints an active membership, and standing is what every
+// data-plane step reads, so that membership must hold none.
+func TestALinkMintedMembershipHoldsNoStanding(t *testing.T) {
+	linked, err := NewLinkedMembership("pm_linked", "prj_clinic", clinician(), "lnk_1")
+	if err != nil {
+		t.Fatalf("NewLinkedMembership: %v", err)
+	}
+
+	if linked.State() != MembershipActive {
+		t.Fatalf("State() = %s, want an active membership for the case to bite", linked.State())
+	}
+
+	if linked.HoldsStanding() {
+		t.Error("HoldsStanding() is true for a link-minted membership")
+	}
+}

@@ -61,4 +61,31 @@ var (
 
 	// ErrApprovalIncomplete reports activation attempted before both sides agreed.
 	ErrApprovalIncomplete = errors.New("project: a link activates only after both sides approve")
+
+	// ErrMissingProjectName reports a Project described without a slug or a name.
+	ErrMissingProjectName = errors.New("project: a project needs a slug and a name")
+
+	// ErrInvalidInstance reports an install record that contradicts its own
+	// bootstrap state, such as a claimed install still holding token material.
+	ErrInvalidInstance = errors.New("project: instance contradicts its bootstrap state")
+
+	// ErrNotProvisioned reports a claim against an install the migration has not
+	// created yet. Nothing is minted for one.
+	ErrNotProvisioned = errors.New("project: the install has no instance record")
+
+	// ErrBootstrapComplete reports a claim against an install already claimed.
+	// The single claim is spent, so a replay of the same token confers nothing.
+	ErrBootstrapComplete = errors.New("project: the install is already claimed")
+
+	// ErrClaimTokenInvalid reports a claim token that is not the one on file, or
+	// a claim against an install holding no token at all.
+	ErrClaimTokenInvalid = errors.New("project: claim token does not match")
+
+	// ErrClaimTokenExpired reports a claim token presented past its expiry. An
+	// expired token grants nothing without anyone having to revoke it.
+	ErrClaimTokenExpired = errors.New("project: claim token has expired")
+
+	// ErrInvalidTokenExpiry reports a claim token asked to live for no time at
+	// all, or forever.
+	ErrInvalidTokenExpiry = errors.New("project: a claim token needs a positive lifetime")
 )

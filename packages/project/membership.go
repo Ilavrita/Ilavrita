@@ -364,24 +364,30 @@ func (m Membership) ViaLink() (LinkID, bool) {
 	return m.viaLink, m.viaLink != ""
 }
 
+// HoldsStanding reports whether this is the principal's own live standing in the
+// Project: active, and held directly rather than minted by an administrative
+// link. Nothing the Project confers travels to a membership without it.
+func (m Membership) HoldsStanding() bool {
+	return m.state == MembershipActive && m.viaLink == ""
+}
+
 // IsAdmin reports effective project-admin standing. An invited, suspended or
 // revoked membership holds none, and neither does one a link minted.
 func (m Membership) IsAdmin() bool {
-	return m.admin && m.viaLink == "" && m.state == MembershipActive
+	return m.admin && m.HoldsStanding()
 }
 
 // IsSuperAdmin reports effective server-wide standing, which needs an active
 // direct membership in the Super Project.
 func (m Membership) IsSuperAdmin() bool {
-	return m.superAdmin && m.viaLink == "" &&
-		m.state == MembershipActive && m.projectKind.AllowsSuperAdmin()
+	return m.superAdmin && m.HoldsStanding() && m.projectKind.AllowsSuperAdmin()
 }
 
-// Policies returns the data-plane bindings this membership resolves to. An
-// inactive or link-minted membership resolves to none, which is an empty Scope
-// on every FHIR route.
+// Policies returns the data-plane bindings this membership resolves to. A
+// membership holding no standing resolves to none, which is an empty Scope on
+// every FHIR route.
 func (m Membership) Policies() []PolicyBinding {
-	if m.state != MembershipActive || m.viaLink != "" {
+	if !m.HoldsStanding() {
 		return nil
 	}
 
