@@ -54,6 +54,12 @@ def check(path, operation):
         if missing:
             problems.append(f"response is missing {sorted(missing)}")
 
+        # An undocumented response field is drift in the other direction: the
+        # description stopped describing what the server actually returns.
+        undocumented = set(body) - fields
+        if fields and undocumented:
+            problems.append(f"response has undocumented fields {sorted(undocumented)}")
+
     return request_path, problems
 
 

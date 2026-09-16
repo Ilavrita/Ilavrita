@@ -152,7 +152,7 @@ components:
       description: |
         A FHIR CapabilityStatement, narrowed to the fields Ilavrita populates. The
         full resource is defined by the FHIR specification.
-      required: [resourceType, status, kind, fhirVersion, format, software, rest]
+      required: [resourceType, status, experimental, date, kind, fhirVersion, format, software, implementation, rest]
       properties:
         resourceType:
           type: string
@@ -160,6 +160,22 @@ components:
         status:
           type: string
           enum: [draft, active, retired, unknown]
+        experimental:
+          type: boolean
+          description: True while no FHIR interaction is implemented.
+        date:
+          type: string
+          format: date-time
+          description: Required by R4. Fixed for the life of the process.
+        implementation:
+          type: object
+          description: Required by R4 invariant cpb-2 when kind is "instance".
+          required: [description]
+          properties:
+            description:
+              type: string
+            url:
+              type: string
         kind:
           type: string
           enum: [instance, capability, requirements]
