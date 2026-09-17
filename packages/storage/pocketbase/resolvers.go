@@ -44,6 +44,17 @@ const (
 	activeIdentityPredicate = " AND EXISTS (SELECT 1 FROM users u WHERE u.id = m.user_id" +
 		" AND u.state = 'active' AND (u.home_project_id IS NULL OR u.home_project_id = ?))"
 
+	// A client application's standing dies with the registration behind it, which
+	// is pinned to one Project: MembershipState has no value that could carry
+	// either fact, so a row failing this reports no membership.
+	activeClientApplicationPredicate = " AND EXISTS (SELECT 1 FROM client_applications c" +
+		" WHERE c.project_id = ? AND c.id = m.client_application_id AND c.state = 'active')"
+
+	// A bot is server-invoked and holds no credential, so its registration row is
+	// the only thing that can withdraw it.
+	activeBotPredicate = " AND EXISTS (SELECT 1 FROM bots b" +
+		" WHERE b.project_id = ? AND b.id = m.bot_id AND b.state = 'active')"
+
 	// A revoked row is history: at most one membership per principal is not
 	// revoked, so the live one answers first and the choice stays deterministic.
 	membershipOrder = " ORDER BY CASE WHEN m.state = 'revoked' THEN 1 ELSE 0 END, m.id LIMIT 1"
@@ -133,20 +144,29 @@ func (m *membershipRow) profile() *project.ProfileRef {
 	}
 }
 
-// membershipStatement compiles the lookup. The identity predicate is added only
-// for a user principal: client applications and bots have no users row to join,
-// so their standing is gated by project_memberships.state alone.
-func membershipStatement(proj project.ID, principal project.PrincipalRef) (string, []any) {
-	text := membershipQuery
-	args := []any{string(proj), string(principal.Kind), string(principal.ID)}
+// membershipStatement compiles the lookup. Every principal kind adds the
+// liveness predicate for the registry behind it, and a kind with no registry
+// compiles nothing, so a fourth kind denies rather than inheriting standing
+// gated by project_memberships.state alone.
+func membershipStatement(proj project.ID, principal project.PrincipalRef) (string, []any, error) {
+	var predicate string
 
-	if principal.Kind == project.PrincipalUser {
-		text += activeIdentityPredicate
-
-		args = append(args, string(proj))
+	switch principal.Kind {
+	case project.PrincipalUser:
+		predicate = activeIdentityPredicate
+	case project.PrincipalClientApplication:
+		predicate = activeClientApplicationPredicate
+	case project.PrincipalBot:
+		predicate = activeBotPredicate
+	default:
+		return "", nil, fmt.Errorf("%w: %q", project.ErrInvalidPrincipal, string(principal.Kind))
 	}
 
-	return text + membershipOrder, args
+	// Every arm binds the request's Project a second time, so no predicate
+	// compares one relation's Project to another relation's.
+	args := []any{string(proj), string(principal.Kind), string(principal.ID), string(proj)}
+
+	return membershipQuery + predicate + membershipOrder, args, nil
 }
 
 // Membership returns the principal's standing in one Project. An absent row is
@@ -163,7 +183,10 @@ func (r *MembershipResolver) Membership(
 		return project.Membership{}, false, fmt.Errorf("%w: %q", project.ErrInvalidPrincipal, string(principal.Kind))
 	}
 
-	text, args := membershipStatement(proj, principal)
+	text, args, err := membershipStatement(proj, principal)
+	if err != nil {
+		return project.Membership{}, false, err
+	}
 
 	var row membershipRow
 
