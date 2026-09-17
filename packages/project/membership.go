@@ -261,6 +261,10 @@ func NewMembership(cfg MembershipConfig) (Membership, error) {
 		return Membership{}, fmt.Errorf("%w: %s", ErrSuperAdminOutsideSuperProject, cfg.Project)
 	}
 
+	if err := confineMachinePrincipal(cfg); err != nil {
+		return Membership{}, err
+	}
+
 	policies, err := bindPolicies(cfg.Project, cfg.Policies)
 	if err != nil {
 		return Membership{}, err
@@ -299,6 +303,25 @@ func NewLinkedMembership(id MembershipID, project ID, principal PrincipalRef, vi
 		principal: principal, state: MembershipActive,
 		source: SourceLink, viaLink: via,
 	}, nil
+}
+
+// confineMachinePrincipal refuses the standing a machine may not hold, mirroring
+// the three CHECKs project_memberships carries: administering the install is
+// answerable work, and a compartment profile is authority no policy granted.
+func confineMachinePrincipal(cfg MembershipConfig) error {
+	if cfg.SuperAdmin && cfg.Principal.Kind != PrincipalUser {
+		return fmt.Errorf("%w: %q", ErrMachinePrincipalPrivilege, string(cfg.Principal.Kind))
+	}
+
+	if cfg.Admin && cfg.Principal.Kind == PrincipalBot {
+		return fmt.Errorf("%w: %s", ErrBotPrivilege, cfg.Principal.ID)
+	}
+
+	if cfg.Profile != nil && cfg.Principal.Kind != PrincipalUser {
+		return fmt.Errorf("%w: %q", ErrMachinePrincipalProfile, string(cfg.Principal.Kind))
+	}
+
+	return nil
 }
 
 // bindPolicies resolves every attachment against the owning Project, which is

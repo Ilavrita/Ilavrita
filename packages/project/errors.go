@@ -100,4 +100,43 @@ var (
 	// ErrInvalidTokenExpiry reports a claim token asked to live for no time at
 	// all, or forever.
 	ErrInvalidTokenExpiry = errors.New("project: a claim token needs a positive lifetime")
+
+	// ErrInvalidServiceID reports a client application, bot or credential id
+	// outside its family's namespace. The membership uniqueness index keys on the
+	// principal id alone, so two families sharing one id would be one principal.
+	ErrInvalidServiceID = errors.New("project: identifier is outside its principal namespace")
+
+	// ErrMissingServiceName reports a machine principal registered with no name.
+	// Nothing an operator can revoke in a hurry is nameless.
+	ErrMissingServiceName = errors.New("project: a client application or bot needs a name")
+
+	// ErrServiceNotActive reports a credential asked for by a suspended or
+	// revoked registration. A suspension that still mints keys suspends nothing.
+	ErrServiceNotActive = errors.New("project: only an active registration issues a credential")
+
+	// ErrInvalidCredentialExpiry reports a credential with no expiry, one that
+	// dies before it was issued, or one asked to outlive the ceiling. A secret
+	// without an expiry never dies, and one with a distant one was never rotated.
+	ErrInvalidCredentialExpiry = errors.New("project: a credential needs an expiry within its permitted lifetime")
+
+	// ErrInvalidSecretState reports a credential whose state and secret material
+	// contradict each other, such as a revoked one that still holds a hash.
+	ErrInvalidSecretState = errors.New("project: credential state and secret material disagree")
+
+	// ErrCredentialRevoked reports a move against a credential already spent.
+	// Revocation destroyed the secret, so nothing is left to revoke or reissue.
+	ErrCredentialRevoked = errors.New("project: a revoked credential is never reissued")
+
+	// ErrMachinePrincipalPrivilege reports super admin on a non-human principal.
+	// Administering the install is answerable work, and a secret answers to no one.
+	ErrMachinePrincipalPrivilege = errors.New("project: super admin belongs to a user principal")
+
+	// ErrBotPrivilege reports administrative standing on a bot. A bot runs code
+	// this server invokes, so admin on one is a control-plane write that code reaches.
+	ErrBotPrivilege = errors.New("project: a bot holds no administrative standing")
+
+	// ErrMachinePrincipalProfile reports a profile on a client application or a
+	// bot. A machine principal's authority is its AccessPolicy, never a
+	// compartment it occupies.
+	ErrMachinePrincipalProfile = errors.New("project: a machine principal carries no profile")
 )
