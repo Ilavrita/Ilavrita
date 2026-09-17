@@ -139,7 +139,38 @@ None of these are visible from reading the code.
 - **The release pipeline has never run.** Signing, SBOM and provenance are configured and
   unexercised. Cut `v0.0.1-rc.1` first, deliberately.
 
-## 7. Conventions
+## 7. Next step
+
+Agreed direction, in this order. The order is the point: each item removes the reason the
+next one is currently unsafe.
+
+**1. Client applications and service accounts (FR-053).** The `project_memberships` table
+already carries `client_application_id` and `bot_id` columns with no foreign key, because
+those tables do not exist. Build the tables, the domain type, and the principal kind so a
+non-human caller is a first-class member with its own AccessPolicy, not a shared secret.
+
+**2. Real user authentication.** Replaces `ILAVRITA_DEV_PRINCIPAL`, which exists only so
+the wiring could be proved end to end. A request must resolve to a principal through a
+credential, and the dev principal must stop being a supported path once this lands.
+
+**3. Tenant isolation proven at all three levels.** The mechanisms exist; what is missing is
+an authenticated end-to-end test at each level:
+   - **Project** — a caller in Project A reaches nothing in Project B.
+   - **Linked Projects** — what this document and the code call links is what has been
+     discussed as "child projects". There is no inheritance: a link grants only what it
+     names, only while active, unexpired and approved by both sides. An organisational
+     parent attribute may exist for display and confers nothing.
+   - **Super Admin** — authority held only through an active membership in the
+     `kind='super'` Project, audited, and never implying clinical data access.
+
+**4. Expose the remaining FHIR resource types.** Currently six non-clinical types are
+served; Patient, Observation and the rest of the PRD's initial coverage are withheld
+deliberately. **This step depends on step 2.** Serving PHI-bearing endpoints on a build
+without authentication is the one ordering mistake that would matter here.
+
+Search is not in this sequence and remains the largest unstarted piece (§6).
+
+## 8. Conventions
 
 One-line Conventional Commits, small and atomic. Comments explain the code in at most
 three lines and never narrate a roadmap. Plans go in `ROADMAP.md`, design reasoning in
