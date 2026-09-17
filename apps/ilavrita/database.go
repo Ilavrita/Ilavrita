@@ -42,7 +42,10 @@ func prepareDatabase(ctx context.Context, db *sql.DB) error {
 		return fmt.Errorf("ilavrita: %w", err)
 	}
 
-	if err := sqlite.ApplySchema(ctx, db); err != nil {
+	// PrepareSchema rather than ApplySchema: a database created before the client
+	// application and bot registries carries no foreign key to them, and SQLite
+	// cannot add one to a table that already exists. It adopts them or refuses.
+	if err := sqlite.PrepareSchema(ctx, db); err != nil {
 		return fmt.Errorf("ilavrita: apply schema to %s: %w", databaseFile, err)
 	}
 
