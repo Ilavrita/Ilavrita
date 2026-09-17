@@ -57,23 +57,57 @@ const (
 		" AND hc.res_type = ? AND hc.res_id = ? AND hc.version_seq = h.version_seq)"
 )
 
-// The SET clauses the scoped writes differ by. Each ends at AND so the Scope's
-// own predicate is the last thing the WHERE clause carries.
+// The pieces a scoped write is assembled from. Each fragment ends at AND, so
+// the Scope's own predicate is the last thing the WHERE clause carries.
 const (
-	recreatePrefix = "UPDATE fhir_resource SET" +
-		" version_seq = version_seq + 1, version_id = CAST(version_seq + 1 AS TEXT)," +
-		" identity_epoch = identity_epoch + 1, last_updated = ?, deleted = 0, content = ?" +
-		" WHERE project_id = ? AND res_type = ? AND res_id = ? AND deleted = 1 AND "
+	writtenKey = " WHERE project_id = ? AND res_type = ? AND res_id = ? AND "
 
-	updatePrefix = "UPDATE fhir_resource SET" +
-		" version_seq = version_seq + 1, version_id = CAST(version_seq + 1 AS TEXT)," +
-		" last_updated = ?, content = ?" +
-		" WHERE project_id = ? AND res_type = ? AND res_id = ? AND version_id = ? AND deleted = 0 AND "
+	expectedVersion = "version_id = ? AND "
+	liveRow         = "deleted = 0 AND "
+	buriedRow       = "deleted = 1 AND "
 
-	deletePrefix = "UPDATE fhir_resource SET" +
+	updateSet = "UPDATE fhir_resource SET" +
 		" version_seq = version_seq + 1, version_id = CAST(version_seq + 1 AS TEXT)," +
-		" last_updated = ?, deleted = 1, content = NULL" +
-		" WHERE project_id = ? AND res_type = ? AND res_id = ? AND version_id = ? AND deleted = 0 AND "
+		" last_updated = ?, content = ?"
+
+	deleteSet = "UPDATE fhir_resource SET" +
+		" version_seq = version_seq + 1, version_id = CAST(version_seq + 1 AS TEXT)," +
+		" last_updated = ?, deleted = 1, content = NULL"
+
+	recreateSet = "UPDATE fhir_resource SET" +
+		" version_seq = version_seq + 1, version_id = CAST(version_seq + 1 AS TEXT)," +
+		" identity_epoch = identity_epoch + 1, last_updated = ?, deleted = 0, content = ?"
+)
+
+// setClauses are the two forms one scoped write takes: expecting the version
+// the caller named, or expecting none.
+type setClauses struct {
+	expecting     string
+	unconditional string
+}
+
+// forExpectation picks the clause for what the caller claimed. Naming no
+// version is last-write-wins, never a race the caller has to resolve itself.
+func (c setClauses) forExpectation(expect storage.VersionID) string {
+	if expect == "" {
+		return c.unconditional
+	}
+
+	return c.expecting
+}
+
+var (
+	recreatePrefix = recreateSet + writtenKey + buriedRow
+
+	updateClauses = setClauses{
+		expecting:     updateSet + writtenKey + expectedVersion + liveRow,
+		unconditional: updateSet + writtenKey + liveRow,
+	}
+
+	deleteClauses = setClauses{
+		expecting:     deleteSet + writtenKey + expectedVersion + liveRow,
+		unconditional: deleteSet + writtenKey + liveRow,
+	}
 )
 
 // ResourceStore implements the storage interfaces for FHIR resources on SQLite.
@@ -166,6 +200,12 @@ func authorizedGrants(scope storage.Scope, key storage.ResourceKey, action stora
 	}
 
 	return kept
+}
+
+// reachesEveryCompartment reports whether any Grant here is unconfined. No Grant
+// at all is confinement to nothing, which is why the empty set answers false.
+func reachesEveryCompartment(grants []storage.Grant) bool {
+	return slices.ContainsFunc(grants, func(grant storage.Grant) bool { return grant.Compartment == nil })
 }
 
 // currentArm compiles one Grant against the current-state table.
@@ -391,19 +431,16 @@ func (s *ResourceStore) Create(ctx context.Context, scope storage.Scope, record 
 		return err
 	}
 
-	grants := authorizedGrants(scope, record.Key, storage.ActionWrite)
-	if len(grants) == 0 {
+	// The insert carries no Scope predicate of its own, so a Grant confined to a
+	// compartment could otherwise write outside it.
+	if !reachesEveryCompartment(authorizedGrants(scope, record.Key, storage.ActionWrite)) {
 		return storage.ErrDenied
 	}
 
 	// A caller who cannot read the type must not learn from a create whether an
-	// id is taken, and storage cannot project a new row's compartments, so a
-	// compartment-restricted Grant may not create at all.
-	if !scope.Allows(record.Key.Project, storeKind, record.Key.Type, storage.ActionRead) {
-		return storage.ErrDenied
-	}
-
-	if !slices.ContainsFunc(grants, func(g storage.Grant) bool { return g.Compartment == nil }) {
+	// id is taken, and storage projects no compartment for a row that does not
+	// exist yet, so the read this create is answered under must be unconfined.
+	if !reachesEveryCompartment(authorizedGrants(scope, record.Key, storage.ActionRead)) {
 		return storage.ErrDenied
 	}
 
@@ -474,9 +511,9 @@ func (s *ResourceStore) recreate(
 	return s.writeVersion(ctx, key, seq, epoch, stamp, record.Content)
 }
 
-// Update replaces the current version. The statement carries both the expected
-// version and the Scope's own predicate, so a stale caller and an unauthorized
-// one are both refused by the same WHERE clause.
+// Update replaces the current version. One WHERE clause carries the expectation
+// and the Scope, so a stale caller and an unauthorized one are refused by the
+// same statement. An empty expectation replaces whatever the row holds.
 func (s *ResourceStore) Update(
 	ctx context.Context,
 	scope storage.Scope,
@@ -487,16 +524,12 @@ func (s *ResourceStore) Update(
 		return err
 	}
 
-	if expect == "" {
-		return fmt.Errorf("pocketbase: update needs an expected version")
-	}
-
 	stamp := time.Now().UTC()
 
 	return s.WithinTransaction(ctx, func(ctx context.Context) error {
 		return s.mutate(ctx, scope, record.Key, mutation{
 			action:  storage.ActionWrite,
-			prefix:  updatePrefix,
+			prefix:  updateClauses.forExpectation(expect),
 			stamp:   stamp,
 			leading: []any{stamp.UnixMilli(), string(record.Content)},
 			expect:  expect,
@@ -506,7 +539,8 @@ func (s *ResourceStore) Update(
 }
 
 // Delete soft-deletes a resource, leaving the row and its compartment
-// projection in place so the tombstone stays attributable.
+// projection in place so the tombstone stays attributable. An empty expectation
+// buries whatever the row currently holds.
 func (s *ResourceStore) Delete(
 	ctx context.Context,
 	scope storage.Scope,
@@ -517,16 +551,12 @@ func (s *ResourceStore) Delete(
 		return err
 	}
 
-	if expect == "" {
-		return fmt.Errorf("pocketbase: delete needs an expected version")
-	}
-
 	stamp := time.Now().UTC()
 
 	return s.WithinTransaction(ctx, func(ctx context.Context) error {
 		return s.mutate(ctx, scope, key, mutation{
 			action:  storage.ActionDelete,
-			prefix:  deletePrefix,
+			prefix:  deleteClauses.forExpectation(expect),
 			stamp:   stamp,
 			leading: []any{stamp.UnixMilli()},
 			expect:  expect,
@@ -559,7 +589,12 @@ func (s *ResourceStore) mutate(
 	statement, existsArgs := writeStatement(change.prefix, scope, key, change.action)
 
 	args := append([]any{}, change.leading...)
-	args = append(args, string(key.Project), string(key.Type), string(key.ID), string(change.expect))
+	args = append(args, string(key.Project), string(key.Type), string(key.ID))
+
+	if change.expect != "" {
+		args = append(args, string(change.expect))
+	}
+
 	args = append(args, existsArgs...)
 
 	var seq, epoch int64

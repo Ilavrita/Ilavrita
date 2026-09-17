@@ -347,7 +347,7 @@ func TestZeroScopeCompilesToAQueryMatchingNoRows(t *testing.T) {
 		"vread":   func() (string, []any) { return versionStatement(empty, key, "1") },
 		"history": func() (string, []any) { return versionsStatement(empty, key) },
 		"write arm": func() (string, []any) {
-			return writeStatement(updatePrefix, empty, key, storage.ActionWrite)
+			return writeStatement(updateClauses.expecting, empty, key, storage.ActionWrite)
 		},
 	}
 
@@ -500,6 +500,28 @@ func TestCompartmentRestrictedGrantCannotCreate(t *testing.T) {
 	}
 }
 
+// And the other half of the same rule. A new row carries no compartment
+// projection, so a read confined to one can never see what the create wrote:
+// the caller would be answered as if the row it committed did not exist.
+func TestACompartmentRestrictedReadCannotCreate(t *testing.T) {
+	store, db := newStore(t)
+
+	scope := storage.NewScope(
+		compartmentGrant("prj_a", "Patient", storage.ActionRead,
+			storage.Compartment{Type: "Patient", ID: "pat-1"}),
+		fhirGrant("prj_a", "Patient", storage.ActionWrite),
+	)
+
+	err := store.Create(t.Context(), scope, patientRecord(patientKey("prj_a", "new"), patientBody))
+	if !errors.Is(err, storage.ErrDenied) {
+		t.Fatalf("a create was allowed that its own caller could never read back: err = %v", err)
+	}
+
+	if stored := countRows(t, db, "SELECT 1 FROM fhir_resource WHERE res_id = ?", []any{"new"}); stored != 0 {
+		t.Fatalf("%d row(s) were written by a refused create", stored)
+	}
+}
+
 // ---------------------------------------------------------------------------
 // Identity reuse
 // ---------------------------------------------------------------------------
@@ -532,6 +554,41 @@ func TestRecreatedIdHidesTheVersionsWrittenBeforeTheDelete(t *testing.T) {
 
 	if _, err := store.ReadVersion(t.Context(), scope, key, "1"); !errors.Is(err, storage.ErrNotFound) {
 		t.Fatalf("a version written before the delete was still readable: err = %v", err)
+	}
+}
+
+// A write that names no version replaces whatever the row holds. Without that,
+// a caller who asked for no concurrency control is handed one it cannot retry.
+func TestAWriteExpectingNoVersionReplacesWhateverIsThere(t *testing.T) {
+	store, _ := newStore(t)
+	scope := fullScope("prj_a", "Patient")
+	key := seed(t, store, "prj_a", "shared")
+
+	if err := store.Update(t.Context(), scope, patientRecord(key, `{"v":2}`), "1"); err != nil {
+		t.Fatalf("take the resource to version 2: %v", err)
+	}
+
+	if err := store.Update(t.Context(), scope, patientRecord(key, `{"v":3}`), ""); err != nil {
+		t.Fatalf("update expecting no version: %v", err)
+	}
+
+	record, err := store.Read(t.Context(), scope, key)
+	if err != nil || record.Version != "3" {
+		t.Fatalf("read back version %q: %v, want 3", record.Version, err)
+	}
+
+	// The named version is still enforced by the same statement that writes.
+	if err := store.Update(t.Context(), scope, patientRecord(key, `{"v":4}`), "2"); !errors.Is(
+		err, storage.ErrVersionConflict) {
+		t.Fatalf("a stale claim answered %v, want %v", err, storage.ErrVersionConflict)
+	}
+
+	if err := store.Delete(t.Context(), scope, key, ""); err != nil {
+		t.Fatalf("delete expecting no version: %v", err)
+	}
+
+	if _, err := store.Read(t.Context(), scope, key); !errors.Is(err, storage.ErrDeleted) {
+		t.Fatalf("read after an unconditional delete: %v, want %v", err, storage.ErrDeleted)
 	}
 }
 
@@ -761,7 +818,11 @@ func TestNoCompiledStatementComparesTwoProjectColumns(t *testing.T) {
 	}
 
 	for name, prefix := range map[string]string{
-		"recreate": recreatePrefix, "update": updatePrefix, "delete": deletePrefix,
+		"recreate":             recreatePrefix,
+		"update":               updateClauses.expecting,
+		"unconditional update": updateClauses.unconditional,
+		"delete":               deleteClauses.expecting,
+		"unconditional delete": deleteClauses.unconditional,
 	} {
 		if match := relative.FindString(prefix); match != "" {
 			t.Errorf("%s compares project_id to something other than a bound literal (%q)", name, match)
