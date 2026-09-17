@@ -23,6 +23,28 @@ const (
 	CodeSecurity     IssueCode = "security"
 	CodeConflict     IssueCode = "conflict"
 	CodeException    IssueCode = "exception"
+
+	// CodeLogin reports that nothing identified the caller, which a client can
+	// tell from a refused one by the code alone, without reading the status.
+	CodeLogin IssueCode = "login"
+
+	// CodeForbidden reports a caller this server knows and refuses. Paired with
+	// CodeLogin it separates "nobody is asking" from "you may not", which a
+	// client can tell apart from the body alone.
+	CodeForbidden IssueCode = "forbidden"
+
+	// CodeDeleted reports a resource that existed and was deleted. Reusing
+	// CodeNotFound here would make 404 and 410 indistinguishable to a client
+	// that parses only the body.
+	CodeDeleted IssueCode = "deleted"
+
+	// CodeDuplicate reports a create naming a logical id another resource holds.
+	CodeDuplicate IssueCode = "duplicate"
+
+	// CodeTooCostly reports a request this server refuses to spend resources on,
+	// such as a body larger than it accepts. It is distinct from CodeInvalid:
+	// the request is well formed, and only its size is refused.
+	CodeTooCostly IssueCode = "too-costly"
 )
 
 // OperationOutcome is the only error shape permitted on FHIR routes. Runtime and
