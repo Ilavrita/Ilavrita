@@ -2,29 +2,131 @@ package main
 
 import (
 	"net/http"
+	"regexp"
+	"slices"
+	"strings"
 
 	"github.com/Ilavrita/Ilavrita/packages/fhir"
+	"github.com/Ilavrita/Ilavrita/packages/storage"
+	"github.com/pocketbase/pocketbase/apis"
 	"github.com/pocketbase/pocketbase/core"
 	"github.com/pocketbase/pocketbase/tools/router"
 )
 
+// The FHIR routes, beneath the base path. The wildcard is last because it is
+// the least specific: the router matches on specificity, so every named route
+// above outranks it whatever order they were registered in.
 const (
-	metadataPath     = "/metadata"
-	everythingElse   = "/{path...}"
-	contentTypeField = "Content-Type"
+	metadataPath        = "/metadata"
+	typePath            = "/{resourceType}"
+	typeHistoryPath     = "/{resourceType}/_history"
+	instancePath        = "/{resourceType}/{id}"
+	instanceHistoryPath = "/{resourceType}/{id}/_history"
+	instanceVersionPath = "/{resourceType}/{id}/_history/{vid}"
+	everythingElse      = "/{path...}"
 )
+
+// The path parameters the routes above bind.
+const (
+	resourceTypeParameter = "resourceType"
+	idParameter           = "id"
+	versionParameter      = "vid"
+)
+
+const (
+	contentTypeField = "Content-Type"
+	acceptField      = "Accept"
+	formatParameter  = "_format"
+)
+
+// servedInteraction is one interaction this build implements: the route that
+// dispatches it and the code it is advertised under. One table registers the
+// routes and fills the CapabilityStatement, so neither can drift from the other.
+type servedInteraction struct {
+	code    fhir.Interaction
+	method  string
+	path    string
+	handler func(*core.RequestEvent) error
+}
+
+// servedInteractions is the whole implemented FHIR surface. Adding a row
+// registers a route and advertises it; deleting one withdraws both. Anything
+// absent here is unimplemented, and the wildcard answers it.
+var servedInteractions = []servedInteraction{
+	{fhir.InteractionCreate, http.MethodPost, typePath, createResource},
+	{fhir.InteractionRead, http.MethodGet, instancePath, readResource},
+	{fhir.InteractionUpdate, http.MethodPut, instancePath, updateResource},
+	{fhir.InteractionDelete, http.MethodDelete, instancePath, deleteResource},
+	{fhir.InteractionInstanceHistory, http.MethodGet, instanceHistoryPath, listResourceHistory},
+	{fhir.InteractionVersionRead, http.MethodGet, instanceVersionPath, readResourceVersion},
+}
 
 // The FHIR surface is owned by Ilavrita. PocketBase collections, admin routes
 // and error shapes must never appear beneath this base path (FR-007, FR-029).
 func registerFHIRRoutes(routes *router.Router[*core.RequestEvent]) {
 	base := routes.Group(fhir.BasePath)
+
+	// The runtime allows every origin by default. No browser on another origin
+	// may read patient data, so the FHIR surface answers no preflight and
+	// carries no cross-origin headers at all.
+	base.Unbind(apis.DefaultCorsMiddlewareId)
+
 	base.GET(metadataPath, describeCapabilities)
+
+	// A reserved segment, not a logical id: every method an instance route
+	// answers is refused here, so none of them reads it as one.
+	for _, method := range instanceMethods() {
+		base.Route(method, typeHistoryPath, rejectUnimplemented)
+	}
+
+	for _, served := range servedInteractions {
+		base.Route(served.method, served.path, served.handler)
+	}
+
 	base.Any(everythingElse, rejectUnimplemented)
 }
 
-// describeCapabilities publishes what this build actually supports.
+// instanceMethods is every method registered on the instance path, which is
+// exactly what could otherwise match a reserved segment as a logical id.
+func instanceMethods() []string {
+	methods := make([]string, 0, len(servedInteractions))
+
+	for _, served := range servedInteractions {
+		if served.path == instancePath {
+			methods = append(methods, served.method)
+		}
+	}
+
+	return methods
+}
+
+// describeCapabilities publishes what this build actually supports. It names no
+// resource and touches no storage, so it answers before a client authenticates.
 func describeCapabilities(request *core.RequestEvent) error {
-	return respondFHIR(request, http.StatusOK, fhir.NewCapabilityStatement(version, startedAt, baseURL(request)))
+	base, err := baseURL(request)
+	if err != nil {
+		return refuse(request, err)
+	}
+
+	statement := fhir.NewCapabilityStatement(fhir.CapabilityConfig{
+		SoftwareVersion: version,
+		Published:       startedAt,
+		BaseURL:         base,
+		Interactions:    advertisedInteractions(),
+	})
+
+	return respondFHIR(request, http.StatusOK, statement)
+}
+
+// advertisedInteractions reads the codes off the table the routes were
+// registered from, so the statement can name nothing this server does not serve.
+func advertisedInteractions() []fhir.Interaction {
+	codes := make([]fhir.Interaction, 0, len(servedInteractions))
+	for _, served := range servedInteractions {
+		codes = append(codes, served.code)
+	}
+
+	return codes
 }
 
 // rejectUnimplemented answers every FHIR route with no behaviour yet, as an
@@ -45,13 +147,178 @@ func respondFHIR(request *core.RequestEvent, status int, payload any) error {
 	return request.JSON(status, payload)
 }
 
-// baseURL reflects the address the client actually reached, so a deployment
-// behind a proxy still advertises a URL that resolves.
-func baseURL(request *core.RequestEvent) string {
-	scheme := "http"
-	if request.Request.TLS != nil {
-		scheme = "https"
+// baseURL is the FHIR base every published Location, fullUrl and
+// CapabilityStatement URL is built from. The client's own Host reaches it only
+// when this deployment recognises that host, so a forged one publishes nothing.
+func baseURL(request *core.RequestEvent) (string, error) {
+	origin, err := publishing.origin(request.Request)
+	if err != nil {
+		return "", err
 	}
 
-	return scheme + "://" + request.Request.Host + fhir.BasePath
+	return origin + fhir.BasePath, nil
+}
+
+// granted is one authorized interaction: the stores it may use, the Scope
+// bounding them, and the Project and type that Scope was decided for. The Scope
+// travels with the stores, so no handler holds one without the other.
+type granted struct {
+	resources    storage.ResourceRepository
+	versions     storage.VersionStore
+	transactions storage.Transactor
+	scope        storage.Scope
+	project      storage.ProjectID
+	resourceType storage.ResourceType
+}
+
+// begin settles everything an interaction needs before it may touch storage:
+// what this server speaks, whether the type is an endpoint here at all, who is
+// asking, and the Scope for each action the interaction will perform.
+func begin(request *core.RequestEvent, actions []storage.Action) (granted, error) {
+	if err := negotiate(request); err != nil {
+		return granted{}, err
+	}
+
+	// Before the caller is resolved, so an unrecognised type answers the same
+	// whether or not this process authenticates anyone (REST-2).
+	resourceType := request.Request.PathValue(resourceTypeParameter)
+	if !fhir.ServesResourceType(resourceType) {
+		return granted{}, unknownResourceType
+	}
+
+	// Settled before anything is written: a write this server could not then
+	// name would leave behind a row its own client can never address.
+	if _, err := baseURL(request); err != nil {
+		return granted{}, err
+	}
+
+	return permit(request, storage.ResourceType(resourceType), actions)
+}
+
+// permit builds one Scope per action the interaction performs, and refuses the
+// moment one of them authorizes nothing. Merging cannot widen: each Grant was
+// decided on its own, and storage matches a Grant to the action it names.
+func permit(request *core.RequestEvent, resourceType storage.ResourceType, actions []storage.Action) (granted, error) {
+	held := granted{resourceType: resourceType}
+
+	var grants []storage.Grant
+
+	for _, action := range actions {
+		allowed, err := authorize(request, decision{Kind: storage.KindFHIR, Type: resourceType, Action: action})
+		if err != nil {
+			return granted{}, err
+		}
+
+		if allowed.Scope.IsEmpty() {
+			return granted{}, notAuthorized
+		}
+
+		held.resources, held.versions = allowed.Resources, allowed.Versions
+		held.transactions, held.project = allowed.Transactions, allowed.Project
+		grants = append(grants, allowed.Scope.Grants()...)
+	}
+
+	held.scope = storage.NewScope(grants...)
+
+	if slices.Contains(actions, storage.ActionWrite) && !held.mayReadBack() {
+		return granted{}, notAuthorized
+	}
+
+	return held, nil
+}
+
+// mayReadBack reports whether this Scope can see a row that does not exist yet.
+// Storage projects no compartment for one, so a compartment-restricted read
+// Grant never can, and a caller that writes one is answered as if it had not.
+func (g granted) mayReadBack() bool {
+	return slices.ContainsFunc(g.scope.Grants(), func(grant storage.Grant) bool {
+		return grant.Project == g.project && grant.Kind == storage.KindFHIR &&
+			grant.Type == g.resourceType && grant.Action == storage.ActionRead &&
+			grant.Compartment == nil
+	})
+}
+
+// addressed names the resource the URL points at, inside the Project the Scope
+// was built for. The Project is never read from the request: a caller cannot
+// name one, so no request can reach outside the one it was authenticated into.
+func (g granted) addressed(request *core.RequestEvent) (storage.ResourceKey, error) {
+	id := request.Request.PathValue(idParameter)
+	if !logicalIDPattern.MatchString(id) {
+		return storage.ResourceKey{}, unknownResource
+	}
+
+	return storage.NewResourceKey(g.project, g.resourceType, storage.LogicalID(id))
+}
+
+// logicalIDPattern is R4's own id syntax. An id outside it names no stored row,
+// so it is answered as missing without a query, and is never minted either.
+var logicalIDPattern = regexp.MustCompile(`^[A-Za-z0-9.-]{1,64}$`)
+
+// versionPattern mirrors how a version id is built: the version counter cast to
+// text. Anything else names no stored version.
+var versionPattern = regexp.MustCompile(`^[1-9][0-9]{0,18}$`)
+
+// addressedVersion reads the version the URL names, for the one route that
+// names one.
+func addressedVersion(request *core.RequestEvent) (storage.VersionID, error) {
+	raw := request.Request.PathValue(versionParameter)
+	if !versionPattern.MatchString(raw) {
+		return "", unknownResource
+	}
+
+	return storage.VersionID(raw), nil
+}
+
+// The representations this server reads and writes. It serves one, so a client
+// asking for another is refused rather than sent JSON it did not ask for.
+var (
+	acceptedMediaRanges = []string{"*/*", "application/*", "application/json", fhir.ContentType}
+	bodyMediaTypes      = []string{"application/json", fhir.ContentType}
+	acceptedFormats     = []string{"", "json", "application/json", fhir.ContentType}
+)
+
+// negotiate refuses a request this server cannot answer in the representation
+// asked for, before anything else looks at it.
+func negotiate(request *core.RequestEvent) error {
+	if !acceptsJSON(request.Request.Header.Get(acceptField)) {
+		return unsupportedAccept
+	}
+
+	if !slices.Contains(acceptedFormats, strings.TrimSpace(request.Request.URL.Query().Get(formatParameter))) {
+		return unsupportedAccept
+	}
+
+	if carriesBody(request.Request.Method) &&
+		!slices.Contains(bodyMediaTypes, mediaType(request.Request.Header.Get(contentTypeField))) {
+		return unsupportedBody
+	}
+
+	return nil
+}
+
+// acceptsJSON reports whether any media range the client listed covers what
+// this server sends. No Accept header at all accepts everything.
+func acceptsJSON(header string) bool {
+	if strings.TrimSpace(header) == "" {
+		return true
+	}
+
+	for _, candidate := range strings.Split(header, ",") {
+		if slices.Contains(acceptedMediaRanges, mediaType(candidate)) {
+			return true
+		}
+	}
+
+	return false
+}
+
+// mediaType is one media range without its parameters, lowercased.
+func mediaType(value string) string {
+	name, _, _ := strings.Cut(value, ";")
+
+	return strings.ToLower(strings.TrimSpace(name))
+}
+
+func carriesBody(method string) bool {
+	return method == http.MethodPost || method == http.MethodPut
 }
