@@ -1,0 +1,146 @@
+# Handoff
+
+Ilavrita as it stands, for whoever picks it up next. Written to be read before the code.
+
+## 1. What actually works
+
+The distinction that matters is not "what code exists" but "what a request can reach".
+Plenty of correct code here is not yet reachable, and conflating the two has been the
+most expensive mistake on this project so far.
+
+| Surface | State |
+| --- | --- |
+| `GET /healthz`, `GET /version` | Working |
+| `GET /fhir/R4/metadata` | Working, R4-valid, generated from the routes actually served |
+| create, read, vread, update, delete, history-instance | Working, for six resource types |
+| Everything else under `/fhir/R4` | `501` |
+
+**Six resource types are served**: Endpoint, HealthcareService, Location, Organization,
+Practitioner, PractitionerRole. Patient, Observation and the rest of the PRD's initial
+coverage return `404`. That was a deliberate choice — see §6.
+
+Authentication does not exist. Every FHIR route answers `401` unless
+`ILAVRITA_DEV_PRINCIPAL` is set, which prints an unmissable warning at startup. Do not
+deploy this anywhere near patient data.
+
+## 2. The shape of the system
+
+PocketBase is the runtime, not the product. Everything Ilavrita publishes — routes, error
+shapes, versioning, tenancy — belongs to Ilavrita and sits behind its own interfaces.
+
+```
+HTTP (apps/ilavrita)
+  -> principal -> authz.BuildScope -> storage.Scope
+  -> packages/storage interfaces
+  -> packages/storage/pocketbase (the only package that may import PocketBase)
+  -> SQLite
+```
+
+Four rules hold it together. The first is enforced by `depguard`, not by review:
+
+1. Only `packages/storage/pocketbase` imports the PocketBase runtime.
+2. No SQL above the storage backend.
+3. No PocketBase concept reaches `/fhir/R4`. Its own `/api` and `/_` surface is disabled
+   unless `ILAVRITA_EXPOSE_POCKETBASE=true`.
+4. Nothing is advertised in the CapabilityStatement without a passing test behind it.
+
+## 3. Decisions that are expensive to relearn
+
+Each of these was reached by having the first answer broken. The reasoning is worth more
+than the code.
+
+**A Project is the isolation boundary, and `Scope` leads every storage method.**
+`Read(ctx, scope, key)`, not `Read(ctx, key)`. A parameter cannot be forgotten; naming a
+Project in a key is not proof of entitlement. Three separate critical findings routed
+through that one hole.
+
+**Linked Projects, not a hierarchy.** No parent/child inheritance. With a tree, every read
+path added later — search, GraphQL, bulk export, subscriptions — inherits the widening for
+free and must remember not to. Links are directed, non-transitive, and grant nothing unless
+active, unexpired and approved by both sides. "Child project" is an organisational
+attribute that confers no data access.
+
+**Administrative capability cannot mint data grants.** An early design gave an
+administrative link the power to create data grants. It held no data itself, which is not
+the same thing. FR-052 is a database invariant now, not a naming convention.
+
+**Platform resources live in separate tables from FHIR resources.** With one table and a
+`kind` column, a forgotten predicate leaks Login and AccessPolicy rows into a Patient
+search. Separate tables make that unrepresentable.
+
+**Super Admin is an FK-guarded column on a membership in a `kind='super'` project.**
+Holding it anywhere else is a constraint violation. Bootstrap is a single-use token, never
+an env var and never first-signup-wins.
+
+## 4. How to verify anything here
+
+**A passing test suite proves nothing on its own.** Mutate the code and confirm the tests
+fail. Every claim below was checked this way:
+
+```bash
+# drop the project predicate in packages/storage/pocketbase/resource.go
+#   -> TestDroppingTheProjectPredicateCrossesProjects fails
+# make Scope.Allows return true unconditionally
+#   -> TestAssertInScopeRejectsARowFromAnotherProject fails
+# remove the !stands(...) gate in packages/authz/scope.go
+#   -> TestADeadMembershipReachesNoGrantor fails
+# make UserStore use s.db instead of conn(ctx, s.db)
+#   -> the rollback test deadlocks for 600s on SQLite's write lock
+```
+
+Gates, all of which must pass:
+
+```bash
+gofmt -l apps packages
+go build ./... && go vet ./... && go test ./...
+golangci-lint run
+./scripts/verify-openapi.sh   # fails on drift in BOTH directions
+make ci-local                 # the workflows, via act
+```
+
+## 5. Traps that cost real time
+
+None of these are visible from reading the code.
+
+- **PocketBase prints a superuser token.** Its installer mints a live 30-minute superuser
+  credential, opens a browser and prints the token to stdout. Disabled via
+  `serve.InstallerFunc = nil`. Never re-enable it.
+- **PocketBase serves its own `/api` and `/_`.** Registering your routes does not replace
+  them. Blocked by a router middleware; `/api/files/…` was the reachable path to the image
+  decoder CVE.
+- **Ilavrita has its own database file.** PocketBase's init migration owns the table name
+  `users`, so the schema goes to `<DataDir>/ilavrita.db`, opened with the runtime's own
+  connect function so the pragmas cannot drift.
+- **`PRAGMA foreign_keys` is per-connection.** Every composite-FK guarantee is decorative
+  without it. `AssertForeignKeysEnforced` refuses to apply the schema otherwise. Checking
+  it with a second connection proves nothing.
+- **`act` needs the custom runner image.** `actions/setup-go` drops node from `PATH`,
+  breaking every later JavaScript action. `make ci-image` fixes it.
+- **TypeScript 7 broke `openapi-typescript`.** Its native compiler does not expose
+  `ts.factory`. SDK types are hand-written; drift is caught by `verify-openapi.sh` instead.
+- **`modernc.org/libc` ships glibc-derived LGPL-2.1 headers** that compile into the Linux
+  image. Do not record a BSD-3-Clause licence conclusion for it. See
+  `docs/license-compliance.md`.
+
+## 6. Known gaps
+
+- **No search.** The largest remaining piece and the PRD's own top risk (R-001).
+  `packages/search` is a doc comment. `storage` has no `Search` method.
+- **No authentication.** Development principal only.
+- **Eleven of the PRD's initial resource types are not served** — including Patient and
+  Observation. They were withheld because serving PHI-bearing types on a build with no
+  authentication is worse than serving none. Revisit when auth lands.
+- **`AccessPolicy` can only express compartment restrictions.** "Share only `status=final`
+  Observations" is not representable. Written up in `docs/design/authz-spec.md`.
+- **No `LinkResolver` implementation.** `noProjectLinks` returns nothing, which can only
+  narrow. A real one is owed before cross-project search.
+- **`client_applications` and `bots` tables do not exist**, so those membership columns
+  carry no foreign key.
+- **The release pipeline has never run.** Signing, SBOM and provenance are configured and
+  unexercised. Cut `v0.0.1-rc.1` first, deliberately.
+
+## 7. Conventions
+
+One-line Conventional Commits, small and atomic. Comments explain the code in at most
+three lines and never narrate a roadmap. Plans go in `ROADMAP.md`, design reasoning in
+`docs/adr/` and `docs/design/`.

@@ -31,6 +31,9 @@
 > **Do not put patient data in this build.** It enforces no authorization, no
 > Project boundary and no audit trail.
 
+> Picking this up cold? Start with [HANDOFF.md](HANDOFF.md) — what works, what does
+> not, and the traps that are invisible from the code.
+
 ## Contents
 
 - [Why Ilavrita](#why-ilavrita)
