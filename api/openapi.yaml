@@ -15,14 +15,18 @@ info:
   description: |
     Ilavrita is an open-source FHIR R4 server.
 
-    **This build implements no FHIR interaction.** `GET /fhir/R4/metadata` returns
-    a CapabilityStatement that declares no supported resources, and every other
-    route beneath `/fhir/R4` answers `501 Not Implemented` as an
-    `OperationOutcome`. See
+    **This build implements the six single-resource interactions only** — create,
+    read, vread, update, delete and instance history — and only for the resource
+    types the CapabilityStatement at `GET /fhir/R4/metadata` declares. Search,
+    Bundles, conditional operations and every other interaction answer
+    `501 Not Implemented` as an `OperationOutcome`. See
     [known limitations](https://github.com/Ilavrita/Ilavrita/blob/dev/docs/known-limitations.md).
 
-    Do not store patient data in this build. It enforces no authorization, no
-    Project boundary and no audit trail.
+    **Authentication is not implemented.** Every FHIR interaction below answers
+    `401` unless the deployment sets `ILAVRITA_DEV_PRINCIPAL`, which names one
+    fixed identity with no credential behind it and is for development only.
+
+    Do not store patient data in this build. It keeps no audit trail.
   version: 0.0.1
   license:
     name: AGPL-3.0-only
@@ -36,9 +40,10 @@ servers:
   - url: http://127.0.0.1:8090
     description: Local development
 
-# No route requires authentication, because authentication is not implemented
-# (FR-027). This is stated explicitly rather than left unsaid, so that a reader
-# does not mistake an omission for a redaction.
+# No route declares a security scheme, because no credential is checked
+# anywhere (FR-027). The FHIR interactions still refuse an unidentified caller
+# with 401: a deployment names its one development principal through an
+# environment variable, never through anything a request carries.
 security: []
 
 tags:
@@ -85,9 +90,12 @@ paths:
       tags: [FHIR]
       summary: CapabilityStatement
       description: |
-        Declares what this server actually supports. A resource appears here only
-        once the matching interaction is implemented and covered by tests, so an
-        empty `rest[].resource` means no FHIR interaction is available.
+        Declares what this server actually supports. The statement is generated
+        from the table the FHIR routes are registered from, so it can name no
+        interaction the router does not dispatch; a resource appears only once
+        the matching interactions are implemented and covered by tests. It names
+        no resource and touches no storage, so it is the one FHIR route
+        reachable before a caller is identified.
       operationId: getCapabilityStatement
       responses:
         "200":
@@ -96,28 +104,375 @@ paths:
             application/fhir+json:
               schema:
                 $ref: "#/components/schemas/CapabilityStatement"
+        "400":
+          $ref: "#/components/responses/Invalid"
 
-  /fhir/R4/{path}:
+  /fhir/R4/{resourceType}:
     parameters:
-      - name: path
+      - $ref: "#/components/parameters/ResourceType"
+    get:
+      tags: [FHIR]
+      summary: Search (not implemented)
+      description: |
+        Search is not implemented for any parameter type, so a type-level `GET`
+        answers `501` whether or not the type is declared.
+      operationId: searchResources
+      responses:
+        "501":
+          $ref: "#/components/responses/NotImplemented"
+    post:
+      tags: [FHIR]
+      summary: Create
+      description: |
+        Stores a new resource under a logical id this server assigns. A body
+        carrying an `id` is refused: on this route the server mints them.
+
+        The response always carries `ETag` and `Last-Modified` for the version
+        written, and `Location` naming that version.
+      operationId: createResource
+      requestBody:
+        required: true
+        content:
+          application/fhir+json:
+            schema:
+              $ref: "#/components/schemas/Resource"
+      responses:
+        "201":
+          $ref: "#/components/responses/ResourceCreated"
+        "400":
+          $ref: "#/components/responses/Invalid"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "406":
+          $ref: "#/components/responses/NotAcceptable"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "413":
+          $ref: "#/components/responses/TooLarge"
+        "415":
+          $ref: "#/components/responses/UnsupportedMediaType"
+        "500":
+          $ref: "#/components/responses/InternalFailure"
+
+  /fhir/R4/{resourceType}/_history:
+    parameters:
+      - $ref: "#/components/parameters/ResourceType"
+    get:
+      tags: [FHIR]
+      summary: Type history (not implemented)
+      description: |
+        Only instance-level history is implemented. This route exists so that the
+        reserved `_history` segment is answered as an unimplemented interaction
+        rather than read as a logical id. Every method the instance route answers
+        is refused here, not only `GET`.
+      operationId: getTypeHistory
+      responses:
+        "501":
+          $ref: "#/components/responses/NotImplemented"
+    put:
+      tags: [FHIR]
+      summary: Type history (not implemented)
+      description: |
+        The reserved segment is not a logical id, so an update addressed to it is
+        unimplemented rather than a write to a resource called `_history`.
+      operationId: putTypeHistory
+      responses:
+        "501":
+          $ref: "#/components/responses/NotImplemented"
+    delete:
+      tags: [FHIR]
+      summary: Type history (not implemented)
+      description: |
+        The reserved segment is not a logical id, so a delete addressed to it is
+        unimplemented rather than a write to a resource called `_history`.
+      operationId: deleteTypeHistory
+      responses:
+        "501":
+          $ref: "#/components/responses/NotImplemented"
+
+  /fhir/R4/{resourceType}/{id}:
+    parameters:
+      - $ref: "#/components/parameters/ResourceType"
+      - $ref: "#/components/parameters/LogicalID"
+    get:
+      tags: [FHIR]
+      summary: Read
+      description: |
+        Returns the current version, with `ETag` and `Last-Modified`.
+
+        A resource that was deleted answers `410`; one that never existed, or
+        that this caller's authorization cannot see, answers `404`. The two are
+        deliberately indistinguishable for an out-of-scope resource, so an id
+        cannot be probed for.
+      operationId: readResource
+      responses:
+        "200":
+          $ref: "#/components/responses/ResourceRead"
+        "400":
+          $ref: "#/components/responses/Invalid"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "406":
+          $ref: "#/components/responses/NotAcceptable"
+        "410":
+          $ref: "#/components/responses/Gone"
+        "500":
+          $ref: "#/components/responses/InternalFailure"
+    put:
+      tags: [FHIR]
+      summary: Update
+      description: |
+        Replaces the resource, or creates it under the id the client named if it
+        does not currently exist. `200` means an existing resource was replaced;
+        `201` means one was brought into existence, and carries `Location`.
+
+        `If-Match` carries one quoted version id, optionally weak, or `*`. A
+        claim that disagrees with what the server observes is `412`, and nothing
+        is written; so is any claim at all, `*` included, against an id that is
+        absent or deleted, because there is no current representation to match
+        (RFC 9110 13.1.1). An update carrying no `If-Match` names no version and
+        replaces whatever the resource currently holds.
+      operationId: updateResource
+      parameters:
+        - $ref: "#/components/parameters/IfMatch"
+      requestBody:
+        required: true
+        content:
+          application/fhir+json:
+            schema:
+              $ref: "#/components/schemas/Resource"
+      responses:
+        "200":
+          $ref: "#/components/responses/ResourceRead"
+        "201":
+          $ref: "#/components/responses/ResourceCreated"
+        "400":
+          $ref: "#/components/responses/Invalid"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "406":
+          $ref: "#/components/responses/NotAcceptable"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "412":
+          $ref: "#/components/responses/PreconditionFailed"
+        "413":
+          $ref: "#/components/responses/TooLarge"
+        "415":
+          $ref: "#/components/responses/UnsupportedMediaType"
+        "500":
+          $ref: "#/components/responses/InternalFailure"
+    delete:
+      tags: [FHIR]
+      summary: Delete
+      description: |
+        Makes the resource a tombstone. Reads of the id afterwards answer `410`,
+        while its history stays readable. `If-Match` is honoured exactly as it is
+        on update, `*` included.
+      operationId: deleteResource
+      parameters:
+        - $ref: "#/components/parameters/IfMatch"
+      responses:
+        "204":
+          description: The resource is deleted. No body.
+        "400":
+          $ref: "#/components/responses/Invalid"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "406":
+          $ref: "#/components/responses/NotAcceptable"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "410":
+          $ref: "#/components/responses/Gone"
+        "412":
+          $ref: "#/components/responses/PreconditionFailed"
+        "500":
+          $ref: "#/components/responses/InternalFailure"
+
+  /fhir/R4/{resourceType}/{id}/_history:
+    parameters:
+      - $ref: "#/components/parameters/ResourceType"
+      - $ref: "#/components/parameters/LogicalID"
+    get:
+      tags: [FHIR]
+      summary: Instance history
+      description: |
+        Returns every version this caller may see, newest first, as a history
+        `Bundle`. A resource whose history ends in a deletion still has a
+        history, so this route answers `200` where a read of the same id answers
+        `410`.
+
+        `_count`, `_since`, `_at` and `_list` are not implemented and are
+        ignored.
+      operationId: getInstanceHistory
+      responses:
+        "200":
+          $ref: "#/components/responses/History"
+        "400":
+          $ref: "#/components/responses/Invalid"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "406":
+          $ref: "#/components/responses/NotAcceptable"
+        "500":
+          $ref: "#/components/responses/InternalFailure"
+
+  /fhir/R4/{resourceType}/{id}/_history/{vid}:
+    parameters:
+      - $ref: "#/components/parameters/ResourceType"
+      - $ref: "#/components/parameters/LogicalID"
+      - name: vid
         in: path
         required: true
-        description: Any path beneath the FHIR base, such as `Patient/123`.
+        description: |
+          The version id, a decimal counter. Anything else names no stored
+          version and answers `404`.
         schema:
           type: string
+          pattern: "^[1-9][0-9]*$"
+    get:
+      tags: [FHIR]
+      summary: Version read
+      description: |
+        Returns one immutable version. The `ETag` names the version asked for,
+        never the resource's current one. Reading the version that recorded a
+        deletion answers `410`.
+
+        This route is authorized as history, not as read: a caller may be able to
+        read a resource and not its history, or the reverse.
+      operationId: readResourceVersion
+      responses:
+        "200":
+          $ref: "#/components/responses/ResourceRead"
+        "400":
+          $ref: "#/components/responses/Invalid"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "406":
+          $ref: "#/components/responses/NotAcceptable"
+        "410":
+          $ref: "#/components/responses/Gone"
+        "500":
+          $ref: "#/components/responses/InternalFailure"
+
+  /fhir/R4/{resourceType}/{id}/{operation}:
+    parameters:
+      - $ref: "#/components/parameters/ResourceType"
+      - $ref: "#/components/parameters/LogicalID"
+      - name: operation
+        in: path
+        required: true
+        description: |
+          Any segment beneath a resource that no route above matches, such as
+          `$everything`. It stands in for every unmatched path under the FHIR
+          base, at any depth.
+        schema:
+          type: string
+        example: $everything
     get:
       tags: [FHIR]
       summary: Not implemented
       description: |
-        No FHIR interaction is implemented yet. Failures are returned as
-        `OperationOutcome` rather than as a framework error, so a client only
-        ever parses FHIR-shaped responses.
+        Every FHIR interaction other than the six above is unimplemented.
+        Failures are returned as `OperationOutcome` rather than as a framework
+        error, so a client only ever parses FHIR-shaped responses.
       operationId: fhirNotImplemented
       responses:
         "501":
           $ref: "#/components/responses/NotImplemented"
 
 components:
+  parameters:
+    ResourceType:
+      name: resourceType
+      in: path
+      required: true
+      description: |
+        A FHIR resource type the CapabilityStatement declares. Any other name is
+        not an endpoint here and answers `404`, before the caller is identified.
+      schema:
+        type: string
+      example: Organization
+
+    LogicalID:
+      name: id
+      in: path
+      required: true
+      description: The resource's logical id.
+      schema:
+        type: string
+        pattern: "^[A-Za-z0-9.-]{1,64}$"
+      example: 4a04d79cca99d1918e004dc216136018
+
+    IfMatch:
+      name: If-Match
+      in: header
+      required: false
+      description: |
+        One quoted version id, weak marker optional — `W/"2"` and `"2"` are read
+        identically. `*` claims that the resource exists: it is satisfied by any
+        live version and refused with `412` against an id that is absent or
+        deleted, so it never creates. A list, or anything unquoted, is `400`.
+      schema:
+        type: string
+      example: W/"2"
+
+  headers:
+    ETag:
+      description: The version, always weak and always quoted.
+      schema:
+        type: string
+      example: W/"2"
+
+    LastModified:
+      description: When the version was written, as an HTTP date.
+      schema:
+        type: string
+      example: Tue, 16 Sep 2026 22:14:03 GMT
+
+    Location:
+      description: |
+        The absolute URL of the version just written. Its origin is
+        `ILAVRITA_BASE_URL` when a deployment sets one, and otherwise the
+        request's own `Host`, which must be a host this deployment serves.
+      schema:
+        type: string
+      example: http://127.0.0.1:8090/fhir/R4/Organization/4a04d79cca99d1918e004dc216136018/_history/1
+
+    Authenticate:
+      description: |
+        The authentication scheme this server accepts. RFC 9110 15.5.2 requires
+        it on every `401`. No credential is checked in this build, so no request
+        can satisfy the challenge.
+      schema:
+        type: string
+      example: Bearer realm="Ilavrita FHIR"
+
   schemas:
     HealthReport:
       type: object
@@ -147,6 +502,27 @@ components:
           revision: 4386b36ac1f4b0f0c5f7a1f0f6b2f4c1d8e9a0b1
           fhirVersion: 4.0.1
 
+    Resource:
+      type: object
+      description: |
+        A FHIR R4 resource. Its members are defined by the FHIR specification,
+        not by this document, so no property list is given here.
+
+        Three of them are this server's rather than the client's: `resourceType`
+        must match the URL, `id` is assigned on create and must match the URL on
+        update, and `meta.versionId` and `meta.lastUpdated` are dropped from
+        whatever is submitted and written from the stored version on the way out.
+        Every other member is stored and returned unchanged.
+      required: [resourceType]
+      additionalProperties: true
+      properties:
+        resourceType:
+          type: string
+          description: The resource type, which must match the URL.
+      examples:
+        - resourceType: Organization
+          name: Ilavrita Clinic
+
     CapabilityStatement:
       type: object
       description: |
@@ -162,7 +538,7 @@ components:
           enum: [draft, active, retired, unknown]
         experimental:
           type: boolean
-          description: True while no FHIR interaction is implemented.
+          description: True while most of the FHIR surface is unimplemented.
         date:
           type: string
           format: date-time
@@ -204,17 +580,93 @@ components:
                 enum: [client, server]
               resource:
                 type: array
-                description: Empty until an interaction ships with test coverage.
+                description: |
+                  The types this build serves, from one closed list that both
+                  gates the routes and fills this array: a type is listed exactly
+                  when it is an endpoint, and one that is not listed answers
+                  `404` on every route, before the caller is identified. A name
+                  is added to that list only once it is a real R4 type and the
+                  conformance suite exercises every interaction against it.
                 items:
                   type: object
-                  required: [type]
+                  required: [type, versioning, updateCreate]
                   properties:
                     type:
                       type: string
                     interaction:
                       type: array
+                      description: |
+                        The codes the routes were registered under, in that
+                        order. Every declared type carries the same set: one set
+                        of generic handlers serves them all, so a per-type subset
+                        would describe a dispatch that does not exist.
                       items:
-                        type: string
+                        type: object
+                        required: [code]
+                        properties:
+                          code:
+                            type: string
+                            enum: [create, read, vread, update, delete, history-instance]
+                    versioning:
+                      type: string
+                      description: Always `versioned`; every record carries a version.
+                    updateCreate:
+                      type: boolean
+                      description: Always true; an update may create the id a client names.
+
+    Bundle:
+      type: object
+      description: One resource's versions, newest first.
+      required: [resourceType, type, total]
+      properties:
+        resourceType:
+          type: string
+          const: Bundle
+        type:
+          type: string
+          const: history
+        total:
+          type: integer
+          description: How many versions the Bundle carries.
+        entry:
+          type: array
+          items:
+            $ref: "#/components/schemas/BundleEntry"
+
+    BundleEntry:
+      type: object
+      description: |
+        One version. Nothing stores which interaction wrote a version, so
+        `request.method` is derived: the oldest version of a resource is its
+        create, a version that recorded a deletion is the delete, and every other
+        version replaced the one before it.
+      required: [fullUrl, request, response]
+      properties:
+        fullUrl:
+          type: string
+          description: The absolute URL of the resource this version belongs to.
+        resource:
+          $ref: "#/components/schemas/Resource"
+        request:
+          type: object
+          required: [method, url]
+          properties:
+            method:
+              type: string
+              enum: [POST, PUT, DELETE]
+            url:
+              type: string
+        response:
+          type: object
+          required: [status]
+          properties:
+            status:
+              type: string
+              description: The status the recorded interaction answered with.
+            etag:
+              type: string
+            lastModified:
+              type: string
 
     OperationOutcome:
       type: object
@@ -242,7 +694,20 @@ components:
           enum: [fatal, error, warning, information]
         code:
           type: string
-          enum: [not-supported, not-found, invalid, security, conflict, exception]
+          enum:
+            [
+              not-supported,
+              not-found,
+              invalid,
+              security,
+              conflict,
+              exception,
+              login,
+              forbidden,
+              deleted,
+              duplicate,
+              too-costly,
+            ]
         diagnostics:
           type: string
           description: |
@@ -250,6 +715,234 @@ components:
             traces or internal identifiers.
 
   responses:
+    ResourceRead:
+      description: The resource, at the version the `ETag` names.
+      headers:
+        ETag:
+          $ref: "#/components/headers/ETag"
+        Last-Modified:
+          $ref: "#/components/headers/LastModified"
+      content:
+        application/fhir+json:
+          schema:
+            $ref: "#/components/schemas/Resource"
+
+    ResourceCreated:
+      description: The resource as created, at its first version under this id.
+      headers:
+        ETag:
+          $ref: "#/components/headers/ETag"
+        Last-Modified:
+          $ref: "#/components/headers/LastModified"
+        Location:
+          $ref: "#/components/headers/Location"
+      content:
+        application/fhir+json:
+          schema:
+            $ref: "#/components/schemas/Resource"
+
+    History:
+      description: The resource's versions, newest first.
+      content:
+        application/fhir+json:
+          schema:
+            $ref: "#/components/schemas/Bundle"
+
+    Invalid:
+      description: |
+        The body is not a JSON FHIR resource, disagrees with the URL about the
+        resource type or id, carries an id on create, or `If-Match` is malformed.
+        It is also the answer when the request's `Host` is not one this
+        deployment serves, because a published URL is never built from a host
+        a client chose. Nothing was written.
+      content:
+        application/fhir+json:
+          schema:
+            $ref: "#/components/schemas/OperationOutcome"
+          examples:
+            invalid:
+              value:
+                resourceType: OperationOutcome
+                issue:
+                  - severity: error
+                    code: invalid
+                    diagnostics: The resource type in the body does not match the one in the URL.
+
+    Unauthenticated:
+      description: |
+        Nothing identified the caller. Who is asking is prior to what they may
+        do, so this is answered before any authorization decision is made.
+      headers:
+        WWW-Authenticate:
+          $ref: "#/components/headers/Authenticate"
+      content:
+        application/fhir+json:
+          schema:
+            $ref: "#/components/schemas/OperationOutcome"
+          examples:
+            login:
+              value:
+                resourceType: OperationOutcome
+                issue:
+                  - severity: error
+                    code: login
+                    diagnostics: This request carries no authenticated principal.
+
+    Forbidden:
+      description: |
+        The caller holds no authorization for this interaction on this resource
+        type at all. It is never row-specific: a caller who may act on the type
+        but not on one particular resource gets `404`, so this status cannot
+        reveal that a resource exists.
+      content:
+        application/fhir+json:
+          schema:
+            $ref: "#/components/schemas/OperationOutcome"
+          examples:
+            forbidden:
+              value:
+                resourceType: OperationOutcome
+                issue:
+                  - severity: error
+                    code: forbidden
+                    diagnostics: This principal may not perform this interaction on this resource type.
+
+    NotFound:
+      description: |
+        No such resource, or no such resource type. A resource this caller's
+        authorization cannot see is reported identically to one that does not
+        exist.
+      content:
+        application/fhir+json:
+          schema:
+            $ref: "#/components/schemas/OperationOutcome"
+          examples:
+            notFound:
+              value:
+                resourceType: OperationOutcome
+                issue:
+                  - severity: error
+                    code: not-found
+                    diagnostics: No such resource.
+
+    NotAcceptable:
+      description: The caller asked for a representation this server does not serve.
+      content:
+        application/fhir+json:
+          schema:
+            $ref: "#/components/schemas/OperationOutcome"
+          examples:
+            notAcceptable:
+              value:
+                resourceType: OperationOutcome
+                issue:
+                  - severity: error
+                    code: not-supported
+                    diagnostics: This server serves application/fhir+json only.
+
+    UnsupportedMediaType:
+      description: The request body was not sent as `application/fhir+json`.
+      content:
+        application/fhir+json:
+          schema:
+            $ref: "#/components/schemas/OperationOutcome"
+          examples:
+            unsupportedMediaType:
+              value:
+                resourceType: OperationOutcome
+                issue:
+                  - severity: error
+                    code: not-supported
+                    diagnostics: A request body must be sent as application/fhir+json.
+
+    TooLarge:
+      description: |
+        The request body is larger than this server buffers. The request is well
+        formed; only its size is refused, which is why it is not a `400`.
+      content:
+        application/fhir+json:
+          schema:
+            $ref: "#/components/schemas/OperationOutcome"
+          examples:
+            tooCostly:
+              value:
+                resourceType: OperationOutcome
+                issue:
+                  - severity: error
+                    code: too-costly
+                    diagnostics: The request body is larger than this server accepts.
+
+    Conflict:
+      description: |
+        Another write reached the resource first, or a create named a logical id
+        that is already taken.
+      content:
+        application/fhir+json:
+          schema:
+            $ref: "#/components/schemas/OperationOutcome"
+          examples:
+            conflict:
+              value:
+                resourceType: OperationOutcome
+                issue:
+                  - severity: error
+                    code: conflict
+                    diagnostics: Another write reached this resource first.
+
+    PreconditionFailed:
+      description: |
+        `If-Match` was sent and disagrees with what the server observes — a
+        different version, or a resource that is absent or deleted. Nothing was
+        written.
+      content:
+        application/fhir+json:
+          schema:
+            $ref: "#/components/schemas/OperationOutcome"
+          examples:
+            preconditionFailed:
+              value:
+                resourceType: OperationOutcome
+                issue:
+                  - severity: error
+                    code: conflict
+                    diagnostics: The resource is not at the version If-Match claims.
+
+    Gone:
+      description: |
+        The resource existed and was deleted. It is a distinct status from `404`
+        on purpose, and a distinct issue code, so a client parsing only the body
+        can still tell the two apart.
+      content:
+        application/fhir+json:
+          schema:
+            $ref: "#/components/schemas/OperationOutcome"
+          examples:
+            deleted:
+              value:
+                resourceType: OperationOutcome
+                issue:
+                  - severity: error
+                    code: deleted
+                    diagnostics: This resource has been deleted.
+
+    InternalFailure:
+      description: |
+        The request could not be completed. The body is always this same generic
+        outcome: an internal message can name a resource type, a logical id or a
+        Project, and none of those may travel to a client.
+      content:
+        application/fhir+json:
+          schema:
+            $ref: "#/components/schemas/OperationOutcome"
+          examples:
+            exception:
+              value:
+                resourceType: OperationOutcome
+                issue:
+                  - severity: error
+                    code: exception
+                    diagnostics: This request could not be completed.
+
     NotImplemented:
       description: The interaction exists in FHIR but is not implemented here.
       content:
