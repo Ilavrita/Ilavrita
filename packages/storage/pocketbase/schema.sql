@@ -111,6 +111,133 @@ CREATE UNIQUE INDEX IF NOT EXISTS ux_users_realm_email ON users (identity_realm,
 CREATE INDEX IF NOT EXISTS ix_users_realm_state ON users (identity_realm, state, id);
 
 -- ===========================================================================
+-- Client applications and bots
+-- ===========================================================================
+
+-- A programmatic principal belongs to exactly one Project, so project_id leads
+-- the key and project_memberships can carry it into a composite foreign key: a
+-- caller registered in one Project cannot hold standing in another. That is the
+-- containment users cannot express, because a user may be server-scoped.
+
+-- Two tables rather than one with a kind column. project_memberships carries a
+-- column per family, and principal_kind is generated from which one is set, so
+-- a per-family foreign key is what keeps that generated value honest. A merged
+-- table would accept a bot's id in the client column and principal_kind would
+-- then name the wrong family with every constraint still satisfied.
+
+-- Ids carry a family prefix because ux_pm_active_principal is unique on the
+-- generated principal_id alone: without disjoint spaces a client application
+-- and a user would be one principal to it. substr, not LIKE, whose ASCII
+-- case-insensitivity accepts 'CLI_x'.
+
+-- tenant: project_id
+CREATE TABLE IF NOT EXISTS client_applications (
+  project_id  TEXT NOT NULL REFERENCES projects (id) ON DELETE RESTRICT ON UPDATE RESTRICT,
+  id          TEXT NOT NULL,
+  name        TEXT NOT NULL,
+  description TEXT NOT NULL DEFAULT '',
+  state       TEXT NOT NULL CHECK (state IN ('active', 'suspended', 'revoked')),
+  created_at  BIGINT NOT NULL,
+  updated_at  BIGINT NOT NULL,
+  revoked_at  BIGINT,
+  version     BIGINT NOT NULL DEFAULT 1,
+
+  PRIMARY KEY (project_id, id),
+
+  -- Subsumes the non-emptiness guard: 'cli' is not 'cli_'.
+  CHECK (substr(id, 1, 4) = 'cli_'),
+
+  CHECK (project_id <> '' AND project_id <> 'system'),
+  CHECK (name <> ''),
+  CHECK (state <> 'revoked' OR revoked_at IS NOT NULL)
+);
+
+-- One name per Project, so a second integration cannot register under a name an
+-- operator already trusts.
+CREATE UNIQUE INDEX IF NOT EXISTS ux_client_applications_name
+  ON client_applications (project_id, name);
+
+CREATE INDEX IF NOT EXISTS ix_client_applications_state
+  ON client_applications (project_id, state, id);
+
+-- A bot is invoked by this server rather than authenticated by it. No credential
+-- table names this one and no column here holds a hash, so a bot secret is
+-- unrepresentable rather than merely unissued.
+
+-- tenant: project_id
+CREATE TABLE IF NOT EXISTS bots (
+  project_id TEXT NOT NULL REFERENCES projects (id) ON DELETE RESTRICT ON UPDATE RESTRICT,
+  id         TEXT NOT NULL,
+  name       TEXT NOT NULL,
+  state      TEXT NOT NULL CHECK (state IN ('active', 'suspended', 'revoked')),
+  created_at BIGINT NOT NULL,
+  updated_at BIGINT NOT NULL,
+  revoked_at BIGINT,
+  version    BIGINT NOT NULL DEFAULT 1,
+
+  PRIMARY KEY (project_id, id),
+
+  CHECK (substr(id, 1, 4) = 'bot_'),
+  CHECK (project_id <> '' AND project_id <> 'system'),
+  CHECK (name <> ''),
+  CHECK (state <> 'revoked' OR revoked_at IS NOT NULL)
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS ux_bots_name ON bots (project_id, name);
+
+CREATE INDEX IF NOT EXISTS ix_bots_state ON bots (project_id, state, id);
+
+-- A credential is one secret's whole life, owned by one client application. The
+-- plaintext is never a column; the hash is, and a revoked row holds neither.
+
+-- tenant: project_id
+CREATE TABLE IF NOT EXISTS client_application_credentials (
+  project_id            TEXT NOT NULL,
+  client_application_id TEXT NOT NULL,
+  id                    TEXT NOT NULL,
+
+  -- SHA-256 over 32 bytes this server minted. ClientSecret admits nothing else,
+  -- so a guesser has nothing to shorten and a work factor would buy latency.
+  secret_hash           TEXT,
+
+  state                 TEXT NOT NULL CHECK (state IN ('active', 'superseded', 'revoked')),
+  created_at            BIGINT NOT NULL,
+  expires_at            BIGINT NOT NULL,
+  revoked_at            BIGINT,
+
+  PRIMARY KEY (project_id, client_application_id, id),
+
+  CHECK (substr(id, 1, 4) = 'cac_'),
+
+  -- A secret that outlives the quarter it was issued in is one nobody rotated.
+  -- NOT NULL alone permits the year 3000, so the ceiling is stated: 90 days.
+  CHECK (expires_at > created_at AND expires_at <= created_at + 7776000000),
+
+  -- Revocation destroys the material, which is stronger than a state something
+  -- must remember to read: a revoked row matches no secret because it holds none.
+  CHECK (state <> 'revoked' OR (secret_hash IS NULL AND revoked_at IS NOT NULL)),
+
+  -- The mirror, so a live credential answering nothing is unrepresentable too.
+  CHECK (state = 'revoked' OR (secret_hash IS NOT NULL AND revoked_at IS NULL)),
+
+  FOREIGN KEY (project_id, client_application_id)
+    REFERENCES client_applications (project_id, id) ON DELETE CASCADE ON UPDATE RESTRICT
+);
+
+-- At most one credential answers for an application, and at most one outgoing
+-- credential overlaps it. A third live secret is a constraint violation rather
+-- than a count an application check reads and then races.
+CREATE UNIQUE INDEX IF NOT EXISTS ux_cac_active
+  ON client_application_credentials (project_id, client_application_id) WHERE state = 'active';
+
+CREATE UNIQUE INDEX IF NOT EXISTS ux_cac_superseded
+  ON client_application_credentials (project_id, client_application_id) WHERE state = 'superseded';
+
+-- One application's credentials, live ones first.
+CREATE INDEX IF NOT EXISTS ix_cac_application
+  ON client_application_credentials (project_id, client_application_id, state, expires_at);
+
+-- ===========================================================================
 -- FHIR resources
 -- ===========================================================================
 
@@ -266,7 +393,7 @@ CREATE TABLE IF NOT EXISTS platform_resource (
   -- System scope holds only types that genuinely have no owning Project.
   CHECK (
     project_id <> 'system'
-    OR res_type IN ('Project', 'User', 'ClientApplication', 'IdentityProvider', 'SystemSetting')
+    OR res_type IN ('Project', 'User', 'IdentityProvider', 'SystemSetting')
   )
 );
 
@@ -292,7 +419,7 @@ CREATE TABLE IF NOT EXISTS platform_resource_history (
   CHECK (deleted = 1 OR content IS NOT NULL),
   CHECK (
     project_id <> 'system'
-    OR res_type IN ('Project', 'User', 'ClientApplication', 'IdentityProvider', 'SystemSetting')
+    OR res_type IN ('Project', 'User', 'IdentityProvider', 'SystemSetting')
   ),
 
   UNIQUE (project_id, res_type, res_id, version_id)
@@ -532,8 +659,6 @@ CREATE TABLE IF NOT EXISTS project_memberships (
 
   user_id                  TEXT REFERENCES users (id) ON DELETE RESTRICT ON UPDATE RESTRICT,
 
-  -- client_applications and bots are separate tables that do not exist yet;
-  -- their foreign keys land with them.
   client_application_id    TEXT,
   bot_id                   TEXT,
 
@@ -592,6 +717,25 @@ CREATE TABLE IF NOT EXISTS project_memberships (
     OR (user_id IS NULL AND client_application_id IS NULL AND bot_id IS NOT NULL)
   ),
 
+  -- The three principal namespaces are disjoint, so the generated principal_id
+  -- that ux_pm_active_principal keys on can never name two principals at once.
+  CHECK (client_application_id IS NULL OR substr(client_application_id, 1, 4) = 'cli_'),
+  CHECK (bot_id IS NULL OR substr(bot_id, 1, 4) = 'bot_'),
+  CHECK (user_id IS NULL OR (substr(user_id, 1, 4) <> 'cli_' AND substr(user_id, 1, 4) <> 'bot_')),
+
+  -- Super Admin administers the install and answers for it. A machine principal
+  -- is one leaked secret away, with no second factor and no person behind it.
+  CHECK (super_admin = 0 OR user_id IS NOT NULL),
+
+  -- A bot runs code this server invokes, so administrative standing on one is a
+  -- control-plane write reachable from whatever that code is made to do.
+  CHECK (bot_id IS NULL OR (admin = 0 AND super_admin = 0)),
+
+  -- A machine principal's authority is its AccessPolicy, never a compartment it
+  -- occupies: a profile would collect compartment grants with no person in the
+  -- chain that leads to them.
+  CHECK (profile_id IS NULL OR user_id IS NOT NULL),
+
   -- The load-bearing one: Super Admin cannot exist outside a Super Project.
   CHECK (super_admin = 0 OR project_kind = 'super'),
   CHECK (super_admin = 0 OR admin = 1),
@@ -630,6 +774,18 @@ CREATE TABLE IF NOT EXISTS project_memberships (
   FOREIGN KEY (project_id, invited_by_membership_id)
     REFERENCES project_memberships (project_id, id) ON DELETE RESTRICT ON UPDATE RESTRICT,
 
+  -- A client application is a member only of the Project that registered it, so
+  -- a membership cannot name one belonging to another. The key is unenforced
+  -- when the column is NULL, which is every user and bot membership.
+  FOREIGN KEY (project_id, client_application_id)
+    REFERENCES client_applications (project_id, id) ON DELETE RESTRICT ON UPDATE RESTRICT,
+
+  -- The same containment for a bot, which is also what makes a bot id in the
+  -- client application column a constraint violation rather than a principal
+  -- kind that lies.
+  FOREIGN KEY (project_id, bot_id)
+    REFERENCES bots (project_id, id) ON DELETE RESTRICT ON UPDATE RESTRICT,
+
   -- This Project is the link's grantor, so a link into one Project cannot mint a
   -- membership in another.
   FOREIGN KEY (via_link_grantee_project, project_id, via_link_kind)
@@ -655,6 +811,11 @@ CREATE INDEX IF NOT EXISTS ix_pm_super ON project_memberships (project_id, state
 -- principal is the only thing known at probe time; every query it feeds re-pins
 -- the Project
 CREATE INDEX IF NOT EXISTS ix_pm_principal ON project_memberships (principal_id, state, project_id);
+
+-- membershipQuery resolves one principal in one Project including its revoked
+-- rows, which the partial uniqueness index above cannot serve.
+CREATE INDEX IF NOT EXISTS ix_pm_project_principal
+  ON project_memberships (project_id, principal_id, state);
 
 -- Parent key for the policy binding's composite foreign key. It is an index
 -- rather than a table constraint because link_sourced is a generated column.
@@ -782,4 +943,40 @@ BEFORE UPDATE ON projects
 WHEN NEW.id IS NOT OLD.id OR NEW.slug IS NOT OLD.slug OR NEW.kind IS NOT OLD.kind
 BEGIN
   SELECT RAISE(ABORT, 'projects.id, projects.slug and projects.kind are immutable');
+END;
+
+-- sqlite-only: an AFTER UPDATE trigger. On PostgreSQL, the same body as a
+-- PL/pgSQL trigger function.
+
+-- Revoking a registration destroys the secrets issued under it. The foreign key
+-- cannot express this, because ON DELETE CASCADE fires on deletion and a
+-- revocation is deliberately not a deletion: the row survives for the audit.
+CREATE TRIGGER IF NOT EXISTS client_application_revocation_destroys_secrets
+AFTER UPDATE OF state ON client_applications
+WHEN new.state = 'revoked' AND old.state <> 'revoked'
+BEGIN
+  UPDATE client_application_credentials
+     SET state = 'revoked', secret_hash = NULL, revoked_at = new.updated_at
+   WHERE project_id = new.project_id
+     AND client_application_id = new.id
+     AND state <> 'revoked';
+END;
+
+-- A registration's state gates its memberships' standing, so changing it changes
+-- effective authorization. authz_version is what a cache keys on, and nothing
+-- else would bump it for a change that happens in another table.
+CREATE TRIGGER IF NOT EXISTS client_application_state_bumps_authz
+AFTER UPDATE OF state ON client_applications
+WHEN new.state <> old.state
+BEGIN
+  UPDATE project_memberships SET authz_version = authz_version + 1
+   WHERE project_id = new.project_id AND client_application_id = new.id;
+END;
+
+CREATE TRIGGER IF NOT EXISTS bot_state_bumps_authz
+AFTER UPDATE OF state ON bots
+WHEN new.state <> old.state
+BEGIN
+  UPDATE project_memberships SET authz_version = authz_version + 1
+   WHERE project_id = new.project_id AND bot_id = new.id;
 END;
