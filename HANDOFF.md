@@ -23,6 +23,10 @@ Authentication does not exist. Every FHIR route answers `401` unless
 `ILAVRITA_DEV_PRINCIPAL` is set, which prints an unmissable warning at startup. Do not
 deploy this anywhere near patient data.
 
+A `client_application` or `bot` development principal now also needs a registered, active row in
+its Project, and an id carrying the `cli_` or `bot_` prefix. An id outside the namespace stops the
+process; an unregistered one answers `401` to everything.
+
 ## 2. The shape of the system
 
 PocketBase is the runtime, not the product. Everything Ilavrita publishes — routes, error
@@ -116,6 +120,13 @@ None of these are visible from reading the code.
   it with a second connection proves nothing.
 - **`act` needs the custom runner image.** `actions/setup-go` drops node from `PATH`,
   breaking every later JavaScript action. `make ci-image` fixes it.
+- **SQLite's `LIKE` is ASCII-case-insensitive.** `id LIKE 'cli\_%' ESCAPE '\'` accepts
+  `'CLI_x'`; `substr(id, 1, 4) = 'cli_'` does not. Every namespace CHECK uses `substr`.
+- **`PRAGMA foreign_keys` is a no-op inside a transaction, and `PRAGMA foreign_key_check`
+  raises rather than returning rows** when a parent index is missing — so `rows, _ := Query(...)`
+  reads the worst outcome as a pass. Both shaped the membership rebuild in `migrate.go`.
+- **`ALTER TABLE ... RENAME` re-validates triggers on *other* tables that name the renamed one.**
+  The rebuild drops and restores them, or the rename fails outright.
 - **TypeScript 7 broke `openapi-typescript`.** Its native compiler does not expose
   `ts.factory`. SDK types are hand-written; drift is caught by `verify-openapi.sh` instead.
 - **`modernc.org/libc` ships glibc-derived LGPL-2.1 headers** that compile into the Linux
@@ -134,8 +145,8 @@ None of these are visible from reading the code.
   Observations" is not representable. Written up in `docs/design/authz-spec.md`.
 - **No `LinkResolver` implementation.** `noProjectLinks` returns nothing, which can only
   narrow. A real one is owed before cross-project search.
-- **`client_applications` and `bots` tables do not exist**, so those membership columns
-  carry no foreign key.
+- **Bots are identity only.** The table, the domain type and the foreign key exist so the
+  membership column is constrained; what a bot *runs* is Phase 3 and nothing executes one.
 - **The release pipeline has never run.** Signing, SBOM and provenance are configured and
   unexercised. Cut `v0.0.1-rc.1` first, deliberately.
 
@@ -144,10 +155,14 @@ None of these are visible from reading the code.
 Agreed direction, in this order. The order is the point: each item removes the reason the
 next one is currently unsafe.
 
-**1. Client applications and service accounts (FR-053).** The `project_memberships` table
-already carries `client_application_id` and `bot_id` columns with no foreign key, because
-those tables do not exist. Build the tables, the domain type, and the principal kind so a
-non-human caller is a first-class member with its own AccessPolicy, not a shared secret.
+**1. Client applications and service accounts (FR-053). Done.** The registries, the domain
+types, the credential lifecycle and the foreign keys landed; `docs/design/client-application-spec.md`
+is the contract, numbered `CAP-n`. What was actually closed: a membership could name a client
+application or bot that no row described, and it resolved to full standing with no lever anywhere
+to withdraw it, because only `user_id` carried a foreign key and only a user principal was gated on
+its registry. Both are now constrained, in the database and in the resolver. Credentials mint,
+rotate and revoke; **nothing authenticates anyone**, which is step 2 and is drawn as a physical
+line: no projection in `packages/storage/pocketbase` selects `secret_hash` (CAP-22).
 
 **2. Real user authentication.** Replaces `ILAVRITA_DEV_PRINCIPAL`, which exists only so
 the wiring could be proved end to end. A request must resolve to a principal through a
