@@ -5,6 +5,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"io/fs"
 	"os"
 	"strings"
 	"testing"
@@ -165,17 +166,26 @@ func TestAReadNeverCarriesTheStoredSecret(t *testing.T) {
 	}
 }
 
+// sourceOf reads one file in this package. It goes through the package
+// directory as a file system so a source-reading test cannot be handed a path
+// that leaves it.
+func sourceOf(t *testing.T, name string) string {
+	t.Helper()
+
+	source, err := fs.ReadFile(os.DirFS("."), name)
+	if err != nil {
+		t.Fatalf("read %s: %v", name, err)
+	}
+
+	return string(source)
+}
+
 // TestNoProjectionInThisPackageSelectsASecretHash reads its own source. It is the
 // line between this step and authentication: the day a projection selects the
 // column is the day this server can check a presented secret.
 func TestNoProjectionInThisPackageSelectsASecretHash(t *testing.T) {
 	for _, name := range []string{"client_application.go", "bot.go", "resolvers.go", "migrate.go"} {
-		source, err := os.ReadFile(name)
-		if err != nil {
-			t.Fatalf("read %s: %v", name, err)
-		}
-
-		for _, fragment := range strings.Split(string(source), `"`) {
+		for _, fragment := range strings.Split(sourceOf(t, name), `"`) {
 			if !strings.Contains(strings.ToUpper(fragment), "SELECT") {
 				continue
 			}
@@ -420,12 +430,7 @@ func TestARegistrationCreateIsUndoneWhenTheTransactionRollsBack(t *testing.T) {
 // a new registration, never an updated one.
 func TestNoStatementRewritesAnOwningProject(t *testing.T) {
 	for _, name := range []string{"client_application.go", "bot.go"} {
-		source, err := os.ReadFile(name)
-		if err != nil {
-			t.Fatalf("read %s: %v", name, err)
-		}
-
-		for _, fragment := range strings.Split(string(source), `"`) {
+		for _, fragment := range strings.Split(sourceOf(t, name), `"`) {
 			if !strings.Contains(strings.ToUpper(fragment), " SET ") {
 				continue
 			}
