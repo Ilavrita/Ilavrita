@@ -435,6 +435,12 @@ ILAVRITA_DEV_PRINCIPAL=<project-id>:<principal-kind>:<principal-id>
 membership.go`); `<project-id>` must pass `project.ValidateID`. Unset or empty → REST-30's `401` applies
 to every request the process serves; nothing else about the resolver runs.
 
+A `client_application` or `bot` id must additionally pass `project.ValidateClientApplicationID` or
+`project.ValidateBotID`, because the membership resolver gates a machine principal on a live row in
+`client_applications` or `bots` and those tables constrain the id's namespace. An id outside it matches
+nothing, so it is refused under REST-32 rather than starting a process that answers `401` to every
+request as though a policy had decided it.
+
 **REST-32 — fail closed on malformed configuration.** The value is parsed once, at process startup, the
 same posture `AssertForeignKeysEnforced` (`packages/storage/pocketbase/schema.go`) already takes for a
 different precondition: a malformed value (wrong arity, empty segment, unrecognised kind, or a project

@@ -78,7 +78,25 @@ func parseDevelopmentPrincipal(value string) (*caller, error) {
 		return nil, fmt.Errorf("%w: %q names no principal", errMalformedDevelopmentPrincipal, value)
 	}
 
+	if err := validateMachineNamespace(principal); err != nil {
+		return nil, fmt.Errorf("%s: %w", developmentPrincipalVariable, err)
+	}
+
 	return &caller{project: home, principal: principal}, nil
+}
+
+// validateMachineNamespace refuses a machine principal whose id lies outside its
+// registry's namespace. Such a principal resolves to nothing, so the process
+// would start and then deny every request as though it were a policy decision.
+func validateMachineNamespace(principal project.PrincipalRef) error {
+	switch principal.Kind {
+	case project.PrincipalClientApplication:
+		return project.ValidateClientApplicationID(project.ClientApplicationID(principal.ID))
+	case project.PrincipalBot:
+		return project.ValidateBotID(project.BotID(principal.ID))
+	default:
+		return nil
+	}
 }
 
 // warnAboutDevelopmentPrincipal says once, at startup, that this process checks
@@ -96,6 +114,17 @@ func warnAboutDevelopmentPrincipal(developmentPrincipal *caller) {
 		developmentPrincipalVariable, developmentPrincipal.principal.Kind,
 		developmentPrincipal.principal.ID, developmentPrincipal.project,
 	)
+
+	// A machine principal also needs a live registry row, which this process
+	// cannot check before the database is open. Saying so here is cheaper than an
+	// operator reading every request's 401 as a policy decision.
+	if developmentPrincipal.principal.Kind != project.PrincipalUser {
+		log.Printf(
+			"NOTE: %s names a %s, which resolves only while %q is registered and active in project %q.",
+			developmentPrincipalVariable, developmentPrincipal.principal.Kind,
+			developmentPrincipal.principal.ID, developmentPrincipal.project,
+		)
+	}
 }
 
 // resolve answers who is asking. The scaffold reads nothing from the request:

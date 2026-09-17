@@ -82,8 +82,41 @@ func TestConfiguredDevelopmentPrincipalUnsetIsNotAFailure(t *testing.T) {
 	}
 }
 
+// TestAMachineDevelopmentPrincipalOutsideItsNamespaceRefusesToStart. Such a
+// principal matches no registry row, so the process would start and then answer
+// 401 to everything, which reads as a policy decision rather than a typo.
+func TestAMachineDevelopmentPrincipalOutsideItsNamespaceRefusesToStart(t *testing.T) {
+	refused := map[string]string{
+		"a client application with no prefix": "clinic-a:client_application:loader",
+		"a client application miscased":       "clinic-a:client_application:CLI_loader",
+		"a bot with no prefix":                "clinic-a:bot:worker",
+		"a bot carrying the client prefix":    "clinic-a:bot:cli_worker",
+	}
+
+	for name, value := range refused {
+		t.Setenv(developmentPrincipalVariable, value)
+
+		configured, err := configuredDevelopmentPrincipal()
+		if err == nil {
+			t.Errorf("%s started the process as %+v", name, configured)
+		}
+
+		if configured != nil {
+			t.Errorf("%s resolved to %+v rather than refusing", name, configured)
+		}
+	}
+
+	// A user principal is unaffected: it resolves against users, which carries no
+	// namespace prefix of its own.
+	t.Setenv(developmentPrincipalVariable, "clinic-a:user:usr_1")
+
+	if _, err := configuredDevelopmentPrincipal(); err != nil {
+		t.Errorf("a user principal was refused: %v", err)
+	}
+}
+
 func TestConfiguredDevelopmentPrincipalReadsTheWholeValue(t *testing.T) {
-	t.Setenv(developmentPrincipalVariable, "clinic-a:client_application:loader")
+	t.Setenv(developmentPrincipalVariable, "clinic-a:client_application:cli_loader")
 
 	configured, err := configuredDevelopmentPrincipal()
 	if err != nil {
@@ -92,7 +125,7 @@ func TestConfiguredDevelopmentPrincipalReadsTheWholeValue(t *testing.T) {
 
 	want := caller{
 		project:   project.ID("clinic-a"),
-		principal: project.PrincipalRef{Kind: project.PrincipalClientApplication, ID: "loader"},
+		principal: project.PrincipalRef{Kind: project.PrincipalClientApplication, ID: "cli_loader"},
 	}
 
 	if *configured != want {

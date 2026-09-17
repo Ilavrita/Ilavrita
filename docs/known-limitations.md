@@ -91,6 +91,12 @@ that every request is then served as, with **no credential checked anywhere**.
 It is for development only. A malformed value stops the process rather than
 degrading it, and a valid one is logged at startup as the warning it is.
 
+A `client_application` or `bot` principal resolves only while a row in the
+matching registry is registered and active in that Project, and its id must
+carry the registry's prefix — `cli_` or `bot_`. An id outside the namespace
+stops the process; an unregistered one answers `401` to everything, which is a
+membership that does not exist rather than a credential that was refused.
+
 ## Out of scope for v0.1
 
 Not missing — deliberately deferred. FHIR R5, a complete terminology server,
