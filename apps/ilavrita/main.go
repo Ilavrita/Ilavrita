@@ -24,6 +24,14 @@ func main() {
 	app := pocketbase.New()
 
 	app.OnServe().BindFunc(func(serve *core.ServeEvent) error {
+		// PocketBase's installer prints a live 30-minute superuser token to stdout
+		// and opens a browser. A credential in the logs is not acceptable here.
+		serve.InstallerFunc = nil
+
+		if err := startServing(serve.App); err != nil {
+			return err
+		}
+
 		registerRuntimeBoundary(serve.Router)
 		registerOperationalRoutes(serve.Router)
 		registerFHIRRoutes(serve.Router)
