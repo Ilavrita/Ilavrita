@@ -57,6 +57,9 @@ const (
 
 	// ruleTable holds the access policy rules a restriction is stated on.
 	ruleTable = "access_policy_rules"
+
+	// searchIndexTable holds what each resource is searchable by.
+	searchIndexTable = "fhir_search_index"
 )
 
 // principalParents are the registries project_memberships must name, each with
@@ -71,8 +74,22 @@ var principalParents = map[string]string{
 // one missing a constraint the declarations depend on. It is what a server calls;
 // ApplySchema stays the plain, idempotent application of the file.
 func PrepareSchema(ctx context.Context, db *sql.DB) error {
+	// Asked before the schema is applied, because applying it is what creates
+	// the table: afterwards there is no way to tell an install that predates the
+	// search index from one that has nothing to put in it.
+	indexed, err := hasTable(ctx, db, searchIndexTable)
+	if err != nil {
+		return err
+	}
+
 	if err := ApplySchema(ctx, db); err != nil {
 		return err
+	}
+
+	if !indexed {
+		if err := backfillSearchIndex(ctx, db); err != nil {
+			return err
+		}
 	}
 
 	memberships, err := rebuildMembershipPrincipalKeys(ctx, db)
@@ -326,6 +343,23 @@ func missingRestrictionColumn(ctx context.Context, db *sql.DB) (string, error) {
 	}
 
 	return "", nil
+}
+
+// hasTable reports whether a database already declares one table.
+func hasTable(ctx context.Context, db *sql.DB, table string) (bool, error) {
+	var name string
+
+	err := conn(ctx, db).QueryRowContext(ctx,
+		"SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?", table).Scan(&name)
+
+	switch {
+	case errors.Is(err, sql.ErrNoRows):
+		return false, nil
+	case err != nil:
+		return false, fmt.Errorf("pocketbase: look for the %s table: %w", table, err)
+	}
+
+	return true, nil
 }
 
 // hasColumn reports whether a table declares one column.

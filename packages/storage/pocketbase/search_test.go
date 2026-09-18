@@ -490,3 +490,78 @@ func TestASearchIsNotAuthorizedByAReadAlone(t *testing.T) {
 		t.Errorf("a read grant authorized a search: %v", got)
 	}
 }
+
+// TestAnInstallThatPredatesTheIndexIsBackfilled. The index table is created by
+// the schema like any other, so an install that predates it would come up with
+// every resource in it unsearchable — a predicate with nothing behind it,
+// answering "no matches" for data that is plainly there.
+func TestAnInstallThatPredatesTheIndexIsBackfilled(t *testing.T) {
+	store, db := newStore(t)
+
+	seedTyped(t, store, "Observation", "obs-1", `{"resourceType":"Observation","status":"final"}`)
+	seedTyped(t, store, "Observation", "obs-2", `{"resourceType":"Observation","status":"preliminary"}`)
+
+	buried := seedTyped(t, store, "Observation", "obs-gone", `{"resourceType":"Observation","status":"final"}`)
+	if err := store.Delete(t.Context(), fullScope("prj_a", "Observation"), buried, ""); err != nil {
+		t.Fatalf("delete: %v", err)
+	}
+
+	// What an install that predates the index looks like.
+	if _, err := db.ExecContext(t.Context(), "DROP TABLE fhir_search_index"); err != nil {
+		t.Fatalf("drop the index: %v", err)
+	}
+
+	if err := PrepareSchema(t.Context(), db); err != nil {
+		t.Fatalf("prepare: %v", err)
+	}
+
+	scope := searchScope("Observation")
+
+	if got := found(t, store, scope, "Observation", "status=final"); !slices.Equal(got, []string{"obs-1"}) {
+		t.Errorf("after the backfill status=final matched %v", got)
+	}
+
+	if got := found(t, store, scope, "Observation", "status=preliminary"); !slices.Equal(got, []string{"obs-2"}) {
+		t.Errorf("after the backfill status=preliminary matched %v", got)
+	}
+
+	// A tombstone holds no content and carries no index.
+	var buriedRows int
+	if err := db.QueryRowContext(t.Context(),
+		"SELECT COUNT(*) FROM fhir_search_index WHERE res_id = 'obs-gone'").Scan(&buriedRows); err != nil {
+		t.Fatalf("count: %v", err)
+	}
+
+	if buriedRows != 0 {
+		t.Errorf("the backfill indexed %d rows for a tombstone", buriedRows)
+	}
+}
+
+// TestPreparingTwiceDoesNotRebuildTheIndex, so a restart is not a reindex of
+// every resource the install holds.
+func TestPreparingTwiceDoesNotRebuildTheIndex(t *testing.T) {
+	store, db := newStore(t)
+
+	seedTyped(t, store, "Observation", "obs-1", `{"resourceType":"Observation","status":"final"}`)
+
+	// A row nothing would derive: it survives only if the backfill is skipped.
+	if _, err := db.ExecContext(t.Context(),
+		"INSERT INTO fhir_search_index (project_id, res_type, res_id, param, kind, code)"+
+			" VALUES ('prj_a', 'Observation', 'obs-1', 'status', 'token', 'sentinel')"); err != nil {
+		t.Fatalf("mark the index: %v", err)
+	}
+
+	if err := PrepareSchema(t.Context(), db); err != nil {
+		t.Fatalf("prepare: %v", err)
+	}
+
+	var marks int
+	if err := db.QueryRowContext(t.Context(),
+		"SELECT COUNT(*) FROM fhir_search_index WHERE code = 'sentinel'").Scan(&marks); err != nil {
+		t.Fatalf("count: %v", err)
+	}
+
+	if marks != 1 {
+		t.Error("preparing an install that already has an index rebuilt it")
+	}
+}
