@@ -9,8 +9,8 @@ starts from them rather than rediscovering them.
 Testable rules are numbered `POL-n`, `AUD-n` and `SRC-n`, following the
 `SCH-`/`CP-`/`LNK-`/`AUTH-`/`HIST-`/`IDN-`/`REST-`/`CAP-` convention.
 
-**Sections 2 and 3 are implemented.** POL-1 through POL-9 and AUD-1 through
-AUD-5 are in the tree, with the deviations §2.4 and §3.1 record. Search is not.
+**All three sections are implemented.** POL-1..9, AUD-1..5 and SRC-1..6 are in
+the tree, with what §2.4, §3.1 and §4.1 record about how.
 
 ## 1. Why policies come before search
 
@@ -201,6 +201,32 @@ predicate.
 executes it. This is what its doc comment already says and what the `depguard`
 boundary already enforces.
 
+### 4.1 What the implementation settled that this document left open
+
+- **The registry is the contract, and it is short.** Every parameter is a column
+  a write has to maintain and a predicate a read has to compile, so one is added
+  when something needs it rather than because R4 defines it. Two tests check the
+  registry against the CapabilityStatement in both directions, so the server
+  cannot advertise a parameter it refuses or answer one it never declared.
+- **A token indexes its system beside its code, from the same element.** FHIR
+  gives a token two halves, and reading them from different walks would let a
+  search pair one coding system's identifier with another's code.
+- **A string match is anchored and folded.** Anchored because a search that
+  scans every value is one a large Project cannot serve; folded because a caller
+  should not have to know how a name was capitalised. Wildcards in a value are
+  escaped, so nothing a caller types changes what the pattern means.
+- **Paging is by cursor on the logical id, not by offset.** A cursor on a stable
+  key does not skip or repeat a resource when something is written mid-page,
+  which an offset does. `_cursor` is this server's own parameter: a client
+  follows the `next` link and never builds one.
+- **Search is its own action, not a read.** A Scope may let a clinician read any
+  chart they are handed the id of and search only their own patients, so
+  compiling the read Grant into a search would answer the wider question.
+- **An install that predates the index is backfilled once.** The table is
+  created by the schema like any other, so without this an existing install
+  would come up answering "no matches" for data that is plainly there — the
+  decorative predicate this project has already been bitten by.
+
 ## 5. What this work learned that the next implementation should not rediscover
 
 - **The compartment table had no writer.** `fhir_resource_compartment` was
@@ -236,6 +262,12 @@ boundary already enforces.
 - **A nested query inside an open cursor deadlocks this pool.** It holds one
   connection, so a per-row query issued while rows are still open waits for a
   connection only closing those rows can release. Collect first, then enrich.
+- **`json_each` opens an object into its members, not into itself.** Walking a
+  path has to distinguish "this element repeats" from "this element is an
+  object", or `class.code` reads the members of `class` and finds nothing.
+- **A literal route that answers more methods than the pattern beside it is a
+  routing conflict**, not a more specific match. `/_search` had to be registered
+  per method against `/{resourceType}` rather than for any.
 - **A CHECK passes on NULL.** `(a IS NULL AND b IS NULL) OR (a <> '' AND b <> '')`
   admits a row with `a` set and `b` NULL, because the second arm evaluates to
   NULL rather than false. Both halves need an explicit `IS NOT NULL`.
