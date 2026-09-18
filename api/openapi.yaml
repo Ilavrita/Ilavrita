@@ -18,7 +18,7 @@ info:
     **This build implements the six single-resource interactions only** — create,
     read, vread, update, delete and instance history — and only for the resource
     types the CapabilityStatement at `GET /fhir/R4/metadata` declares. Search,
-    Bundles, conditional operations and every other interaction answer
+    Transactions, conditional operations and every other interaction answer
     `501 Not Implemented` as an `OperationOutcome`. See
     [known limitations](https://github.com/Ilavrita/Ilavrita/blob/dev/docs/known-limitations.md).
 
@@ -112,14 +112,39 @@ paths:
       - $ref: "#/components/parameters/ResourceType"
     get:
       tags: [FHIR]
-      summary: Search (not implemented)
+      summary: Search
       description: |
-        Search is not implemented for any parameter type, so a type-level `GET`
-        answers `501` whether or not the type is declared.
+        Returns a `searchset` Bundle of the resources this caller may reach that
+        match every parameter given. Values separated by commas are alternatives;
+        repeating a parameter requires both.
+
+        Which parameters a type answers is declared in its `CapabilityStatement`
+        entry. A parameter this server does not implement is refused with `400`
+        rather than ignored: a search that silently dropped one would return more
+        than it was asked for, and the caller could not tell.
+
+        `total` is present only when `_total=accurate` asked for it, and a `next`
+        link only when a further page exists.
       operationId: searchResources
+      parameters:
+        - $ref: "#/components/parameters/SearchCount"
+        - $ref: "#/components/parameters/SearchCursor"
+        - $ref: "#/components/parameters/SearchTotal"
       responses:
-        "501":
-          $ref: "#/components/responses/NotImplemented"
+        "200":
+          $ref: "#/components/responses/SearchResults"
+        "400":
+          $ref: "#/components/responses/Invalid"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "406":
+          $ref: "#/components/responses/NotAcceptable"
+        "500":
+          $ref: "#/components/responses/InternalFailure"
     post:
       tags: [FHIR]
       summary: Create
@@ -157,6 +182,114 @@ paths:
           $ref: "#/components/responses/UnsupportedMediaType"
         "500":
           $ref: "#/components/responses/InternalFailure"
+
+  /fhir/R4/{resourceType}/_search:
+    parameters:
+      - $ref: "#/components/parameters/ResourceType"
+    post:
+      tags: [FHIR]
+      summary: Search (posted)
+      description: |
+        The same search as the type-level `GET`, with the parameters in a
+        form-encoded body. R4 offers it so a query too long or too sensitive for
+        a URL is not one a client has to shorten; the two resolve identically.
+
+        Parameters given in the URL are read as well, so a client may split them.
+        The body must be `application/x-www-form-urlencoded`: this is the one
+        route that reads a form, and a resource submitted as one is refused.
+      operationId: searchResourcesByPost
+      requestBody:
+        required: true
+        content:
+          application/x-www-form-urlencoded:
+            schema:
+              type: string
+              description: The search parameters, encoded as a query string.
+      responses:
+        "200":
+          $ref: "#/components/responses/SearchResults"
+        "400":
+          $ref: "#/components/responses/Invalid"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "406":
+          $ref: "#/components/responses/NotAcceptable"
+        "415":
+          $ref: "#/components/responses/UnsupportedMediaType"
+        "500":
+          $ref: "#/components/responses/InternalFailure"
+    get:
+      tags: [FHIR]
+      summary: Search (wrong method)
+      description: |
+        `_search` is a reserved segment, not a logical id. Every method the
+        instance route answers is refused here, so none of them reads it as one.
+      operationId: getTypeSearch
+      responses:
+        "501":
+          $ref: "#/components/responses/NotImplemented"
+    put:
+      tags: [FHIR]
+      summary: Search (wrong method)
+      description: The reserved segment is not a logical id, so an update to it is unimplemented.
+      operationId: putTypeSearch
+      responses:
+        "501":
+          $ref: "#/components/responses/NotImplemented"
+    delete:
+      tags: [FHIR]
+      summary: Search (wrong method)
+      description: The reserved segment is not a logical id, so a delete of it is unimplemented.
+      operationId: deleteTypeSearch
+      responses:
+        "501":
+          $ref: "#/components/responses/NotImplemented"
+
+  /fhir/R4/_search:
+    get:
+      tags: [FHIR]
+      summary: Whole-system search (not implemented)
+      description: |
+        Searching across every type is not implemented. The route exists so the
+        reserved segment answers as an unimplemented interaction rather than
+        being read as a resource type nobody declared.
+      operationId: searchEverything
+      responses:
+        "501":
+          $ref: "#/components/responses/NotImplemented"
+    post:
+      tags: [FHIR]
+      summary: Whole-system search (not implemented)
+      description: Searching across every type is not implemented.
+      operationId: postSearchEverything
+      responses:
+        "501":
+          $ref: "#/components/responses/NotImplemented"
+
+  /fhir/R4/_history:
+    get:
+      tags: [FHIR]
+      summary: Whole-system history (not implemented)
+      description: |
+        The history of every resource is not implemented. The route exists so the
+        reserved segment answers as an unimplemented interaction rather than
+        being read as a resource type nobody declared.
+      operationId: getEverythingHistory
+      responses:
+        "501":
+          $ref: "#/components/responses/NotImplemented"
+    post:
+      tags: [FHIR]
+      summary: Whole-system history (not implemented)
+      description: The history of every resource is not implemented.
+      operationId: postEverythingHistory
+      responses:
+        "501":
+          $ref: "#/components/responses/NotImplemented"
 
   /fhir/R4/{resourceType}/_history:
     parameters:
@@ -419,6 +552,43 @@ components:
         type: string
       example: Organization
 
+    SearchCount:
+      name: _count
+      in: query
+      required: false
+      description: |
+        How many resources one page carries, between 1 and 200. An unbounded
+        page would be one request that can read a Project.
+      schema:
+        type: integer
+        minimum: 1
+        maximum: 200
+        default: 20
+
+    SearchCursor:
+      name: _cursor
+      in: query
+      required: false
+      description: |
+        Where a page resumes from. It is this server's own parameter rather than
+        one R4 defines: a client follows the `next` link a Bundle carries and
+        never builds it.
+      schema:
+        type: string
+
+    SearchTotal:
+      name: _total
+      in: query
+      required: false
+      description: |
+        Whether to count every match rather than only the page. `estimate` is
+        refused: this build has no estimate to give, and answering with an
+        accurate count would make the parameter a lie.
+      schema:
+        type: string
+        enum: [none, accurate]
+        default: none
+
     LogicalID:
       name: id
       in: path
@@ -633,6 +803,64 @@ components:
           items:
             $ref: "#/components/schemas/BundleEntry"
 
+    SearchBundle:
+      type: object
+      description: |
+        One page of the resources a search matched. Every entry is a match:
+        nothing is included alongside one, because `_include` is not implemented
+        and an entry nobody asked for would be indistinguishable from one they
+        did.
+      required: [resourceType, type]
+      properties:
+        resourceType:
+          type: string
+          const: Bundle
+        type:
+          type: string
+          const: searchset
+        total:
+          type: integer
+          description: |
+            How many resources match in total, across every page. Present only
+            when `_total=accurate` asked for it: an absent total and a wrong one
+            are very different promises.
+        link:
+          type: array
+          description: |
+            `self` is the search that produced this page. `next` is present only
+            when a further page exists, because a link offered when nothing
+            follows is a promise the next request breaks.
+          items:
+            type: object
+            required: [relation, url]
+            properties:
+              relation:
+                type: string
+                enum: [self, next]
+              url:
+                type: string
+        entry:
+          type: array
+          items:
+            $ref: "#/components/schemas/SearchEntry"
+
+    SearchEntry:
+      type: object
+      required: [fullUrl, resource, search]
+      properties:
+        fullUrl:
+          type: string
+          description: The absolute URL of the matched resource.
+        resource:
+          $ref: "#/components/schemas/Resource"
+        search:
+          type: object
+          required: [mode]
+          properties:
+            mode:
+              type: string
+              const: match
+
     BundleEntry:
       type: object
       description: |
@@ -740,6 +968,13 @@ components:
         application/fhir+json:
           schema:
             $ref: "#/components/schemas/Resource"
+
+    SearchResults:
+      description: One page of the resources the search matched.
+      content:
+        application/fhir+json:
+          schema:
+            $ref: "#/components/schemas/SearchBundle"
 
     History:
       description: The resource's versions, newest first.

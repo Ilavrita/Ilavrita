@@ -125,10 +125,19 @@ type ResourceInteraction struct {
 // ResourceCapability declares the interactions Ilavrita supports for one
 // resource type.
 type ResourceCapability struct {
-	Type         string                `json:"type"`
-	Interaction  []ResourceInteraction `json:"interaction,omitempty"`
-	Versioning   string                `json:"versioning"`
-	UpdateCreate bool                  `json:"updateCreate"`
+	Type         string                  `json:"type"`
+	Interaction  []ResourceInteraction   `json:"interaction,omitempty"`
+	SearchParam  []SearchParamCapability `json:"searchParam,omitempty"`
+	Versioning   string                  `json:"versioning"`
+	UpdateCreate bool                    `json:"updateCreate"`
+}
+
+// SearchParamCapability declares one search parameter a type answers. A
+// statement listing a parameter the server refuses would send clients to write
+// queries it will not run.
+type SearchParamCapability struct {
+	Name string `json:"name"`
+	Type string `json:"type"`
 }
 
 // RestCapability describes one RESTful endpoint of the server.
@@ -173,6 +182,12 @@ type CapabilityConfig struct {
 	Published       time.Time
 	BaseURL         string
 	Interactions    []Interaction
+
+	// SearchParameters answers what one type may be searched by. It is supplied
+	// rather than known here, because the registry of parameters and the routes
+	// that serve them are the caller's to keep in step; this package would only
+	// be a third place they could fall out of step at.
+	SearchParameters func(resourceType string) []SearchParamCapability
 }
 
 // NewCapabilityStatement describes this deployment. It states what the server
@@ -191,30 +206,41 @@ func NewCapabilityStatement(config CapabilityConfig) CapabilityStatement {
 			Version: config.SoftwareVersion,
 		},
 		Implementation: ImplementationDetail{
-			Description: "Ilavrita server. The by-key interactions below are implemented; " +
-				"search, transactions and conditional operations answer 501.",
+			Description: "Ilavrita server. The interactions and search parameters below are " +
+				"implemented; transactions and conditional operations answer 501.",
 			URL: config.BaseURL,
 		},
-		Rest: []RestCapability{{Mode: "server", Resource: servedResources(config.Interactions)}},
+		Rest: []RestCapability{{Mode: "server", Resource: servedResources(config)}},
 	}
 }
 
 // servedResources gives every declared type the interactions the router
 // registered, which is what makes the declaration match the dispatch. Serving
 // none declares no resource: a type with nothing to do on it is not an endpoint.
-func servedResources(interactions []Interaction) []ResourceCapability {
-	if len(interactions) == 0 {
+func servedResources(config CapabilityConfig) []ResourceCapability {
+	if len(config.Interactions) == 0 {
 		return nil
 	}
 
+	searchable := slices.Contains(config.Interactions, InteractionSearchType)
+
 	resources := make([]ResourceCapability, 0, len(servedResourceTypes))
+
 	for _, name := range servedResourceTypes {
-		resources = append(resources, ResourceCapability{
+		held := ResourceCapability{
 			Type:         name,
-			Interaction:  declared(interactions),
+			Interaction:  declared(config.Interactions),
 			Versioning:   "versioned",
 			UpdateCreate: true,
-		})
+		}
+
+		// Parameters are advertised only where the interaction that uses them
+		// is, so a statement cannot name a way to search a server that does not.
+		if searchable && config.SearchParameters != nil {
+			held.SearchParam = config.SearchParameters(name)
+		}
+
+		resources = append(resources, held)
 	}
 
 	return resources

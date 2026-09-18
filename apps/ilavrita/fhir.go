@@ -110,6 +110,22 @@ func registerFHIRRoutes(routes *router.Router[*core.RequestEvent]) {
 	base.Any(everythingElse, rejectUnimplemented)
 }
 
+// advertisedSearchParameters is what one type may actually be searched by. It
+// reads the same registry the query parser reads, so a statement cannot name a
+// parameter a search would refuse.
+func advertisedSearchParameters(resourceType string) []fhir.SearchParamCapability {
+	supported := search.Supported(storage.ResourceType(resourceType))
+	declared := make([]fhir.SearchParamCapability, 0, len(supported))
+
+	for _, parameter := range supported {
+		declared = append(declared, fhir.SearchParamCapability{
+			Name: parameter.Name(), Type: string(parameter.Kind()),
+		})
+	}
+
+	return declared
+}
+
 // instanceMethods is every method registered on the instance path, which is
 // exactly what could otherwise match a reserved segment as a logical id.
 func instanceMethods() []string {
@@ -138,10 +154,11 @@ func describeCapabilities(request *core.RequestEvent) error {
 	}
 
 	statement := fhir.NewCapabilityStatement(fhir.CapabilityConfig{
-		SoftwareVersion: version,
-		Published:       startedAt,
-		BaseURL:         base,
-		Interactions:    advertisedInteractions(),
+		SoftwareVersion:  version,
+		Published:        startedAt,
+		BaseURL:          base,
+		Interactions:     advertisedInteractions(),
+		SearchParameters: advertisedSearchParameters,
 	})
 
 	return respondFHIR(request, http.StatusOK, statement)

@@ -285,3 +285,74 @@ func TestAWholeSystemInteractionIsNotAResourceType(t *testing.T) {
 			http.StatusNotImplemented, fhir.CodeNotSupported)
 	}
 }
+
+// TestEveryAdvertisedSearchParameterIsOneThisServerAnswers. A statement naming
+// a parameter the server refuses sends clients to write queries it will not
+// run, which is the same failure as advertising an interaction nobody
+// implemented.
+func TestEveryAdvertisedSearchParameterIsOneThisServerAnswers(t *testing.T) {
+	routes := servingFHIR(t, everyAction)
+
+	for _, resource := range advertised(t) {
+		if len(resource.SearchParam) == 0 {
+			t.Errorf("%s advertises the search interaction and no parameters", resource.Type)
+		}
+
+		for _, parameter := range resource.SearchParam {
+			answer := call{
+				method: http.MethodGet,
+				path:   fhir.BasePath + "/" + resource.Type + "?" + url.QueryEscape(parameter.Name) + "=x",
+			}.send(t, routes)
+
+			// A value the parameter cannot take is still a parameter this
+			// server implements, so anything but "no such parameter" will do.
+			if answer.Code == http.StatusBadRequest &&
+				strings.Contains(answer.Body.String(), "does not implement that search parameter") {
+				t.Errorf("%s advertises %s, which it then refuses", resource.Type, parameter.Name)
+			}
+		}
+	}
+}
+
+// TestNoParameterIsAnsweredWithoutBeingAdvertised, so the registry and the
+// statement are checked against each other in both directions.
+func TestNoParameterIsAnsweredWithoutBeingAdvertised(t *testing.T) {
+	routes := servingFHIR(t, everyAction)
+
+	for _, resource := range advertised(t) {
+		named := map[string]bool{}
+		for _, parameter := range resource.SearchParam {
+			named[parameter.Name] = true
+		}
+
+		for _, parameter := range advertisedSearchParameters(resource.Type) {
+			if !named[parameter.Name] {
+				t.Errorf("%s answers %s without advertising it", resource.Type, parameter.Name)
+			}
+		}
+	}
+
+	_ = routes
+}
+
+// TestEveryDeclaredParameterBuilds. The registry panics on a malformed
+// declaration rather than half-building itself, so this is what proves the
+// table is well formed for every type this build serves.
+func TestEveryDeclaredParameterBuilds(t *testing.T) {
+	for _, name := range fhir.ServedResourceTypes() {
+		parameters := advertisedSearchParameters(name)
+		if len(parameters) < 2 {
+			t.Errorf("%s declares %d parameters, want at least the universal ones", name, len(parameters))
+		}
+
+		seen := map[string]bool{}
+
+		for _, parameter := range parameters {
+			if seen[parameter.Name] {
+				t.Errorf("%s declares %s twice", name, parameter.Name)
+			}
+
+			seen[parameter.Name] = true
+		}
+	}
+}
