@@ -3,8 +3,10 @@ package main
 import (
 	"context"
 	"database/sql"
+	"time"
 
 	"github.com/Ilavrita/Ilavrita/packages/authz"
+	"github.com/Ilavrita/Ilavrita/packages/project"
 	"github.com/Ilavrita/Ilavrita/packages/storage"
 	sqlite "github.com/Ilavrita/Ilavrita/packages/storage/pocketbase"
 	"github.com/pocketbase/pocketbase/core"
@@ -18,14 +20,23 @@ var serving *backend
 // backend is everything a FHIR route needs: the stores, the ports one
 // authorization decision reads, and whatever names the caller.
 type backend struct {
-	resources            *sqlite.ResourceStore
-	users                *sqlite.UserStore
-	projects             *sqlite.ProjectStore
-	sessions             *sqlite.SessionStore
-	memberships          *sqlite.MembershipStore
-	applications         *sqlite.ClientApplicationStore
-	resolvers            authz.Resolvers
-	developmentPrincipal *caller
+	resources    *sqlite.ResourceStore
+	users        *sqlite.UserStore
+	projects     *sqlite.ProjectStore
+	sessions     sessionResolver
+	memberships  *sqlite.MembershipStore
+	applications *sqlite.ClientApplicationStore
+	resolvers    authz.Resolvers
+}
+
+// sessionResolver is the whole of what this server does with sessions: issue one
+// when a credential is proved, turn a presented token back into it, and destroy
+// it. It is an interface so a test can decide what a token means without the
+// process holding any other way to name a principal.
+type sessionResolver interface {
+	Issue(ctx context.Context, session project.Session) error
+	Resolve(ctx context.Context, token project.SessionToken, now time.Time) (project.Session, bool, error)
+	Revoke(ctx context.Context, proj project.ID, id project.SessionID, at time.Time) error
 }
 
 // access is what one authorized interaction may do: the storage it reads and
@@ -51,15 +62,12 @@ type decision struct {
 // here is fatal: a server that cannot reach its own database must not answer
 // requests it would answer wrongly.
 func startServing(app core.App) error {
-	developmentPrincipal, err := configuredDevelopmentPrincipal()
+	published, err := configuredAddress()
 	if err != nil {
 		return err
 	}
 
-	publishing, err = configuredAddress()
-	if err != nil {
-		return err
-	}
+	publishing = published
 
 	db, err := openDatabase(app.DataDir())
 	if err != nil {
@@ -78,15 +86,14 @@ func startServing(app core.App) error {
 		return terminate.Next()
 	})
 
-	serving = newBackend(db.DB(), developmentPrincipal)
-	warnAboutDevelopmentPrincipal(developmentPrincipal)
+	serving = newBackend(db.DB())
 
 	return nil
 }
 
 // newBackend binds one database to every port. Built once, because a store built
 // per request would open a second pool on every call.
-func newBackend(db *sql.DB, developmentPrincipal *caller) *backend {
+func newBackend(db *sql.DB) *backend {
 	return &backend{
 		resources:    sqlite.NewResourceStore(db),
 		users:        sqlite.NewUserStore(db),
@@ -100,7 +107,6 @@ func newBackend(db *sql.DB, developmentPrincipal *caller) *backend {
 			Policies:    sqlite.NewPolicyResolver(db),
 			Links:       sqlite.NewLinkStore(db),
 		},
-		developmentPrincipal: developmentPrincipal,
 	}
 }
 

@@ -45,9 +45,6 @@ func authenticatedServer(t *testing.T) (http.Handler, *sql.DB) {
 			Policies:    sqlite.NewPolicyResolver(db),
 			Links:       sqlite.NewLinkStore(db),
 		},
-
-		// No development principal: a request authenticates or it does not.
-		developmentPrincipal: nil,
 	})
 
 	return allRoutes(t), db

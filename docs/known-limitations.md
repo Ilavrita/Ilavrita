@@ -94,9 +94,8 @@ disabled identity and an identity holding no standing in the Project are the sam
 telling them apart tells an attacker which addresses and Projects exist.
 
 **What is still missing:** there is no audit trail, no MFA, and no rate limit on the login route,
-so a password can be guessed as fast as argon2id answers. `ILAVRITA_DEV_PRINCIPAL` below still
-resolves a request when no session is presented, and clinical resource types are withheld until
-it is removed.
+so a password can be guessed as fast as argon2id answers. There is no refresh: a session simply
+expires and the credential is proved again.
 
 ## Out of scope for v0.1
 

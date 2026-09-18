@@ -424,22 +424,11 @@ route exempt from this: it names no resource, touches no storage, and R4 practic
 discovery flow) expects a `CapabilityStatement` to be reachable before a client has authenticated at
 all — `describeCapabilities` is unchanged by this document.
 
-**REST-31 — the env var.** `ILAVRITA_DEV_PRINCIPAL`, following the `ILAVRITA_*` convention already
-established by `.env.example` and `ILAVRITA_EXPOSE_POCKETBASE`. Format (synthesis):
-
-```
-ILAVRITA_DEV_PRINCIPAL=<project-id>:<principal-kind>:<principal-id>
-```
-
-`<principal-kind>` ∈ `{user, client_application, bot}` (`project.PrincipalKind`, `packages/project/
-membership.go`); `<project-id>` must pass `project.ValidateID`. Unset or empty → REST-30's `401` applies
-to every request the process serves; nothing else about the resolver runs.
-
-A `client_application` or `bot` id must additionally pass `project.ValidateClientApplicationID` or
-`project.ValidateBotID`, because the membership resolver gates a machine principal on a live row in
-`client_applications` or `bots` and those tables constrain the id's namespace. An id outside it matches
-nothing, so it is refused under REST-32 rather than starting a process that answers `401` to every
-request as though a policy had decided it.
+**REST-31 — superseded.** This rule described `ILAVRITA_DEV_PRINCIPAL`, a scaffold that named a
+principal without checking a credential. It was removed when `POST /auth/login` landed: a request
+now names a principal by presenting a session token and by nothing else. What the rule was
+protecting — that a misconfiguration must never silently degrade into an implicit identity — is
+now structural, because there is no configuration to misread.
 
 **REST-32 — fail closed on malformed configuration.** The value is parsed once, at process startup, the
 same posture `AssertForeignKeysEnforced` (`packages/storage/pocketbase/schema.go`) already takes for a
@@ -555,10 +544,10 @@ intended.
   containing none of the wrapped Go error's own text (REST-29 for the `ErrScopeEscape` case especially).
 - `403` never appears for a row-specific denial and `404`/`410` never appear for a capability-level one
   (REST-26).
-- no principal configured → `401` on all six routes, `200` still on `/fhir/R4/metadata` (REST-30).
-- a malformed `ILAVRITA_DEV_PRINCIPAL` refuses to start the process, never silently falls back to
-  deny-by-default (REST-32).
-- a Project-A dev principal can never reach a Project-B resource by key even across an active `Link`
+- no session presented → `401` on every route, `200` still on `/fhir/R4/metadata` (REST-30).
+- a token that names no live session reaches nothing, and an unknown, revoked and expired token are
+  the same answer (REST-31).
+- a Project-A session can never reach a Project-B resource by key even across an active `Link`
   (REST-36).
 - `api/openapi.yaml`'s `Issue.code` enum carries `deleted`, `duplicate`, `login` and `forbidden` before
   any of this document's handlers ship (REST-27, REST-28) — `scripts/verify-openapi.sh` is the backstop,

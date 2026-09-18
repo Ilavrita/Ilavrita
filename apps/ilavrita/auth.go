@@ -270,6 +270,12 @@ func describeSession(request *core.RequestEvent) error {
 // session resolves the token a request presents, or nothing. A malformed header
 // and an unknown token are the same answer: nothing named a session.
 func (b *backend) session(request *core.RequestEvent) (project.Session, bool, error) {
+	// A backend with no session port names nobody. It is a wiring mistake rather
+	// than a decision, but the answer that fails closed is the same one.
+	if b.sessions == nil {
+		return project.Session{}, false, nil
+	}
+
 	raw := strings.TrimSpace(request.Request.Header.Get(authorizationField))
 	if !strings.HasPrefix(raw, bearerPrefix) {
 		return project.Session{}, false, nil

@@ -61,7 +61,7 @@ func TestPrepareDatabaseRefusesWithoutForeignKeys(t *testing.T) {
 // A nil port is a wiring mistake authz reports as a failed decision, which would
 // turn every FHIR request into a 500 rather than an authorization answer.
 func TestBackendWiresEveryAuthorizationPort(t *testing.T) {
-	wired := newBackend(preparedDatabase(t), nil)
+	wired := newBackend(preparedDatabase(t))
 
 	switch {
 	case wired.resolvers.Memberships == nil:

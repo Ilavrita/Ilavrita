@@ -2,8 +2,11 @@ package main
 
 import (
 	"errors"
+	"io/fs"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"strings"
 	"testing"
 
 	"github.com/Ilavrita/Ilavrita/packages/fhir"
@@ -35,137 +38,54 @@ func readPatient() decision {
 	return decision{Kind: storage.KindFHIR, Type: "Patient", Action: storage.ActionRead}
 }
 
-// Nothing configured is the state a deployment runs in by default, and it must
-// identify nobody rather than fall back to some implicit identity.
-func TestAbsentDevelopmentPrincipalIdentifiesNobody(t *testing.T) {
-	request, _ := readRequest(t)
+// TestNoEnvironmentVariableNamesAPrincipal. The development principal was the
+// one path that proved nothing, and it is gone: a request authenticates through
+// a session or it reaches nothing at all.
+func TestNoEnvironmentVariableNamesAPrincipal(t *testing.T) {
+	for _, name := range []string{"principal.go", "server.go", "auth.go"} {
+		source := readSource(t, name)
 
-	if _, err := (&backend{}).resolve(request); !errors.Is(err, errNoPrincipal) {
-		t.Fatalf("resolve without a development principal: %v, want errNoPrincipal", err)
-	}
-}
-
-func TestAuthorizeWithoutAPrincipalReachesNoScope(t *testing.T) {
-	request, _ := readRequest(t)
-	serve(t, &backend{})
-
-	granted, err := authorize(request, readPatient())
-	if !errors.Is(err, errNoPrincipal) {
-		t.Fatalf("authorize without a development principal: %v, want errNoPrincipal", err)
-	}
-
-	if !granted.Scope.IsEmpty() || granted.Resources != nil || granted.Versions != nil {
-		t.Fatal("a refused request must reach neither a Scope nor a store")
-	}
-}
-
-// A route reaching the wiring before startup built it must deny, not panic and
-// not answer from a database nobody opened.
-func TestAuthorizeWithoutAWiredBackendRefuses(t *testing.T) {
-	request, _ := readRequest(t)
-
-	if _, err := authorize(request, readPatient()); !errors.Is(err, errNotServing) {
-		t.Fatalf("authorize on an unwired server: %v, want errNotServing", err)
-	}
-}
-
-func TestConfiguredDevelopmentPrincipalUnsetIsNotAFailure(t *testing.T) {
-	t.Setenv(developmentPrincipalVariable, "")
-
-	configured, err := configuredDevelopmentPrincipal()
-	if err != nil {
-		t.Fatalf("unset %s: %v", developmentPrincipalVariable, err)
-	}
-
-	if configured != nil {
-		t.Fatalf("unset %s resolved to %+v, want no principal", developmentPrincipalVariable, configured)
-	}
-}
-
-// TestAMachineDevelopmentPrincipalOutsideItsNamespaceRefusesToStart. Such a
-// principal matches no registry row, so the process would start and then answer
-// 401 to everything, which reads as a policy decision rather than a typo.
-func TestAMachineDevelopmentPrincipalOutsideItsNamespaceRefusesToStart(t *testing.T) {
-	refused := map[string]string{
-		"a client application with no prefix": "clinic-a:client_application:loader",
-		"a client application miscased":       "clinic-a:client_application:CLI_loader",
-		"a bot with no prefix":                "clinic-a:bot:worker",
-		"a bot carrying the client prefix":    "clinic-a:bot:cli_worker",
-	}
-
-	for name, value := range refused {
-		t.Setenv(developmentPrincipalVariable, value)
-
-		configured, err := configuredDevelopmentPrincipal()
-		if err == nil {
-			t.Errorf("%s started the process as %+v", name, configured)
+		if strings.Contains(source, "os.Getenv") && strings.Contains(source, "caller{") {
+			t.Errorf("%s builds a caller from the environment", name)
 		}
 
-		if configured != nil {
-			t.Errorf("%s resolved to %+v rather than refusing", name, configured)
+		if strings.Contains(source, "ILAVRITA_DEV_PRINCIPAL") {
+			t.Errorf("%s still names the development principal", name)
 		}
 	}
-
-	// A user principal is unaffected: it resolves against users, which carries no
-	// namespace prefix of its own.
-	t.Setenv(developmentPrincipalVariable, "clinic-a:user:usr_1")
-
-	if _, err := configuredDevelopmentPrincipal(); err != nil {
-		t.Errorf("a user principal was refused: %v", err)
-	}
 }
 
-func TestConfiguredDevelopmentPrincipalReadsTheWholeValue(t *testing.T) {
-	t.Setenv(developmentPrincipalVariable, "clinic-a:client_application:cli_loader")
+// readSource reads one file in this package, through the package directory as a
+// file system so a source-reading test cannot be handed a path that leaves it.
+func readSource(t *testing.T, name string) string {
+	t.Helper()
 
-	configured, err := configuredDevelopmentPrincipal()
+	source, err := fs.ReadFile(os.DirFS("."), name)
 	if err != nil {
-		t.Fatalf("parse a well-formed value: %v", err)
+		t.Fatalf("read %s: %v", name, err)
 	}
 
-	want := caller{
-		project:   project.ID("clinic-a"),
-		principal: project.PrincipalRef{Kind: project.PrincipalClientApplication, ID: "cli_loader"},
-	}
-
-	if *configured != want {
-		t.Fatalf("configured principal %+v, want %+v", *configured, want)
-	}
+	return string(source)
 }
 
-// Every one of these is a typo an operator could plausibly make, and each must
-// stop the process rather than degrade it to a principal nobody intended.
-func TestMalformedDevelopmentPrincipalRefusesToStart(t *testing.T) {
-	malformed := map[string]string{
-		"no parts":           "clinic-a",
-		"two parts":          "clinic-a:user",
-		"four parts":         "clinic-a:user:alice:extra",
-		"empty project":      ":user:alice",
-		"wildcard project":   "*:user:alice",
-		"unknown kind":       "clinic-a:wizard:alice",
-		"empty kind":         "clinic-a::alice",
-		"empty principal id": "clinic-a:user:",
-		"blank principal id": "clinic-a:user:   ",
-		"nothing but colons": "::",
-	}
-
-	for name, value := range malformed {
-		t.Run(name, func(t *testing.T) {
-			if _, err := parseDevelopmentPrincipal(value); err == nil {
-				t.Fatalf("%q was accepted, want a refusal", value)
-			}
-		})
-	}
-}
-
-// The configured Project is the only one a by-key request can ever name, which
-// is what keeps a Project-A principal from reaching Project B (REST-36).
-func TestAuthorizationRequestNamesOnlyTheConfiguredProject(t *testing.T) {
+// TestARequestCarryingNoSessionIdentifiesNobody. Deny by default is the state a
+// deployment runs in, and nothing falls back to an implicit identity.
+func TestARequestCarryingNoSessionIdentifiesNobody(t *testing.T) {
 	request, _ := readRequest(t)
-	wired := &backend{developmentPrincipal: &caller{
-		project:   project.ID("clinic-a"),
-		principal: project.PrincipalRef{Kind: project.PrincipalUser, ID: "alice"},
-	}}
+	wired := &backend{sessions: fixedSession{proj: "clinic-a", principal: conformancePrincipal}}
+
+	if _, err := wired.resolve(request); !errors.Is(err, errNoPrincipal) {
+		t.Fatalf("a request with no session resolved: %v", err)
+	}
+}
+
+// TestASessionNamesTheProjectItWasIssuedFor, which is the only Project a by-key
+// request can ever reach (REST-36).
+func TestASessionNamesTheProjectItWasIssuedFor(t *testing.T) {
+	request, _ := readRequest(t)
+	request.Request.Header.Set(authorizationField, bearerPrefix+"a-token")
+
+	wired := &backend{sessions: fixedSession{proj: "clinic-a", principal: conformancePrincipal}}
 
 	decided, err := wired.authorizationRequest(request, readPatient())
 	if err != nil {

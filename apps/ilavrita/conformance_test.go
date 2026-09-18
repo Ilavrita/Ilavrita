@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/Ilavrita/Ilavrita/packages/authz"
 	"github.com/Ilavrita/Ilavrita/packages/fhir"
@@ -26,9 +27,16 @@ const (
 	conformancePolicyID = storage.LogicalID("pol_conformance")
 )
 
+// conformanceIssued is when the stub session was minted, so its life is stated
+// rather than measured against a clock the suite cannot hold still.
+var conformanceIssued = time.Now().UTC().Add(-time.Minute)
+
+// A session is what a password login issues, and a password belongs to a person,
+// so the principal these tests are served as is a user. A client application
+// authenticates by presenting its own secret, which is a separate path.
 var conformancePrincipal = project.PrincipalRef{
-	Kind: project.PrincipalClientApplication,
-	ID:   "conformance",
+	Kind: project.PrincipalUser,
+	ID:   "usr_conformance",
 }
 
 // everyAction is what a principal exercising all six interactions must hold.
@@ -50,6 +58,42 @@ func (f fixedMembership) Membership(
 	}
 
 	return f.held, true, nil
+}
+
+// fixedSession answers with one session for any token, and with none when no
+// token is presented. These tests are about the FHIR surface rather than about
+// authentication, but the surface is now reachable only through a session, so
+// they have to carry one.
+type fixedSession struct {
+	proj      project.ID
+	principal project.PrincipalRef
+}
+
+func (f fixedSession) Issue(context.Context, project.Session) error {
+	return nil
+}
+
+func (f fixedSession) Resolve(
+	_ context.Context, token project.SessionToken, _ time.Time,
+) (project.Session, bool, error) {
+	if token.IsZero() {
+		return project.Session{}, false, nil
+	}
+
+	held, err := project.NewSession(f.proj, project.SessionRecord{
+		ID: "ses_conformance", User: project.UserID(f.principal.ID),
+		Membership: "pm_conformance", Digest: token.Digest(), State: project.SessionActive,
+		CreatedAt: conformanceIssued, ExpiresAt: conformanceIssued.Add(time.Hour),
+	})
+	if err != nil {
+		return project.Session{}, false, err
+	}
+
+	return held, true, nil
+}
+
+func (f fixedSession) Revoke(context.Context, project.ID, project.SessionID, time.Time) error {
+	return nil
 }
 
 type activeProject struct{}
@@ -151,7 +195,7 @@ func serveUnder(t *testing.T, db *sql.DB, proj project.ID, policy authz.AccessPo
 			Policies:    fixedPolicy{policy},
 			Links:       noProjectLinks{},
 		},
-		developmentPrincipal: &caller{project: proj, principal: conformancePrincipal},
+		sessions: fixedSession{proj: proj, principal: conformancePrincipal},
 	})
 }
 
@@ -265,6 +309,7 @@ type call struct {
 	contentType string
 	host        string
 	origin      string
+	anonymous   bool
 }
 
 func (c call) send(t *testing.T, routes http.Handler) *httptest.ResponseRecorder {
@@ -298,6 +343,12 @@ func (c call) send(t *testing.T, routes http.Handler) *httptest.ResponseRecorder
 
 	if c.origin != "" {
 		sent.Header.Set(originField, c.origin)
+	}
+
+	// The surface authenticates now, so a call that names no session reaches
+	// nothing. A test that wants that answer sets anonymous.
+	if !c.anonymous {
+		sent.Header.Set(authorizationField, bearerPrefix+"conformance-token")
 	}
 
 	recorder := httptest.NewRecorder()
