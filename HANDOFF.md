@@ -251,16 +251,71 @@ only when a page follows, `total` only when `_total=accurate` asked for one.
 Search is its own action. A Scope may let a clinician read any chart they are handed the id of
 and search only their own patients, so the read Grant is never compiled into a search.
 
-**4. Then the rest.** Binary and DocumentReference payloads over storage, and subscriptions on the
-runtime's WebSockets.
+**4. Binary payloads. Done.** A `Binary` is served, and its bytes live outside the row that
+describes them: a row carrying megabytes would make every read of the metadata pay for them and
+every backup carry them. Send the document under its own media type with `X-Security-Context`
+naming what governs access to it, or send it as a resource with `data` base64-encoded — either
+way the bytes land in the same place and the row records what they are. Reading it back answers
+the document when the `Accept` names its media type and the resource otherwise; `*/*` answers the
+resource, because every other route does.
+
+`securityContext` is what places a Binary in a compartment. R4 puts a Binary in none of its own —
+it is bytes, and what they are about is only knowable from whatever points at them — so a Binary
+naming nothing lands nowhere and a confined caller cannot write it. That is the right answer for
+an unattributed document in a clinical server.
+
+**5. Subscriptions. Done.** A write records one row saying it happened; a worker outside every
+request turns that into the notifications it owes. Matching inside the write would make each
+write cost as much as the subscription list is long.
+
+What a subscriber is told is decided by running *their own criteria under their own Scope*, so
+matching and authorization are one question rather than two that could disagree. A subscription
+cannot be a way around a Scope, and standing withdrawn is a subscription that stops delivering
+rather than one that goes on delivering as somebody who is no longer there. The queue carries the
+resource's key and never its content, so access withdrawn between the write and the notification
+is access the notification does not have.
+
+`rest-hook` posts to the URL a subscriber registered, retrying six times over about half an hour.
+The address is theirs and the request is this server's, so the dialer refuses loopback, private
+and link-local addresses — otherwise registering a subscription would be a way to make this
+server reach anything it can, cloud metadata included. `ILAVRITA_ALLOW_PRIVATE_HOOKS=true` opts a
+development deployment out.
+
+`websocket` pings whoever is bound, over `GET /fhir/R4/ws`. A subscriber carries its session
+token in the `ilavrita.session.<token>` subprotocol, because a browser can set nothing else on a
+WebSocket and a token in the URL ends up in every access log. It may bind only to its own
+subscription: knowing when somebody else's fires is knowing something about the data behind it.
+
+**PocketBase's realtime is not this.** It is Server-Sent Events, not WebSockets, it lives under
+`/api/` which this build blocks, and it knows nothing about a Scope. None of it was reusable.
+
+The socket channel is best-effort by design. A deployment running several replicas has each
+subscriber connected to one of them, and a notification worked out on another has nobody there to
+tell — recorded as never delivered rather than retried, because retrying would not move it to the
+replica holding the socket. `rest-hook` is the channel that survives that.
 
 Every type this build advertises is already classified: 38 are non-clinical, so an unrestricted
 rule may cover them, and the other 28 all derive compartments, so a confined rule can reach them.
 `TestEveryAdvertisedClinicalTypeCanBePlaced` is what keeps that true. Classifying is therefore
 what it costs to advertise the *next* type, not a gap in the ones already served.
 
-Still open from earlier: **MFA**, and a login throttle that is per process rather than per
-install. Search parameters are deliberately a short list — `packages/search/registry.go` is the
+**6. Second factors and the login throttle. Done.** An identity may enrol a TOTP factor at
+`POST /auth/mfa`; it is pending until a code proves it, so nothing can lock somebody out of their
+own account except their own phone. The code is carried with the password rather than asked for
+afterwards — a server that answered "now the code, please" would be saying the password was
+right, and would say it to anyone who guessed an address that exists. A refused code, a wrong
+password and an unknown address are one answer.
+
+The secret is sealed with `ILAVRITA_SEALING_KEY` (32 bytes, base64). Unlike a password it cannot
+be hashed: the server computes the same code the phone does, so whatever holds it holds the
+factor. Sealing means a leaked database file is not a list of everyone's second factor. A
+deployment that configured no key holds no factors rather than storing them in the clear.
+
+Login attempts are now counted across the install rather than within one process — three replicas
+would otherwise allow three times the guesses the limit states. The keys are digests: a table of
+who tried to log in and failed is a list of this install's users and where they were.
+
+Search parameters are deliberately a short list — `packages/search/registry.go` is the
 whole of what this build answers, and adding one means adding a projection a write maintains and
 a predicate a read compiles.
 
