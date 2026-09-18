@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"net/http"
 	"testing"
 
@@ -152,4 +153,156 @@ func TestAFilterOverASetAdmitsEveryValueItNamesOverHTTP(t *testing.T) {
 		method: http.MethodPost, path: fhir.BasePath + "/Observation",
 		body: finalObservation("registered"),
 	}.send(t, routes), http.StatusForbidden, fhir.CodeForbidden)
+}
+
+// richObservation carries members a projection can withhold, subject to the
+// patient the conformance policy is confined to.
+func richObservation() string {
+	return `{"resourceType":"Observation","status":"final",` +
+		`"note":[{"text":"private"}],"valueQuantity":{"value":7},` +
+		`"subject":{"reference":"Patient/` + string(conformancePatient) + `"}}`
+}
+
+// projectedPolicy is the conformance policy with every clinical rule returning
+// only the elements named, which is the shape a research reader holds when the
+// narrative notes are not theirs to see.
+func projectedPolicy(t *testing.T, elements ...string) authz.AccessPolicy {
+	t.Helper()
+
+	projection, err := storage.NewProjection(elements...)
+	if err != nil {
+		t.Fatalf("build the projection: %v", err)
+	}
+
+	var rules []authz.Rule
+
+	for _, name := range fhir.ServedResourceTypes() {
+		for _, action := range everyAction {
+			rule := widestRule(t, storage.ResourceType(name), action)
+
+			if authz.CarriesClinicalData(storage.ResourceType(name)) {
+				rule = rule.Returning(projection)
+			}
+
+			rules = append(rules, rule)
+		}
+	}
+
+	policy, err := authz.NewAccessPolicy(authz.PolicyConfig{
+		Project: homeProject, ID: conformancePolicyID, Rules: rules,
+	})
+	if err != nil {
+		t.Fatalf("author the projected policy: %v", err)
+	}
+
+	return policy
+}
+
+// memberNames reads which members a response body actually carries.
+func memberNames(t *testing.T, body []byte) map[string]bool {
+	t.Helper()
+
+	members := map[string]json.RawMessage{}
+	if err := json.Unmarshal(body, &members); err != nil {
+		t.Fatalf("decode the response: %v", err)
+	}
+
+	present := map[string]bool{}
+	for name := range members {
+		present[name] = true
+	}
+
+	return present
+}
+
+// TestAPolicyProjectionWithholdsElementsOverHTTP is the restriction end to end:
+// a rule naming what it returns, compiled to a Grant, applied to the row, and
+// rendered. An element the rule does not name must be absent from the response
+// rather than empty, so a reader cannot tell a withheld value from one nobody
+// recorded.
+func TestAPolicyProjectionWithholdsElementsOverHTTP(t *testing.T) {
+	db := preparedDatabase(t)
+	seedProject(t, db, homeProject)
+	serveProject(t, db, homeProject, everyAction)
+
+	created := call{
+		method: http.MethodPost, path: fhir.BasePath + "/Observation", body: richObservation(),
+	}.send(t, fhirRoutes(t))
+
+	assertStatus(t, created, http.StatusCreated)
+
+	id := resourceID(t, created)
+
+	// The whole resource was stored, so what the next reader misses is withheld
+	// rather than never written.
+	whole := memberNames(t, created.Body.Bytes())
+	for _, member := range []string{"note", "valueQuantity", "subject"} {
+		if !whole[member] {
+			t.Fatalf("%s was not stored, so this proves nothing about withholding it", member)
+		}
+	}
+
+	serveUnder(t, db, homeProject, projectedPolicy(t, "status", "subject"))
+
+	read := call{method: http.MethodGet, path: resourcePath("Observation", id)}.send(t, fhirRoutes(t))
+	assertStatus(t, read, http.StatusOK)
+
+	narrowed := memberNames(t, read.Body.Bytes())
+
+	for _, kept := range []string{"resourceType", "id", "status", "subject"} {
+		if !narrowed[kept] {
+			t.Errorf("%s was withheld but the projection returns it", kept)
+		}
+	}
+
+	for _, withheld := range []string{"note", "valueQuantity"} {
+		if narrowed[withheld] {
+			t.Errorf("%s reached a reader whose policy does not name it", withheld)
+		}
+	}
+}
+
+// TestAProjectedReaderCannotReplaceTheWholeResource. A PUT replaces content
+// wholesale, so a reader shown part of a resource would send back what they saw
+// and silently drop the rest — data loss produced by an authorization rule
+// rather than by anyone's intent.
+func TestAProjectedReaderCannotReplaceTheWholeResource(t *testing.T) {
+	db := preparedDatabase(t)
+	seedProject(t, db, homeProject)
+	serveProject(t, db, homeProject, everyAction)
+
+	created := call{
+		method: http.MethodPost, path: fhir.BasePath + "/Observation", body: richObservation(),
+	}.send(t, fhirRoutes(t))
+
+	assertStatus(t, created, http.StatusCreated)
+
+	id := resourceID(t, created)
+
+	serveUnder(t, db, homeProject, projectedPolicy(t, "status", "subject"))
+
+	routes := fhirRoutes(t)
+
+	read := call{method: http.MethodGet, path: resourcePath("Observation", id)}.send(t, routes)
+	assertStatus(t, read, http.StatusOK)
+
+	// Sending back exactly what was read is the read-modify-write a partial
+	// reader would perform, and it is refused rather than answered.
+	assertIssue(t, call{
+		method: http.MethodPut, path: resourcePath("Observation", id),
+		body: read.Body.String(),
+	}.send(t, routes), http.StatusForbidden, fhir.CodeForbidden)
+
+	// Nothing was lost.
+	serveProject(t, db, homeProject, everyAction)
+
+	after := memberNames(t, call{
+		method: http.MethodGet, path: resourcePath("Observation", id),
+	}.send(t, fhirRoutes(t)).Body.Bytes())
+
+	for _, kept := range []string{"note", "valueQuantity"} {
+		if !after[kept] {
+			t.Errorf("%s was lost by a write that should have been refused", kept)
+		}
+	}
 }

@@ -495,6 +495,7 @@ CREATE TABLE IF NOT EXISTS access_policy_rules (
   filter_path       TEXT,
   filter_comparator TEXT,
   filter_values     TEXT,
+  returns           TEXT,
 
   PRIMARY KEY (project_id, policy_id, ordinal),
 
@@ -525,6 +526,16 @@ CREATE TABLE IF NOT EXISTS access_policy_rules (
   -- Equality names exactly one value, which is what makes it a different
   -- statement from membership over a set that happens to hold one.
   CHECK (filter_comparator <> 'eq' OR json_array_length(filter_values) = 1),
+
+  -- The elements the rule hands back. NULL returns the whole resource; a list
+  -- returns those members and the ones every projection carries. An empty list
+  -- is refused because a rule returning nothing is one nobody meant to write,
+  -- and is indistinguishable from a list nothing ever bound.
+
+  -- sqlite-only: json_valid, json_type and json_array_length, as above.
+  CHECK (returns IS NULL OR (
+    json_valid(returns) AND json_type(returns) = 'array' AND json_array_length(returns) >= 1
+  )),
 
   -- An unrestricted rule says so and names no subject; a restricted one names a
   -- subject type plus either a literal id or one parameter, never both.

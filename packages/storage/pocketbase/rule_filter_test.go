@@ -198,15 +198,15 @@ func TestADriftedFilterRowDenies(t *testing.T) {
 func TestAnOlderDatabaseGainsTheFilterColumns(t *testing.T) {
 	db := legacyPolicyRulesDatabase(t)
 
-	if err := AssertRuleFilterColumns(t.Context(), db); !errors.Is(err, ErrRuleFilterColumnsMissing) {
-		t.Fatalf("the legacy table was accepted: err = %v, want %v", err, ErrRuleFilterColumnsMissing)
+	if err := AssertRuleRestrictionColumns(t.Context(), db); !errors.Is(err, ErrRuleRestrictionColumnsMissing) {
+		t.Fatalf("the legacy table was accepted: err = %v, want %v", err, ErrRuleRestrictionColumnsMissing)
 	}
 
 	if err := PrepareSchema(t.Context(), db); err != nil {
 		t.Fatalf("prepare the legacy database: %v", err)
 	}
 
-	if err := AssertRuleFilterColumns(t.Context(), db); err != nil {
+	if err := AssertRuleRestrictionColumns(t.Context(), db); err != nil {
 		t.Fatalf("the prepared database still cannot state a filter: %v", err)
 	}
 
@@ -288,18 +288,160 @@ func legacyPolicyRulesDatabase(t *testing.T) *sql.DB {
 	return db
 }
 
-// TestAHalfMigratedTableIsRefusedRatherThanServed. The rebuild is skipped when
-// the first column is already there, which is what a hand-run ALTER leaves
-// behind. Preparing such a database must refuse it: the rules in it would
-// otherwise be read through a query naming columns the table does not have, or
-// worse, be served with the checks their declaration states missing.
-func TestAHalfMigratedTableIsRefusedRatherThanServed(t *testing.T) {
+// TestAHalfMigratedTableIsBroughtForward. A table carrying some restriction
+// columns but not all is what a hand-run ALTER leaves behind, and what one
+// release of this server's own schema looks like to the next. Every column is
+// checked rather than the first, so such a table is rebuilt rather than served
+// with rules whose restriction has nowhere to live.
+func TestAHalfMigratedTableIsBroughtForward(t *testing.T) {
 	db := legacyPolicyRulesDatabase(t)
 
 	execAll(t, db, []string{"ALTER TABLE access_policy_rules ADD COLUMN filter_path TEXT"})
 
-	err := PrepareSchema(t.Context(), db)
-	if !errors.Is(err, ErrRuleFilterColumnsMissing) {
-		t.Fatalf("a half-migrated table was prepared: err = %v, want %v", err, ErrRuleFilterColumnsMissing)
+	if err := AssertRuleRestrictionColumns(t.Context(), db); !errors.Is(err, ErrRuleRestrictionColumnsMissing) {
+		t.Fatalf("a half-migrated table was accepted: err = %v, want %v", err, ErrRuleRestrictionColumnsMissing)
+	}
+
+	if err := PrepareSchema(t.Context(), db); err != nil {
+		t.Fatalf("prepare a half-migrated database: %v", err)
+	}
+
+	if err := AssertRuleRestrictionColumns(t.Context(), db); err != nil {
+		t.Fatalf("the prepared database still cannot state a restriction: %v", err)
+	}
+
+	// The rules it held came through the repair.
+	var carried int
+	if err := db.QueryRowContext(t.Context(),
+		"SELECT COUNT(*) FROM access_policy_rules WHERE project_id = 'prj_a'").Scan(&carried); err != nil {
+		t.Fatalf("count the carried rules: %v", err)
+	}
+
+	if carried != 2 {
+		t.Errorf("the repair carried %d rules, want both", carried)
+	}
+}
+
+// TestTheSchemaRefusesAProjectionNobodyMeantToWrite. NULL returns the whole
+// resource; a list returns those members. An empty list returns nothing, which
+// is indistinguishable from a list nothing ever bound.
+func TestTheSchemaRefusesAProjectionNobodyMeantToWrite(t *testing.T) {
+	_, db := newStore(t)
+	seedPolicies(t, db)
+
+	const insert = "INSERT INTO access_policy_rules (project_id, policy_id, ordinal, kind, res_type," +
+		" action, unrestricted, compartment_type, compartment_id, returns)" +
+		" VALUES ('prj_a', 'pol_chart', "
+
+	runSchemaCases(t, db, []struct {
+		name      string
+		statement string
+		refused   bool
+	}{
+		{
+			name:      "a list of elements",
+			statement: insert + "20, 'fhir', 'Observation', 'read', 0, 'Patient', 'pat-1', '[\"status\"]')",
+		},
+		{
+			name:      "no projection at all",
+			statement: insert + "21, 'fhir', 'Observation', 'read', 0, 'Patient', 'pat-1', NULL)",
+		},
+		{
+			name:      "an empty list",
+			statement: insert + "22, 'fhir', 'Observation', 'read', 0, 'Patient', 'pat-1', '[]')",
+			refused:   true,
+		},
+		{
+			name:      "something that is not a list",
+			statement: insert + "23, 'fhir', 'Observation', 'read', 0, 'Patient', 'pat-1', '\"status\"')",
+			refused:   true,
+		},
+		{
+			name:      "text that is not json",
+			statement: insert + "24, 'fhir', 'Observation', 'read', 0, 'Patient', 'pat-1', 'status')",
+			refused:   true,
+		},
+	})
+}
+
+// TestARuleRowNamingElementsCompilesThemOntoTheGrant is the projection's whole
+// path: a stored policy row, rebuilt into a rule, compiled into the Grant
+// storage narrows with.
+func TestARuleRowNamingElementsCompilesThemOntoTheGrant(t *testing.T) {
+	f := newFixture(t)
+
+	execAll(t, f.db, []string{
+		"UPDATE access_policy_rules SET returns = '[\"status\",\"valueQuantity\"]'" +
+			" WHERE project_id = 'prj_a' AND policy_id = 'pol_chart' AND ordinal = 0",
+	})
+
+	ref := boundPolicy(t, f.db)
+
+	policy, found, err := NewPolicyResolver(f.db).Policy(t.Context(), ref)
+	if err != nil || !found {
+		t.Fatalf("policy found = %v, err = %v", found, err)
+	}
+
+	grants, err := policy.Compile(authz.GrantRequest{
+		Project: ref.Project(), Kind: storage.KindFHIR, Type: "Observation",
+		Action: storage.ActionRead, Origin: authz.OriginMembership,
+		Parameters: authz.Parameters{"patient": "pat-1"},
+	})
+	if err != nil {
+		t.Fatalf("compile: %v", err)
+	}
+
+	if len(grants) != 1 || grants[0].Projection == nil {
+		t.Fatalf("the stored projection did not reach the grant: %v", grants)
+	}
+
+	want, err := storage.NewProjection("status", "valueQuantity")
+	if err != nil {
+		t.Fatalf("build the expected projection: %v", err)
+	}
+
+	if !grants[0].Projection.Equal(want) {
+		t.Errorf("the grant returns %q, want %q", grants[0].Projection, want)
+	}
+}
+
+// TestARuleRowNamingNoElementsReturnsEverything, so the test above reads the
+// stored column rather than a projection something else supplies.
+func TestARuleRowNamingNoElementsReturnsEverything(t *testing.T) {
+	f := newFixture(t)
+
+	policy, found, err := NewPolicyResolver(f.db).Policy(t.Context(), boundPolicy(t, f.db))
+	if err != nil || !found {
+		t.Fatalf("policy found = %v, err = %v", found, err)
+	}
+
+	for _, rule := range policy.Rules() {
+		if _, carried := rule.Projection(); carried {
+			t.Errorf("a rule naming no elements rebuilt a projection for %s %s", rule.Type(), rule.Action())
+		}
+	}
+}
+
+// TestADriftedProjectionRowDenies rather than returning the whole resource,
+// which is what dropping an unreadable restriction would do.
+func TestADriftedProjectionRowDenies(t *testing.T) {
+	drifted := map[string]string{
+		"a name that is not an element": `["code.coding"]`,
+		"an empty name":                 `[""]`,
+		"a list of something else":      `[{"path":"status"}]`,
+		"not a list at all":             `"status"`,
+	}
+
+	for name, returns := range drifted {
+		row := ruleRow{
+			kind: "fhir", resourceType: "Observation", action: "read",
+			compartmentType: sql.NullString{String: "Patient", Valid: true},
+			compartmentID:   sql.NullString{String: "pat-1", Valid: true},
+			returns:         sql.NullString{String: returns, Valid: true},
+		}
+
+		if _, err := buildRule(row); !errors.Is(err, ErrUnreadableProjection) {
+			t.Errorf("%s: err = %v, want %v", name, err, ErrUnreadableProjection)
+		}
 	}
 }

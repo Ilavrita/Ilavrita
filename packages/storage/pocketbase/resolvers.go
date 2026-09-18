@@ -27,6 +27,11 @@ var (
 	// never a guess at which shape was meant.
 	ErrUnreadableRule = errors.New("pocketbase: access policy rule states no readable restriction")
 
+	// ErrUnreadableProjection reports a rule row naming elements this server
+	// cannot read. It denies rather than returning the whole resource, because a
+	// projection nothing applies hands back everything the rule withheld.
+	ErrUnreadableProjection = errors.New("pocketbase: access policy rule states an unreadable projection")
+
 	// ErrUnreadableFilter reports a rule row stating a filter this server cannot
 	// read: some of the three columns but not all, or a value list that is not a
 	// list. It denies rather than compiling the rule without the filter, because
@@ -82,7 +87,7 @@ const (
 
 	policyRuleQuery = "SELECT kind, res_type, action, unrestricted," +
 		" compartment_type, compartment_id, compartment_param," +
-		" filter_path, filter_comparator, filter_values FROM access_policy_rules" +
+		" filter_path, filter_comparator, filter_values, returns FROM access_policy_rules" +
 		" WHERE project_id = ? AND policy_id = ? ORDER BY ordinal"
 )
 
@@ -460,13 +465,14 @@ type ruleRow struct {
 	filterPath       sql.NullString
 	filterComparator sql.NullString
 	filterValues     sql.NullString
+	returns          sql.NullString
 }
 
 func (r *ruleRow) dest() []any {
 	return []any{
 		&r.kind, &r.resourceType, &r.action, &r.unrestricted,
 		&r.compartmentType, &r.compartmentID, &r.compartmentParam,
-		&r.filterPath, &r.filterComparator, &r.filterValues,
+		&r.filterPath, &r.filterComparator, &r.filterValues, &r.returns,
 	}
 }
 
@@ -518,11 +524,42 @@ func buildRule(row ruleRow) (authz.Rule, error) {
 		return authz.Rule{}, err
 	}
 
-	if filter == nil {
-		return rule, nil
+	if filter != nil {
+		rule = rule.WithFilter(*filter)
 	}
 
-	return rule.WithFilter(*filter), nil
+	projection, err := buildProjection(row)
+	if err != nil {
+		return authz.Rule{}, err
+	}
+
+	if projection != nil {
+		rule = rule.Returning(*projection)
+	}
+
+	return rule, nil
+}
+
+// buildProjection rebuilds the elements the rule hands back, if it names any. A
+// row naming elements this server cannot read denies rather than returning the
+// whole resource, which is what dropping the restriction would do.
+func buildProjection(row ruleRow) (*storage.Projection, error) {
+	if !row.returns.Valid {
+		return nil, nil
+	}
+
+	var elements []string
+
+	if err := json.Unmarshal([]byte(row.returns.String), &elements); err != nil {
+		return nil, fmt.Errorf("%w: %s %s: %w", ErrUnreadableProjection, row.resourceType, row.action, err)
+	}
+
+	projection, err := storage.NewProjection(elements...)
+	if err != nil {
+		return nil, fmt.Errorf("%w: %s %s: %w", ErrUnreadableProjection, row.resourceType, row.action, err)
+	}
+
+	return &projection, nil
 }
 
 // buildRestriction rebuilds the rule's compartment restriction.

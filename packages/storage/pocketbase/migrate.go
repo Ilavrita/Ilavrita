@@ -16,12 +16,12 @@ var (
 	ErrMembershipPrincipalKeysMissing = errors.New(
 		"pocketbase: project_memberships is missing its principal foreign keys")
 
-	// ErrRuleFilterColumnsMissing reports an access_policy_rules table with
-	// nowhere to state a filter. A rule that cannot record its restriction
-	// compiles to a Grant narrowed by nothing, which reaches further than the
-	// policy says, so a database without the columns is refused.
-	ErrRuleFilterColumnsMissing = errors.New(
-		"pocketbase: access_policy_rules is missing its filter columns")
+	// ErrRuleRestrictionColumnsMissing reports an access_policy_rules table with
+	// nowhere to state a filter or a projection. A rule that cannot record its
+	// restriction compiles to a Grant narrowed by nothing, which reaches further
+	// than the policy says, so a database without the columns is refused.
+	ErrRuleRestrictionColumnsMissing = errors.New(
+		"pocketbase: access_policy_rules is missing its restriction columns")
 
 	// ErrRebuildWouldDropColumn reports an old table holding a column the current
 	// declaration does not. The rebuild copies rows, so a dropped column is lost
@@ -55,7 +55,7 @@ const (
 	// before the rename.
 	membershipRebuildTable = membershipTable + "_new"
 
-	// ruleTable holds the access policy rules a filter is stated on.
+	// ruleTable holds the access policy rules a restriction is stated on.
 	ruleTable = "access_policy_rules"
 )
 
@@ -80,7 +80,7 @@ func PrepareSchema(ctx context.Context, db *sql.DB) error {
 		return err
 	}
 
-	filters, err := rebuildRuleFilters(ctx, db)
+	restrictions, err := rebuildRuleRestrictions(ctx, db)
 	if err != nil {
 		return err
 	}
@@ -88,7 +88,7 @@ func PrepareSchema(ctx context.Context, db *sql.DB) error {
 	// A rebuild drops its table, and that table's indexes and triggers go with
 	// it. The file is the only definition of them, so it is replayed rather than
 	// a second hand-written list kept in step with it.
-	if memberships || filters {
+	if memberships || restrictions {
 		if err := ApplySchema(ctx, db); err != nil {
 			return err
 		}
@@ -98,7 +98,7 @@ func PrepareSchema(ctx context.Context, db *sql.DB) error {
 		return err
 	}
 
-	if err := AssertRuleFilterColumns(ctx, db); err != nil {
+	if err := AssertRuleRestrictionColumns(ctx, db); err != nil {
 		return err
 	}
 
@@ -267,12 +267,17 @@ func rebuildMembershipPrincipalKeys(ctx context.Context, db *sql.DB) (bool, erro
 	return true, nil
 }
 
-// rebuildRuleFilters adopts the filter columns and their checks onto an
-// access_policy_rules table that predates them. Every existing rule carries no
-// filter, so the copy has nothing the new checks can reject.
-func rebuildRuleFilters(ctx context.Context, db *sql.DB) (bool, error) {
-	present, err := hasColumn(ctx, db, ruleTable, "filter_path")
-	if err != nil || present {
+// restrictionColumns are the columns a rule states its narrowing on. Every one
+// is checked, so a table carrying some of them — a half-run migration, or one
+// release of this server's own schema — is brought forward rather than served.
+var restrictionColumns = []string{"filter_path", "filter_comparator", "filter_values", "returns"}
+
+// rebuildRuleRestrictions adopts the restriction columns and their checks onto
+// an access_policy_rules table that predates any of them. A rule that predates
+// them carries no restriction, so the copy has nothing the new checks reject.
+func rebuildRuleRestrictions(ctx context.Context, db *sql.DB) (bool, error) {
+	missing, err := missingRestrictionColumn(ctx, db)
+	if err != nil || missing == "" {
 		return false, err
 	}
 
@@ -288,22 +293,37 @@ func rebuildRuleFilters(ctx context.Context, db *sql.DB) (bool, error) {
 	return true, nil
 }
 
-// AssertRuleFilterColumns refuses a database whose policy rules cannot state a
-// filter. A rule row with nowhere to record one compiles to a Grant narrowed by
-// nothing, which is wider than the policy says.
-func AssertRuleFilterColumns(ctx context.Context, db *sql.DB) error {
-	for _, column := range []string{"filter_path", "filter_comparator", "filter_values"} {
-		present, err := hasColumn(ctx, db, ruleTable, column)
-		if err != nil {
-			return err
-		}
+// AssertRuleRestrictionColumns refuses a database whose policy rules cannot
+// state their narrowing. A rule row with nowhere to record one compiles to a
+// Grant narrowed by nothing, which is wider than the policy says.
+func AssertRuleRestrictionColumns(ctx context.Context, db *sql.DB) error {
+	missing, err := missingRestrictionColumn(ctx, db)
+	if err != nil {
+		return err
+	}
 
-		if !present {
-			return fmt.Errorf("%w: %s.%s", ErrRuleFilterColumnsMissing, ruleTable, column)
-		}
+	if missing != "" {
+		return fmt.Errorf("%w: %s.%s", ErrRuleRestrictionColumnsMissing, ruleTable, missing)
 	}
 
 	return nil
+}
+
+// missingRestrictionColumn names the first restriction column the table does
+// not declare, or the empty string when it declares them all.
+func missingRestrictionColumn(ctx context.Context, db *sql.DB) (string, error) {
+	for _, column := range restrictionColumns {
+		present, err := hasColumn(ctx, db, ruleTable, column)
+		if err != nil {
+			return "", err
+		}
+
+		if !present {
+			return column, nil
+		}
+	}
+
+	return "", nil
 }
 
 // hasColumn reports whether a table declares one column.

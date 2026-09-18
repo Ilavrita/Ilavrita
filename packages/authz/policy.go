@@ -160,6 +160,7 @@ type Rule struct {
 	subject      CompartmentSubject
 	unrestricted bool
 	filter       *storage.Filter
+	projection   *storage.Projection
 }
 
 // NewRule authors a rule restricted to one compartment subject.
@@ -218,6 +219,32 @@ func (r Rule) Filter() (storage.Filter, bool) {
 	return *r.filter, true
 }
 
+// Returning names the elements the rule hands back, such as an Observation's
+// status and value without the note beside them.
+//
+// It narrows how much of a resource is returned and never which resources are
+// reached, so it is the one restriction that cannot be a query predicate and
+// the one that says nothing about whose data a rule covers: a projection over
+// an unrestricted clinical rule still reaches every patient, which is what
+// LNK-5 refuses.
+func (r Rule) Returning(projection storage.Projection) Rule {
+	// The receiver and the parameter are both copies, so this narrows a new rule
+	// and leaves the one it was called on alone.
+	r.projection = &projection
+
+	return r
+}
+
+// Projection returns the elements the rule hands back, absent on a rule that
+// returns whole resources.
+func (r Rule) Projection() (storage.Projection, bool) {
+	if r.projection == nil {
+		return storage.Projection{}, false
+	}
+
+	return *r.projection, true
+}
+
 // grantFilter hands a compiled Grant its own copy. A Grant's Filter field is
 // exported, so sharing the rule's pointer would let anyone holding one compiled
 // Grant rewrite the policy every later compilation reads.
@@ -227,6 +254,18 @@ func (r Rule) grantFilter() *storage.Filter {
 	}
 
 	held := *r.filter
+
+	return &held
+}
+
+// grantProjection hands a compiled Grant its own copy, for the reason
+// grantFilter does.
+func (r Rule) grantProjection() *storage.Projection {
+	if r.projection == nil {
+		return nil
+	}
+
+	held := *r.projection
 
 	return &held
 }
@@ -440,7 +479,7 @@ func (p AccessPolicy) Compile(req GrantRequest) ([]storage.Grant, error) {
 		grants = append(grants, storage.Grant{
 			Project: req.Project, Kind: req.Kind, Type: req.Type,
 			Action: req.Action, Source: source, Compartment: compartment,
-			Filter: rule.grantFilter(),
+			Filter: rule.grantFilter(), Projection: rule.grantProjection(),
 		})
 	}
 

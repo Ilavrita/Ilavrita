@@ -168,3 +168,133 @@ func TestARuleHandsOutACopyOfItsFilter(t *testing.T) {
 		t.Errorf("a reader widened the rule's filter to %q", again)
 	}
 }
+
+func mustRuleProjection(t *testing.T, elements ...string) storage.Projection {
+	t.Helper()
+
+	projection, err := storage.NewProjection(elements...)
+	if err != nil {
+		t.Fatalf("NewProjection(%v): %v", elements, err)
+	}
+
+	return projection
+}
+
+// TestAProjectedRuleCompilesItsProjectionOntoTheGrant. The rule states how much
+// it returns and storage applies it, so a projection the compilation drops is
+// one nothing else will apply.
+func TestAProjectedRuleCompilesItsProjectionOntoTheGrant(t *testing.T) {
+	rule := mustRule(t, "Observation", storage.ActionRead, mustParameterSubject(t, "Patient", "patient")).
+		Returning(mustRuleProjection(t, "status", "valueQuantity"))
+
+	policy := mustPolicy(t, PolicyConfig{
+		Project: clinic, ID: "pol_summary",
+		Parameters: []ParameterName{"patient"}, Rules: []Rule{rule},
+	})
+
+	grants, err := policy.Compile(readRequest("Observation", Parameters{"patient": "pat-1"}))
+	if err != nil {
+		t.Fatalf("Compile: %v", err)
+	}
+
+	if len(grants) != 1 || grants[0].Projection == nil {
+		t.Fatalf("the rule's projection did not reach the grant: %v", grants)
+	}
+
+	if want := mustRuleProjection(t, "status", "valueQuantity"); !grants[0].Projection.Equal(want) {
+		t.Errorf("the grant returns %q, want %q", grants[0].Projection, want)
+	}
+}
+
+// TestAnUnprojectedRuleCompilesToAGrantReturningEverything, because absent is
+// what storage reads as unrestricted in that dimension.
+func TestAnUnprojectedRuleCompilesToAGrantReturningEverything(t *testing.T) {
+	grants, err := ownChartPolicy(t).Compile(readRequest("Observation", Parameters{"patient": "pat-1"}))
+	if err != nil {
+		t.Fatalf("Compile: %v", err)
+	}
+
+	for _, grant := range grants {
+		if grant.Projection != nil {
+			t.Errorf("an unprojected rule compiled a grant returning only %q", grant.Projection)
+		}
+	}
+}
+
+// TestACompiledGrantCannotRewriteThePolicysProjection, for the reason it cannot
+// rewrite its filter: the field is exported and the pointer would be shared.
+func TestACompiledGrantCannotRewriteThePolicysProjection(t *testing.T) {
+	rule := mustRule(t, "Observation", storage.ActionRead, mustParameterSubject(t, "Patient", "patient")).
+		Returning(mustRuleProjection(t, "status"))
+
+	policy := mustPolicy(t, PolicyConfig{
+		Project: clinic, ID: "pol_summary",
+		Parameters: []ParameterName{"patient"}, Rules: []Rule{rule},
+	})
+
+	request := readRequest("Observation", Parameters{"patient": "pat-1"})
+
+	first, err := policy.Compile(request)
+	if err != nil {
+		t.Fatalf("Compile: %v", err)
+	}
+
+	*first[0].Projection = mustRuleProjection(t, "note")
+
+	second, err := policy.Compile(request)
+	if err != nil {
+		t.Fatalf("recompile: %v", err)
+	}
+
+	if want := mustRuleProjection(t, "status"); !second[0].Projection.Equal(want) {
+		t.Errorf("a compiled grant rewrote its policy: recompiling returns %q, want %q",
+			second[0].Projection, want)
+	}
+}
+
+// TestReturningLeavesTheRuleItWasCalledOnAlone, so a rule shared between
+// policies cannot acquire a projection from whichever one narrowed it.
+func TestReturningLeavesTheRuleItWasCalledOnAlone(t *testing.T) {
+	original := mustRule(t, "Observation", storage.ActionRead, mustParameterSubject(t, "Patient", "patient"))
+
+	narrowed := original.Returning(mustRuleProjection(t, "status"))
+
+	if _, carried := original.Projection(); carried {
+		t.Error("narrowing one rule changed the rule it was derived from")
+	}
+
+	if _, carried := narrowed.Projection(); !carried {
+		t.Error("the narrowed rule returns everything")
+	}
+}
+
+// TestARuleCanCarryBothRestrictionsAtOnce, because they narrow different things:
+// which resources are reached, and how much of one is returned.
+func TestARuleCanCarryBothRestrictionsAtOnce(t *testing.T) {
+	rule := mustRule(t, "Observation", storage.ActionRead, mustParameterSubject(t, "Patient", "patient")).
+		WithFilter(mustElementFilter(t, "status", "final")).
+		Returning(mustRuleProjection(t, "status", "valueQuantity"))
+
+	policy := mustPolicy(t, PolicyConfig{
+		Project: clinic, ID: "pol_final_summary",
+		Parameters: []ParameterName{"patient"}, Rules: []Rule{rule},
+	})
+
+	grants, err := policy.Compile(readRequest("Observation", Parameters{"patient": "pat-1"}))
+	if err != nil {
+		t.Fatalf("Compile: %v", err)
+	}
+
+	if len(grants) != 1 {
+		t.Fatalf("compiled %d grants, want one", len(grants))
+	}
+
+	switch {
+	case grants[0].Compartment == nil:
+		t.Error("the grant lost its compartment")
+	case grants[0].Filter == nil:
+		t.Error("the grant lost its filter")
+	case grants[0].Projection == nil:
+		t.Error("the grant lost its projection")
+	}
+}
