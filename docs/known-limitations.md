@@ -73,7 +73,7 @@ Every other `/fhir/R4` route answers `501 Not Implemented` as an
 | DocumentReference | Working: the document is a `Binary` its attachment names; inlined bytes are refused |
 | Subscriptions | Working: `rest-hook`, and `websocket` within one process; see below |
 | Reindexing | Not implemented; the index is rebuilt once when an install first gains it |
-| Backup, restore | Not implemented |
+| Backup, restore | Working: `ilavrita backup`, `verify-backup` and `restore`; see below |
 | Structured logging, request correlation | Not implemented |
 
 `packages/config` and `packages/observability` are outlines that document
@@ -158,6 +158,37 @@ Every other type's attachments are still stored in the row: a `Media.content`, a
 but the 4 MiB one request body may be. That is a limitation rather than a
 decision — what makes `DocumentReference` different is only that R4 gave it a url,
 so there is somewhere to send a client instead of refusing with no alternative.
+
+## Backup and restore
+
+`ilavrita backup <directory>` writes an archive: a consistent snapshot of the
+database taken with `VACUUM INTO`, the payload directory beside it, and a
+manifest naming every file with its SHA-256 and size. `ilavrita verify-backup`
+reads every file and compares it with the manifest — a backup nobody checked is
+one whose first test is the day it is needed. `ilavrita restore <directory>`
+verifies in full and only then puts the files back.
+
+The order is what makes an archive consistent. The database is snapshotted first
+and the payloads copied afterwards, so every row in the snapshot names bytes that
+already existed and are therefore copied. The cost is an archive that may hold a
+payload no row names — a write that landed between the two — which is wasted
+space and nothing else. A restore reverses it: payloads first, database last.
+
+A restore refuses a data directory that already holds a database. Restoring over
+a live install is deliberate work: move the old one aside first.
+
+**What it does not cover.** PocketBase's own `data.db` and `auxiliary.db` are not
+in the archive. They hold no Ilavrita data — every row this server writes is in
+`ilavrita.db` — and the runtime recreates them. Nothing is scheduled, retained or
+rotated: the archive is a directory, and when to take one is the operator's.
+`ILAVRITA_SEALING_KEY` is not in the archive either, which is deliberate and
+load-bearing: without it a restored database holds no readable second factor, so
+the key has to be kept somewhere the archive is not.
+
+The archive holds everything the database holds — patient data, password hashes,
+sealed second factors and the audit trail — and every file in it is written
+`0600` under a `0700` directory. It is not encrypted; encrypting it is the
+operator's, on the medium it is stored on.
 
 ## A payload and its row are two stores
 
