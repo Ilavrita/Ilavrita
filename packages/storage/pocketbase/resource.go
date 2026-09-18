@@ -260,6 +260,16 @@ func reachesEveryCompartment(grants []storage.Grant) bool {
 	return slices.ContainsFunc(grants, func(grant storage.Grant) bool { return grant.Compartment == nil })
 }
 
+// reachesEveryResource reports whether any Grant here is narrowed by nothing at
+// all. A Grant narrowed in either dimension leaves resources of its own type
+// unreadable, and a caller who cannot read a row must not be able to learn from
+// a create that its id is taken.
+func reachesEveryResource(grants []storage.Grant) bool {
+	return slices.ContainsFunc(grants, func(grant storage.Grant) bool {
+		return grant.Compartment == nil && grant.Filter == nil
+	})
+}
+
 // currentArm compiles one Grant against the current-state table.
 func currentArm(grant storage.Grant, key storage.ResourceKey) (arm, error) {
 	var compiled arm
@@ -551,7 +561,7 @@ func (s *ResourceStore) Create(ctx context.Context, scope storage.Scope, record 
 
 	// The insert carries no Scope predicate of its own, so a Grant confined to a
 	// compartment could otherwise write outside it.
-	if err := authorizePlacement(scope, record); err != nil {
+	if err := s.authorizePlacement(ctx, scope, record); err != nil {
 		return err
 	}
 
@@ -559,20 +569,24 @@ func (s *ResourceStore) Create(ctx context.Context, scope storage.Scope, record 
 	// write into somewhere it cannot see. An update needs no equivalent: the row
 	// is already there, so the read-back that renders it answers exactly rather
 	// than predicting.
-	reads := authorizedGrants(scope, record.Key, storage.ActionRead)
+	reads, err := s.admittingGrants(ctx, authorizedGrants(scope, record.Key, storage.ActionRead), record.Content)
+	if err != nil {
+		return err
+	}
+
 	if !covers(reads, record.Key, record.Compartments) {
 		return storage.ErrDenied
 	}
 
-	confined := !reachesEveryCompartment(reads)
+	narrowed := !reachesEveryResource(reads)
 
 	return s.WithinTransaction(ctx, func(ctx context.Context) error {
 		err := s.create(ctx, scope, record)
 
-		// An id taken by a resource in another compartment is one this caller
-		// cannot see, and a create that named it must not say so: a confined
-		// caller cannot tell a taken id from one it was never allowed to name.
-		if confined && errors.Is(err, storage.ErrAlreadyExists) {
+		// An id taken by a resource this caller cannot reach is one a create
+		// must not report: a narrowed caller cannot tell a taken id from one it
+		// was never allowed to name.
+		if narrowed && errors.Is(err, storage.ErrAlreadyExists) {
 			return storage.ErrDenied
 		}
 
@@ -587,8 +601,17 @@ func (s *ResourceStore) Create(ctx context.Context, scope storage.Scope, record 
 //
 // The record states where the resource lands, so this reads the content the
 // caller submitted and never the projection a previous version left behind.
-func authorizePlacement(scope storage.Scope, record storage.ResourceRecord) error {
-	writes := authorizedGrants(scope, record.Key, storage.ActionWrite)
+// A Grant whose filter that content fails takes no part in the decision, which
+// is what stops a filtered caller writing a resource its own filter would then
+// hide from it.
+func (s *ResourceStore) authorizePlacement(
+	ctx context.Context, scope storage.Scope, record storage.ResourceRecord,
+) error {
+	writes, err := s.admittingGrants(ctx, authorizedGrants(scope, record.Key, storage.ActionWrite), record.Content)
+	if err != nil {
+		return err
+	}
+
 	if !covers(writes, record.Key, record.Compartments) {
 		return storage.ErrDenied
 	}
@@ -706,7 +729,7 @@ func (s *ResourceStore) Update(
 		return err
 	}
 
-	if err := authorizePlacement(scope, record); err != nil {
+	if err := s.authorizePlacement(ctx, scope, record); err != nil {
 		return err
 	}
 

@@ -381,3 +381,126 @@ func TestAFilterBindsItsPathRatherThanSplicingIt(t *testing.T) {
 		t.Errorf("the statement has %d placeholders and %d arguments: %s", placeholders, len(args), text)
 	}
 }
+
+// TestAFilteredCallerCannotWriteAResourceItsFilterWouldHide. Writing a row into
+// a hole is refused for the reason a resource landing in no compartment is: the
+// caller could not read back what it just wrote, so the write leaves a row
+// nobody who made it can address.
+func TestAFilteredCallerCannotWriteAResourceItsFilterWouldHide(t *testing.T) {
+	store, _ := newStore(t)
+	scope := filteredScope(mustFilter(t, "status", storage.ComparatorEqual, "final"))
+
+	hidden := storage.ResourceRecord{
+		Key:     observationKey("prj_a", "obs-hidden"),
+		Content: []byte(`{"resourceType":"Observation","status":"preliminary"}`),
+	}
+
+	if err := store.Create(t.Context(), scope, hidden); !errors.Is(err, storage.ErrDenied) {
+		t.Errorf("a create outside the caller's own filter: err = %v, want %v", err, storage.ErrDenied)
+	}
+
+	// The same write inside the filter succeeds, so the refusal above is the
+	// filter's and not a Scope that authorizes nothing.
+	visible := storage.ResourceRecord{
+		Key:     observationKey("prj_a", "obs-visible"),
+		Content: []byte(`{"resourceType":"Observation","status":"final"}`),
+	}
+
+	if err := store.Create(t.Context(), scope, visible); err != nil {
+		t.Fatalf("a create inside the caller's own filter: %v", err)
+	}
+
+	if !readable(t, store, scope, visible.Key) {
+		t.Error("a resource the caller created is not one it can read")
+	}
+}
+
+// TestAFilteredCallerCannotAmendAResourceOutOfItsOwnView. The row is reachable
+// now and the caller may write it; what is refused is the content, because
+// afterwards the same caller could neither read nor correct it.
+func TestAFilteredCallerCannotAmendAResourceOutOfItsOwnView(t *testing.T) {
+	store, _ := newStore(t)
+
+	key := seedObservation(t, store, "obs-1", `{"resourceType":"Observation","status":"final"}`)
+	scope := filteredScope(mustFilter(t, "status", storage.ComparatorEqual, "final"))
+
+	if !readable(t, store, scope, key) {
+		t.Fatal("the caller cannot reach the row it is about to amend")
+	}
+
+	away := storage.ResourceRecord{
+		Key:     key,
+		Content: []byte(`{"resourceType":"Observation","status":"entered-in-error"}`),
+	}
+
+	if err := store.Update(t.Context(), scope, away, ""); !errors.Is(err, storage.ErrDenied) {
+		t.Errorf("an amendment out of the caller's own filter: err = %v, want %v", err, storage.ErrDenied)
+	}
+
+	// The row is untouched, so the refusal happened before the write and not
+	// after it.
+	if !readable(t, store, scope, key) {
+		t.Error("the refused amendment still moved the row out of view")
+	}
+
+	staying := storage.ResourceRecord{
+		Key:     key,
+		Content: []byte(`{"resourceType":"Observation","status":"final","note":[{"text":"amended"}]}`),
+	}
+
+	if err := store.Update(t.Context(), scope, staying, ""); err != nil {
+		t.Errorf("an amendment staying inside the filter: %v", err)
+	}
+}
+
+// TestACreateTellsANarrowedCallerNothingAboutATakenID. A filtered caller can no
+// more tell a taken id from one it was never allowed to name than a
+// compartment-confined one can, so the create answers the same way for both.
+func TestACreateTellsANarrowedCallerNothingAboutATakenID(t *testing.T) {
+	store, _ := newStore(t)
+
+	taken := seedObservation(t, store, "obs-taken", `{"resourceType":"Observation","status":"preliminary"}`)
+
+	scope := filteredScope(mustFilter(t, "status", storage.ComparatorEqual, "final"))
+	attempt := storage.ResourceRecord{
+		Key:     taken,
+		Content: []byte(`{"resourceType":"Observation","status":"final"}`),
+	}
+
+	if err := store.Create(t.Context(), scope, attempt); !errors.Is(err, storage.ErrDenied) {
+		t.Errorf("a create over an unreadable row: err = %v, want %v", err, storage.ErrDenied)
+	}
+}
+
+// TestTheWriteCheckReadsTheFilterTheSameWayAReadDoes. The two run the same
+// compiled predicate against the same body, so a shape one admits is one the
+// other admits: a resource a caller is allowed to write is one it can read.
+func TestTheWriteCheckReadsTheFilterTheSameWayAReadDoes(t *testing.T) {
+	store, _ := newStore(t)
+
+	bodies := map[storage.LogicalID]string{
+		"obs-1": vitalArrays, "obs-2": vitalObjects, "obs-3": labArrays,
+		"obs-4": noCategory, "obs-5": flatCategory, "obs-6": nullCategory, "obs-7": repeatedLeaf,
+	}
+
+	filters := []storage.Filter{
+		mustFilter(t, "status", storage.ComparatorEqual, "final"),
+		mustFilter(t, "category.coding.code", storage.ComparatorIn, "vital-signs", "laboratory"),
+		mustFilter(t, "class.code", storage.ComparatorEqual, "AMB"),
+	}
+
+	for _, filter := range filters {
+		scope := filteredScope(filter)
+
+		for id, body := range bodies {
+			key := observationKey("prj_a", id+"-"+storage.LogicalID(filter.Path()[0]))
+			record := storage.ResourceRecord{Key: key, Content: []byte(body)}
+
+			written := store.Create(t.Context(), scope, record) == nil
+			if written != readable(t, store, scope, key) {
+				t.Errorf("filter %q at %s: writable = %v but readable = %v",
+					filter, id, written, !written)
+			}
+		}
+	}
+}

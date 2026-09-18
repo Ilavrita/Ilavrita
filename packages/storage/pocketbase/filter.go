@@ -1,6 +1,7 @@
 package pocketbase
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"strconv"
@@ -124,4 +125,67 @@ func compareLeaf(leaf string, filter storage.Filter) (string, []any, error) {
 // placeholders renders one bind marker per value.
 func placeholders(count int) string {
 	return strings.TrimSuffix(strings.Repeat("?, ", count), ", ")
+}
+
+// The one-row relation a write's own body is read from. A body that is not
+// stored yet has no column to point a predicate at, so it is bound as a value
+// and given a name — which lets the predicate a read compiles against a stored
+// row compile unchanged against the content a write submits.
+const (
+	submittedRelation = "submitted"
+	submittedContent  = submittedRelation + ".content"
+	submittedPrefix   = "WITH " + submittedRelation + "(content) AS (SELECT ?) SELECT "
+	submittedSuffix   = " FROM " + submittedRelation
+)
+
+// admits reports whether the content a write submits satisfies one Grant's
+// filter. A Grant carrying no filter admits anything.
+//
+// The predicate is the one a read of the stored row would compile, so the rule
+// a write is checked against and the rule a later read enforces are one rule.
+// A second implementation in Go would be a second rule, and the two would
+// disagree the first time either was changed.
+func (s *ResourceStore) admits(ctx context.Context, grant storage.Grant, content []byte) (bool, error) {
+	if grant.Filter == nil {
+		return true, nil
+	}
+
+	predicate, args, err := filterPredicate(submittedContent, grant.Filter)
+	if err != nil {
+		return false, err
+	}
+
+	var admitted bool
+
+	text := submittedPrefix + predicate + submittedSuffix
+	row := s.conn(ctx).QueryRowContext(ctx, text, append([]any{string(content)}, args...)...)
+
+	if err := row.Scan(&admitted); err != nil {
+		return false, fmt.Errorf("pocketbase: check a filter against submitted content: %w", err)
+	}
+
+	return admitted, nil
+}
+
+// admittingGrants keeps the Grants whose filter this content satisfies. One
+// whose filter it fails is not this caller's authority for this write, so it
+// takes no part in deciding where the resource may land — which is what makes a
+// filtered Grant unable to write a resource it could not then read.
+func (s *ResourceStore) admittingGrants(
+	ctx context.Context, grants []storage.Grant, content []byte,
+) ([]storage.Grant, error) {
+	kept := make([]storage.Grant, 0, len(grants))
+
+	for _, grant := range grants {
+		admitted, err := s.admits(ctx, grant, content)
+		if err != nil {
+			return nil, err
+		}
+
+		if admitted {
+			kept = append(kept, grant)
+		}
+	}
+
+	return kept, nil
 }
