@@ -42,8 +42,10 @@ single security and Project model, even though they ship in phases.
       the database snapshot and the payloads taken in an order that makes the
       archive consistent
 - [ ] Upgrade and rollback procedures — the schema is prepared at startup,
-      including rebuilding a table to adopt a constraint; moving an install
-      between releases is not written down
+      including rebuilding a table to adopt a constraint, and every migration,
+      seed and backfill is idempotent and recorded in `super_jobs` against the
+      table it acted on. Rolling an install *back* to an earlier release is not
+      written down
 - [ ] Bundle batch and transaction, with proven atomic rollback
 - [x] Validation and `$validate` — every resource is checked against its own R4
       base definition, on the operation and on every write alike

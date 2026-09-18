@@ -365,6 +365,59 @@ CREATE INDEX IF NOT EXISTS ix_fhir_history_compartment_version
   ON fhir_resource_history_compartment (project_id, res_type, res_id, version_seq, comp_type, comp_id);
 
 -- ===========================================================================
+-- Super jobs. The install-wide work this server does to itself.
+-- ===========================================================================
+
+-- A migration, a seed or a backfill belongs to no Project: it is done to the
+-- install. Each one decides for itself whether there is anything to do — by
+-- looking at the database, or by comparing a fingerprint of what it would
+-- apply — so running one twice does nothing the second time. What this table
+-- adds is the record, because an operator asking what a database has been
+-- through should not have to infer it from the shape of the tables.
+--
+-- A row is written when a job actually did something, or when one failed. A
+-- start that changed nothing writes nothing, because a server starts far more
+-- often than its schema changes and a row per start per job would bury the ones
+-- that matter.
+
+-- tenant: none, one row per run of one install-wide job
+CREATE TABLE IF NOT EXISTS super_jobs (
+  id          TEXT NOT NULL,
+  name        TEXT NOT NULL,
+  kind        TEXT NOT NULL CHECK (kind IN ('migration', 'seed', 'backfill')),
+  subject     TEXT NOT NULL,
+  fingerprint TEXT NOT NULL,
+  outcome     TEXT NOT NULL CHECK (outcome IN ('applied', 'failed')),
+  detail      TEXT NOT NULL DEFAULT '',
+  started_at  BIGINT NOT NULL,
+  finished_at BIGINT NOT NULL,
+
+  PRIMARY KEY (id),
+
+  CHECK (substr(id, 1, 4) = 'job_'),
+  CHECK (name <> '' AND subject <> ''),
+  CHECK (finished_at >= started_at)
+);
+
+-- What has been done to one table, newest first. This is the question the
+-- record exists to answer.
+CREATE INDEX IF NOT EXISTS ix_super_jobs_subject
+  ON super_jobs (subject, started_at DESC, id);
+
+-- And the same question asked of one job.
+CREATE INDEX IF NOT EXISTS ix_super_jobs_name
+  ON super_jobs (name, started_at DESC, id);
+
+-- Nothing revises a job record, for the same reason nothing revises an audit
+-- row: a record of what a server did to itself that the server can edit
+-- afterwards is not a record.
+CREATE TRIGGER IF NOT EXISTS super_jobs_no_update
+BEFORE UPDATE ON super_jobs
+BEGIN
+  SELECT RAISE(ABORT, 'super_jobs rows are immutable');
+END;
+
+-- ===========================================================================
 -- Canonical resources. The FHIR specification's own definitions, seeded from
 -- what this build embeds.
 -- ===========================================================================

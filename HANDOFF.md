@@ -15,6 +15,7 @@ most expensive mistake on this project so far.
 | create, read, vread, update, delete, history-instance | Working, for 126 resource types: 64 non-clinical, 62 clinical |
 | `POST /fhir/R4/{type}/$validate` | Working, structural only |
 | `ilavrita backup`, `verify-backup`, `restore` | Working |
+| Migrations, seeds and backfills | Idempotent, and recorded in `super_jobs` against the table |
 | Everything else under `/fhir/R4` | `501` |
 | `POST /auth/login`, `POST /auth/logout`, `GET /auth/session` | Working |
 | `/admin/projects` and the surface beneath it | Working, for a Super Admin or the Project's own admin |

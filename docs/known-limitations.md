@@ -241,6 +241,24 @@ but the 4 MiB one request body may be. That is a limitation rather than a
 decision — what makes `DocumentReference` different is only that R4 gave it a url,
 so there is somewhere to send a client instead of refusing with no alternative.
 
+## What this server does to itself is written down
+
+A migration, a seed or a backfill belongs to no Project — it is done to the
+install — so each one is a **super job**, and `super_jobs` records it against the
+table it acted on. "What has been done to `user_second_factors`" is one query
+rather than an inference from the shape of the table.
+
+Every job decides for itself whether there is anything to do: a migration looks
+at the database, a seed compares a digest of what it would apply. Running one
+twice does nothing the second time. **A start that changed nothing writes
+nothing** — a server starts far more often than its schema changes, and a row per
+start per job would bury the ones that matter. A job that failed is recorded
+before the failure is returned, because that run is the one somebody needs to
+find afterwards, and nothing revises a row once written.
+
+A fresh install therefore records no migration at all: the schema creates each
+table with its columns already in it, and every migration finds nothing to do.
+
 ## Backup and restore
 
 `ilavrita backup <directory>` writes an archive: a consistent snapshot of the

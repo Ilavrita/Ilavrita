@@ -194,3 +194,73 @@ func TestAClaimNamingNobodyIsRefused(t *testing.T) {
 		t.Errorf("a claim naming a worker was refused: %v", err)
 	}
 }
+
+// TestAnUpgradeWritesDownWhatItDid. A migration that runs and leaves no trace is
+// one an operator has to infer from the shape of the tables. This is the
+// property the ledger exists for, asserted through the upgrade a real install
+// performs.
+func TestAnUpgradeWritesDownWhatItDid(t *testing.T) {
+	db := legacyQueueDatabase(t)
+
+	if err := PrepareSchema(t.Context(), db); err != nil {
+		t.Fatalf("prepare the legacy database: %v", err)
+	}
+
+	ran, err := JobsOn(t.Context(), db, "subscription_backlog", 10)
+	if err != nil {
+		t.Fatalf("read what was done to the queue: %v", err)
+	}
+
+	if len(ran) != 1 {
+		t.Fatalf("the upgrade recorded %d runs against the queue: %+v", len(ran), ran)
+	}
+
+	held := ran[0]
+
+	switch {
+	case held.Name != "migrate.subscription_queues.claims":
+		t.Errorf("it is recorded as %q", held.Name)
+	case held.Kind != JobMigration || held.Outcome != "applied":
+		t.Errorf("it is a %s that %s", held.Kind, held.Outcome)
+	case held.Fingerprint == "":
+		t.Error("it does not say what it applied")
+	}
+
+	// A second start changes nothing and writes nothing, so the record stays the
+	// record of what happened rather than of how often the server booted.
+	if err := PrepareSchema(t.Context(), db); err != nil {
+		t.Fatalf("prepare again: %v", err)
+	}
+
+	again, err := JobsOn(t.Context(), db, "subscription_backlog", 10)
+	if err != nil {
+		t.Fatalf("read again: %v", err)
+	}
+
+	if len(again) != 1 || again[0].ID != held.ID {
+		t.Errorf("a second start left %d runs", len(again))
+	}
+}
+
+// TestAFreshInstallRunsNoMigration. Every migration inspects the database and
+// finds a table the schema just created with the column already in it, so a new
+// install starts with a clean record rather than one claiming it was upgraded
+// from something.
+func TestAFreshInstallRunsNoMigration(t *testing.T) {
+	_, db := newStore(t)
+
+	if err := PrepareSchema(t.Context(), db); err != nil {
+		t.Fatalf("prepare a fresh database: %v", err)
+	}
+
+	ran, err := EveryJob(t.Context(), db, 50)
+	if err != nil {
+		t.Fatalf("read the record: %v", err)
+	}
+
+	for _, held := range ran {
+		if held.Kind == JobMigration {
+			t.Errorf("a fresh install ran %s", held.Name)
+		}
+	}
+}

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 )
 
 var (
@@ -108,36 +109,45 @@ func PrepareSchema(ctx context.Context, db *sql.DB) error {
 		return err
 	}
 
+	// Every step below is a super job: it decides for itself whether there is
+	// anything to do, so running it twice does nothing the second time, and what
+	// it did do is written down against the table it did it to. A start that
+	// changed nothing writes nothing.
+	at := time.Now().UTC()
+
 	if !indexed {
-		if err := backfillSearchIndex(ctx, db); err != nil {
+		if _, err := Perform(ctx, db, at, SuperJob{
+			Name: "backfill.fhir_search_index", Kind: JobBackfill, Subject: searchIndexTable,
+		}, func(ctx context.Context) (Done, error) {
+			if err := backfillSearchIndex(ctx, db); err != nil {
+				return Done{}, err
+			}
+
+			return Done{
+				Changed:     true,
+				Fingerprint: "created",
+				Detail:      "the index was built for an install that predates it",
+			}, nil
+		}); err != nil {
 			return err
 		}
 	}
 
-	memberships, err := rebuildMembershipPrincipalKeys(ctx, db)
-	if err != nil {
-		return err
-	}
+	rebuilt := false
 
-	restrictions, err := rebuildRuleRestrictions(ctx, db)
-	if err != nil {
-		return err
-	}
+	for _, migration := range schemaMigrations() {
+		done, err := Perform(ctx, db, at, migration.job, migration.run(db))
+		if err != nil {
+			return err
+		}
 
-	factors, err := rebuildFactorReplacement(ctx, db)
-	if err != nil {
-		return err
-	}
-
-	claims, err := rebuildQueueClaims(ctx, db)
-	if err != nil {
-		return err
+		rebuilt = rebuilt || done.Changed
 	}
 
 	// A rebuild drops its table, and that table's indexes and triggers go with
 	// it. The file is the only definition of them, so it is replayed rather than
 	// a second hand-written list kept in step with it.
-	if memberships || restrictions || factors || claims {
+	if rebuilt {
 		if err := ApplySchema(ctx, db); err != nil {
 			return err
 		}
@@ -160,6 +170,76 @@ func PrepareSchema(ctx context.Context, db *sql.DB) error {
 	}
 
 	return AssertNoSystemClientApplicationDocuments(ctx, db)
+}
+
+// schemaMigration is one migration and the job it is recorded as.
+type schemaMigration struct {
+	job SuperJob
+
+	// rebuild adopts a constraint onto a table that already exists, and reports
+	// whether it had to. What makes it idempotent is its own inspection of the
+	// database: a table that already carries the column is left alone.
+	rebuild func(context.Context, *sql.DB) (bool, error)
+
+	// applied is what the migration puts in place, recorded so the row says
+	// which version of the work ran rather than only that something did.
+	applied string
+}
+
+// run adapts a migration to the job the ledger performs.
+func (m schemaMigration) run(db *sql.DB) func(context.Context) (Done, error) {
+	return func(ctx context.Context) (Done, error) {
+		changed, err := m.rebuild(ctx, db)
+		if err != nil {
+			return Done{}, err
+		}
+
+		return Done{
+			Changed:     changed,
+			Fingerprint: m.applied,
+			Detail:      "the table was rebuilt to adopt " + m.applied,
+		}, nil
+	}
+}
+
+// schemaMigrations is every migration this build carries, in the order it runs
+// them. Adding one here is what makes it run and what makes it recorded; there
+// is no second list.
+func schemaMigrations() []schemaMigration {
+	return []schemaMigration{
+		{
+			job: SuperJob{
+				Name: "migrate.project_memberships.principal_keys",
+				Kind: JobMigration, Subject: membershipTable,
+			},
+			rebuild: rebuildMembershipPrincipalKeys,
+			applied: "the client application and bot foreign keys",
+		},
+		{
+			job: SuperJob{
+				Name: "migrate.access_policy_rules.restrictions",
+				Kind: JobMigration, Subject: "access_policy_rules",
+			},
+			rebuild: rebuildRuleRestrictions,
+			applied: "the filter and projection columns",
+		},
+		{
+			job: SuperJob{
+				Name: "migrate.user_second_factors.replacement",
+				Kind: JobMigration, Subject: factorTable,
+			},
+			rebuild: rebuildFactorReplacement,
+			applied: "pending_secret, so a factor can be replaced without being switched off",
+		},
+		{
+			job: SuperJob{
+				Name: "migrate.subscription_queues.claims",
+				Kind: JobMigration, Subject: "subscription_backlog",
+			},
+			rebuild: rebuildQueueClaims,
+			applied: "claimed_by and claimed_until on both queues",
+		},
+	}
 }
 
 // AssertMembershipPrincipalKeys refuses a database whose membership principal

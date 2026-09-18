@@ -66,8 +66,22 @@ func (s *CanonicalStore) Seed(ctx context.Context, at time.Time) (Seeded, bool, 
 		Digest: digest, Release: conformance.Release, Held: len(definitions), At: at.UTC(),
 	}
 
-	if err := s.WithinTransaction(ctx, func(ctx context.Context) error {
-		return s.replace(ctx, definitions, seeded)
+	// Recorded as the super job it is: work done to the install, against the
+	// table it was done to, with the digest that says which bundles it applied.
+	if _, err := Perform(ctx, s.db, at, SuperJob{
+		Name: "seed.canonical_resource", Kind: JobSeed, Subject: "canonical_resource",
+	}, func(ctx context.Context) (Done, error) {
+		if err := s.WithinTransaction(ctx, func(ctx context.Context) error {
+			return s.replace(ctx, definitions, seeded)
+		}); err != nil {
+			return Done{}, err
+		}
+
+		return Done{
+			Changed:     true,
+			Fingerprint: digest,
+			Detail:      fmt.Sprintf("%d FHIR %s definitions", seeded.Held, seeded.Release),
+		}, nil
 	}); err != nil {
 		return Seeded{}, false, err
 	}
