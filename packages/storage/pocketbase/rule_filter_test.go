@@ -445,3 +445,133 @@ func TestADriftedProjectionRowDenies(t *testing.T) {
 		}
 	}
 }
+
+// TestTheSchemaRefusesTwoWaysOfNamingASubject. A rule states its restriction
+// one way: a literal id, a set of them, or a parameter. Two at once is a row
+// whose meaning depends on which one the reader looks at first.
+func TestTheSchemaRefusesTwoWaysOfNamingASubject(t *testing.T) {
+	_, db := newStore(t)
+	seedPolicies(t, db)
+
+	const insert = "INSERT INTO access_policy_rules (project_id, policy_id, ordinal, kind, res_type," +
+		" action, unrestricted, compartment_type, compartment_id, compartment_ids, compartment_param)" +
+		" VALUES ('prj_a', 'pol_chart', "
+
+	runSchemaCases(t, db, []struct {
+		name      string
+		statement string
+		refused   bool
+	}{
+		{
+			name:      "a set of subjects",
+			statement: insert + "30, 'fhir', 'Observation', 'read', 0, 'Patient', NULL, '[\"pat-1\",\"pat-2\"]', NULL)",
+		},
+		{
+			name:      "one literal subject",
+			statement: insert + "31, 'fhir', 'Observation', 'read', 0, 'Patient', 'pat-1', NULL, NULL)",
+		},
+		{
+			name:      "a parameter",
+			statement: insert + "32, 'fhir', 'Observation', 'read', 0, 'Patient', NULL, NULL, 'patient')",
+		},
+		{
+			name:      "a literal and a set",
+			statement: insert + "33, 'fhir', 'Observation', 'read', 0, 'Patient', 'pat-1', '[\"pat-2\"]', NULL)",
+			refused:   true,
+		},
+		{
+			name:      "a set and a parameter",
+			statement: insert + "34, 'fhir', 'Observation', 'read', 0, 'Patient', NULL, '[\"pat-1\"]', 'patient')",
+			refused:   true,
+		},
+		{
+			name:      "a set with no subject type",
+			statement: insert + "35, 'fhir', 'Observation', 'read', 0, NULL, NULL, '[\"pat-1\"]', NULL)",
+			refused:   true,
+		},
+		{
+			name:      "an empty set",
+			statement: insert + "36, 'fhir', 'Observation', 'read', 0, 'Patient', NULL, '[]', NULL)",
+			refused:   true,
+		},
+		{
+			name:      "a set that is not a list",
+			statement: insert + "37, 'fhir', 'Observation', 'read', 0, 'Patient', NULL, '\"pat-1\"', NULL)",
+			refused:   true,
+		},
+		{
+			name:      "an unrestricted rule naming a set",
+			statement: insert + "38, 'fhir', 'Organization', 'read', 1, NULL, NULL, '[\"pat-1\"]', NULL)",
+			refused:   true,
+		},
+	})
+}
+
+// TestARuleRowNamingASetMintsOneGrantEach, which is what makes the stored set
+// the same restriction as the rows it replaces.
+func TestARuleRowNamingASetMintsOneGrantEach(t *testing.T) {
+	f := newFixture(t)
+
+	execAll(t, f.db, []string{
+		"UPDATE access_policy_rules SET compartment_param = NULL," +
+			" compartment_ids = '[\"pat-1\",\"pat-2\"]'" +
+			" WHERE project_id = 'prj_a' AND policy_id = 'pol_chart' AND ordinal = 0",
+		"DELETE FROM access_policy_parameters WHERE project_id = 'prj_a' AND policy_id = 'pol_chart'",
+	})
+
+	ref := boundPolicy(t, f.db)
+
+	policy, found, err := NewPolicyResolver(f.db).Policy(t.Context(), ref)
+	if err != nil || !found {
+		t.Fatalf("policy found = %v, err = %v", found, err)
+	}
+
+	grants, err := policy.Compile(authz.GrantRequest{
+		Project: ref.Project(), Kind: storage.KindFHIR, Type: "Observation",
+		Action: storage.ActionRead, Origin: authz.OriginMembership,
+	})
+	if err != nil {
+		t.Fatalf("compile: %v", err)
+	}
+
+	if len(grants) != 2 {
+		t.Fatalf("a stored set of two compiled %d grants, want one each", len(grants))
+	}
+
+	reached := map[storage.Compartment]bool{}
+	for _, grant := range grants {
+		if grant.Compartment == nil {
+			t.Fatal("a stored set compiled an unconfined grant")
+		}
+
+		reached[*grant.Compartment] = true
+	}
+
+	for _, id := range []storage.LogicalID{"pat-1", "pat-2"} {
+		if !reached[storage.Compartment{Type: "Patient", ID: id}] {
+			t.Errorf("no grant reaches %s", id)
+		}
+	}
+}
+
+// TestADriftedSubjectSetDenies rather than falling back to another of the
+// rule's shapes, each of which restricts differently.
+func TestADriftedSubjectSetDenies(t *testing.T) {
+	drifted := map[string]string{
+		"not a list":      `"pat-1"`,
+		"an empty list":   `[]`,
+		"not json at all": `pat-1`,
+	}
+
+	for name, ids := range drifted {
+		row := ruleRow{
+			kind: "fhir", resourceType: "Observation", action: "read",
+			compartmentType: sql.NullString{String: "Patient", Valid: true},
+			compartmentIDs:  sql.NullString{String: ids, Valid: true},
+		}
+
+		if _, err := buildRule(row); !errors.Is(err, ErrUnreadableRule) {
+			t.Errorf("%s: err = %v, want %v", name, err, ErrUnreadableRule)
+		}
+	}
+}

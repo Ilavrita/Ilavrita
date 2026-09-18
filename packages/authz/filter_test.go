@@ -298,3 +298,137 @@ func TestARuleCanCarryBothRestrictionsAtOnce(t *testing.T) {
 		t.Error("the grant lost its projection")
 	}
 }
+
+// TestARuleNamingSeveralSubjectsMintsOneGrantEach. Naming a set is the same
+// restriction as one rule per id, written once: storage holds Grants together,
+// so what a set reaches is exactly what the separate rules reached.
+func TestARuleNamingSeveralSubjectsMintsOneGrantEach(t *testing.T) {
+	roster, err := LiteralSubject("Patient", "pat-1", "pat-2", "pat-3")
+	if err != nil {
+		t.Fatalf("LiteralSubject: %v", err)
+	}
+
+	policy := mustPolicy(t, PolicyConfig{
+		Project: clinic, ID: "pol_roster",
+		Rules: []Rule{mustRule(t, "Observation", storage.ActionRead, roster)},
+	})
+
+	grants, err := policy.Compile(readRequest("Observation", nil))
+	if err != nil {
+		t.Fatalf("Compile: %v", err)
+	}
+
+	if len(grants) != 3 {
+		t.Fatalf("a rule naming three subjects compiled %d grants, want one each", len(grants))
+	}
+
+	reached := map[storage.Compartment]bool{}
+
+	for _, grant := range grants {
+		if grant.Compartment == nil {
+			t.Fatal("a rule naming subjects compiled an unconfined grant")
+		}
+
+		reached[*grant.Compartment] = true
+	}
+
+	for _, id := range []storage.LogicalID{"pat-1", "pat-2", "pat-3"} {
+		if !reached[storage.Compartment{Type: "Patient", ID: id}] {
+			t.Errorf("no grant reaches %s", id)
+		}
+	}
+}
+
+// TestASetCompilesToWhatSeparateRulesCompileTo, which is the claim that makes a
+// set an ergonomic change rather than a change in what a policy can say.
+func TestASetCompilesToWhatSeparateRulesCompileTo(t *testing.T) {
+	roster, err := LiteralSubject("Patient", "pat-1", "pat-2")
+	if err != nil {
+		t.Fatalf("LiteralSubject: %v", err)
+	}
+
+	together := mustPolicy(t, PolicyConfig{
+		Project: clinic, ID: "pol_together",
+		Rules: []Rule{mustRule(t, "Observation", storage.ActionRead, roster)},
+	})
+
+	var separate []Rule
+
+	for _, id := range []storage.LogicalID{"pat-1", "pat-2"} {
+		subject, err := LiteralSubject("Patient", id)
+		if err != nil {
+			t.Fatalf("LiteralSubject(%s): %v", id, err)
+		}
+
+		separate = append(separate, mustRule(t, "Observation", storage.ActionRead, subject))
+	}
+
+	apart := mustPolicy(t, PolicyConfig{Project: clinic, ID: "pol_apart", Rules: separate})
+
+	one, err := together.Compile(readRequest("Observation", nil))
+	if err != nil {
+		t.Fatalf("compile the set: %v", err)
+	}
+
+	many, err := apart.Compile(readRequest("Observation", nil))
+	if err != nil {
+		t.Fatalf("compile the separate rules: %v", err)
+	}
+
+	if len(one) != len(many) {
+		t.Fatalf("the set compiled %d grants and the separate rules %d", len(one), len(many))
+	}
+
+	for index := range one {
+		if *one[index].Compartment != *many[index].Compartment {
+			t.Errorf("grant %d: the set reaches %v, the separate rules %v",
+				index, *one[index].Compartment, *many[index].Compartment)
+		}
+	}
+}
+
+// TestASubjectSetRefusesWhatNamesNoSubject, because a set nobody filled would
+// restrict a rule to nothing while looking like a restriction to something.
+func TestASubjectSetRefusesWhatNamesNoSubject(t *testing.T) {
+	refused := map[string][]storage.LogicalID{
+		"no id at all":           nil,
+		"an empty id":            {""},
+		"an empty id among many": {"pat-1", ""},
+	}
+
+	for name, ids := range refused {
+		if _, err := LiteralSubject("Patient", ids...); !errors.Is(err, ErrMissingSubject) {
+			t.Errorf("%s: err = %v, want %v", name, err, ErrMissingSubject)
+		}
+	}
+}
+
+// TestARepeatedSubjectIsNamedOnce, so a roster with a duplicate costs one
+// predicate rather than two that say the same thing.
+func TestARepeatedSubjectIsNamedOnce(t *testing.T) {
+	roster, err := LiteralSubject("Patient", "pat-1", "pat-2", "pat-1")
+	if err != nil {
+		t.Fatalf("LiteralSubject: %v", err)
+	}
+
+	if got := roster.IDs(); len(got) != 2 {
+		t.Errorf("a roster naming pat-1 twice holds %v", got)
+	}
+}
+
+// TestAParameterStillResolvesToOneSubject. A binding supplies one value per
+// name, so the set shape does not change what a parameterized rule reaches.
+func TestAParameterStillResolvesToOneSubject(t *testing.T) {
+	grants, err := ownChartPolicy(t).Compile(readRequest("Observation", Parameters{"patient": "pat-9"}))
+	if err != nil {
+		t.Fatalf("Compile: %v", err)
+	}
+
+	if len(grants) != 1 {
+		t.Fatalf("a parameterized rule compiled %d grants, want one", len(grants))
+	}
+
+	if want := (storage.Compartment{Type: "Patient", ID: "pat-9"}); *grants[0].Compartment != want {
+		t.Errorf("the grant reaches %v, want %v", *grants[0].Compartment, want)
+	}
+}

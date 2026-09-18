@@ -355,7 +355,11 @@ func TestARuleNeedsARestrictionItStates(t *testing.T) {
 	}{
 		{name: "no restriction at all", subject: CompartmentSubject{}, want: ErrMissingSubject},
 		{name: "a subject type with no id", subject: CompartmentSubject{resourceType: "Patient"}, want: ErrMissingSubject},
-		{name: "an id with no subject type", subject: CompartmentSubject{id: "pat_1"}, want: ErrMissingSubject},
+		{
+			name:    "an id with no subject type",
+			subject: CompartmentSubject{ids: []storage.LogicalID{"pat_1"}},
+			want:    ErrMissingSubject,
+		},
 	}
 
 	for _, tc := range tests {

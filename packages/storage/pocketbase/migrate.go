@@ -270,7 +270,9 @@ func rebuildMembershipPrincipalKeys(ctx context.Context, db *sql.DB) (bool, erro
 // restrictionColumns are the columns a rule states its narrowing on. Every one
 // is checked, so a table carrying some of them — a half-run migration, or one
 // release of this server's own schema — is brought forward rather than served.
-var restrictionColumns = []string{"filter_path", "filter_comparator", "filter_values", "returns"}
+var restrictionColumns = []string{
+	"filter_path", "filter_comparator", "filter_values", "returns", "compartment_ids",
+}
 
 // rebuildRuleRestrictions adopts the restriction columns and their checks onto
 // an access_policy_rules table that predates any of them. A rule that predates

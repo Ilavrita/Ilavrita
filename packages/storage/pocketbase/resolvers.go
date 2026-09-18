@@ -86,7 +86,7 @@ const (
 		" WHERE project_id = ? AND policy_id = ? ORDER BY name"
 
 	policyRuleQuery = "SELECT kind, res_type, action, unrestricted," +
-		" compartment_type, compartment_id, compartment_param," +
+		" compartment_type, compartment_id, compartment_ids, compartment_param," +
 		" filter_path, filter_comparator, filter_values, returns FROM access_policy_rules" +
 		" WHERE project_id = ? AND policy_id = ? ORDER BY ordinal"
 )
@@ -461,6 +461,7 @@ type ruleRow struct {
 	unrestricted     int
 	compartmentType  sql.NullString
 	compartmentID    sql.NullString
+	compartmentIDs   sql.NullString
 	compartmentParam sql.NullString
 	filterPath       sql.NullString
 	filterComparator sql.NullString
@@ -471,7 +472,7 @@ type ruleRow struct {
 func (r *ruleRow) dest() []any {
 	return []any{
 		&r.kind, &r.resourceType, &r.action, &r.unrestricted,
-		&r.compartmentType, &r.compartmentID, &r.compartmentParam,
+		&r.compartmentType, &r.compartmentID, &r.compartmentIDs, &r.compartmentParam,
 		&r.filterPath, &r.filterComparator, &r.filterValues, &r.returns,
 	}
 }
@@ -540,6 +541,25 @@ func buildRule(row ruleRow) (authz.Rule, error) {
 	return rule, nil
 }
 
+// subjectSet reads the literal subjects a rule names together. A list this
+// server cannot read denies rather than falling back to the rule's other
+// shapes, because each of those restricts differently and none of them is what
+// the row said.
+func subjectSet(row ruleRow) ([]storage.LogicalID, error) {
+	var ids []storage.LogicalID
+
+	if err := json.Unmarshal([]byte(row.compartmentIDs.String), &ids); err != nil {
+		return nil, fmt.Errorf("%w: %s %s: %w", ErrUnreadableRule, row.resourceType, row.action, err)
+	}
+
+	if len(ids) == 0 {
+		return nil, fmt.Errorf("%w: %s %s names an empty subject set",
+			ErrUnreadableRule, row.resourceType, row.action)
+	}
+
+	return ids, nil
+}
+
 // buildProjection rebuilds the elements the rule hands back, if it names any. A
 // row naming elements this server cannot read denies rather than returning the
 // whole resource, which is what dropping the restriction would do.
@@ -574,6 +594,18 @@ func buildRestriction(row ruleRow) (authz.Rule, error) {
 		return authz.NewUnrestrictedRule(kind, resourceType, action)
 	case row.compartmentID.Valid:
 		subject, err := authz.LiteralSubject(subjectType, storage.LogicalID(row.compartmentID.String))
+		if err != nil {
+			return authz.Rule{}, err
+		}
+
+		return authz.NewRule(kind, resourceType, action, subject)
+	case row.compartmentIDs.Valid:
+		ids, err := subjectSet(row)
+		if err != nil {
+			return authz.Rule{}, err
+		}
+
+		subject, err := authz.LiteralSubject(subjectType, ids...)
 		if err != nil {
 			return authz.Rule{}, err
 		}

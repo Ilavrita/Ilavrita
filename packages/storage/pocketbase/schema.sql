@@ -491,6 +491,7 @@ CREATE TABLE IF NOT EXISTS access_policy_rules (
   unrestricted      INTEGER NOT NULL DEFAULT 0 CHECK (unrestricted IN (0, 1)),
   compartment_type  TEXT,
   compartment_id    TEXT,
+  compartment_ids   TEXT,
   compartment_param TEXT,
   filter_path       TEXT,
   filter_comparator TEXT,
@@ -538,12 +539,25 @@ CREATE TABLE IF NOT EXISTS access_policy_rules (
   )),
 
   -- An unrestricted rule says so and names no subject; a restricted one names a
-  -- subject type plus either a literal id or one parameter, never both.
+  -- subject type plus exactly one of a literal id, a set of literal ids, or one
+  -- parameter. A set is the same restriction as one rule per id, written once.
   CHECK (
-    (unrestricted = 1 AND compartment_type IS NULL AND compartment_id IS NULL AND compartment_param IS NULL)
-    OR (unrestricted = 0 AND compartment_type IS NOT NULL AND compartment_id IS NOT NULL AND compartment_param IS NULL)
-    OR (unrestricted = 0 AND compartment_type IS NOT NULL AND compartment_id IS NULL AND compartment_param IS NOT NULL)
+    (unrestricted = 1
+      AND compartment_type IS NULL AND compartment_id IS NULL
+      AND compartment_ids IS NULL AND compartment_param IS NULL)
+    OR (unrestricted = 0 AND compartment_type IS NOT NULL
+      AND compartment_id IS NOT NULL AND compartment_ids IS NULL AND compartment_param IS NULL)
+    OR (unrestricted = 0 AND compartment_type IS NOT NULL
+      AND compartment_id IS NULL AND compartment_ids IS NOT NULL AND compartment_param IS NULL)
+    OR (unrestricted = 0 AND compartment_type IS NOT NULL
+      AND compartment_id IS NULL AND compartment_ids IS NULL AND compartment_param IS NOT NULL)
   ),
+
+  -- sqlite-only: json_valid, json_type and json_array_length, as elsewhere here.
+  CHECK (compartment_ids IS NULL OR (
+    json_valid(compartment_ids) AND json_type(compartment_ids) = 'array'
+    AND json_array_length(compartment_ids) >= 1
+  )),
 
   FOREIGN KEY (project_id, policy_id)
     REFERENCES access_policies (project_id, id) ON DELETE CASCADE ON UPDATE RESTRICT,

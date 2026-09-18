@@ -91,22 +91,44 @@ func ParseParameters(raw json.RawMessage) (Parameters, error) {
 }
 
 // CompartmentSubject is a rule's restriction before a binding resolves it. The
-// subject type is fixed when the rule is authored; its id is either a literal or
-// one named parameter.
+// subject type is fixed when the rule is authored; its ids are either literals
+// or the single value one named parameter resolves to.
 type CompartmentSubject struct {
 	resourceType storage.ResourceType
-	id           storage.LogicalID
+	ids          []storage.LogicalID
 	parameter    ParameterName
 }
 
-// LiteralSubject restricts a rule to one subject named when the rule is
-// authored, such as the single patient a research policy covers.
-func LiteralSubject(resourceType storage.ResourceType, id storage.LogicalID) (CompartmentSubject, error) {
-	if resourceType == "" || id == "" {
-		return CompartmentSubject{}, fmt.Errorf("%w: %q/%q", ErrMissingSubject, resourceType, id)
+// LiteralSubject restricts a rule to the subjects named when the rule is
+// authored, such as the patients one research policy covers.
+//
+// Naming several is the same restriction as several rules naming one each:
+// every id compiles to its own Grant and storage holds them together. It exists
+// so a roster is one row rather than a row per member, which is an ergonomic
+// difference and not a change in what a policy can say.
+func LiteralSubject(
+	resourceType storage.ResourceType, ids ...storage.LogicalID,
+) (CompartmentSubject, error) {
+	if resourceType == "" || len(ids) == 0 {
+		return CompartmentSubject{}, fmt.Errorf("%w: %q names %d subjects",
+			ErrMissingSubject, resourceType, len(ids))
 	}
 
-	return CompartmentSubject{resourceType: resourceType, id: id}, nil
+	named := make([]storage.LogicalID, 0, len(ids))
+
+	for _, id := range ids {
+		if id == "" {
+			return CompartmentSubject{}, fmt.Errorf("%w: %q names an empty subject", ErrMissingSubject, resourceType)
+		}
+
+		// A repeated id would compile to a second Grant saying what the first
+		// already says, which costs a predicate and answers nothing new.
+		if !slices.Contains(named, id) {
+			named = append(named, id)
+		}
+	}
+
+	return CompartmentSubject{resourceType: resourceType, ids: named}, nil
 }
 
 // ParameterSubject restricts a rule to the subject a binding names, which is how
@@ -129,25 +151,41 @@ func (s CompartmentSubject) Parameter() (ParameterName, bool) {
 	return s.parameter, s.parameter != ""
 }
 
-// Resolve turns the subject into the Compartment a Grant carries. A parameter
-// with no bound value denies: a restriction that cannot name its subject would
-// restrict nothing.
-func (s CompartmentSubject) Resolve(params Parameters) (storage.Compartment, error) {
+// IDs returns the literal subjects the rule was authored with, empty on a
+// subject whose id a binding supplies.
+func (s CompartmentSubject) IDs() []storage.LogicalID {
+	return slices.Clone(s.ids)
+}
+
+// Resolve turns the subject into the Compartments a rule's Grants carry. A
+// parameter with no bound value denies: a restriction that cannot name its
+// subject would restrict nothing.
+func (s CompartmentSubject) Resolve(params Parameters) ([]storage.Compartment, error) {
 	if s.resourceType == "" {
-		return storage.Compartment{}, ErrMissingSubject
+		return nil, ErrMissingSubject
 	}
 
-	id := s.id
+	ids := s.ids
+
 	if s.parameter != "" {
 		value, ok := params[s.parameter]
 		if !ok || value == "" {
-			return storage.Compartment{}, fmt.Errorf("%w: %s", ErrParameterUnresolved, s.parameter)
+			return nil, fmt.Errorf("%w: %s", ErrParameterUnresolved, s.parameter)
 		}
 
-		id = value
+		ids = []storage.LogicalID{value}
 	}
 
-	return storage.Compartment{Type: s.resourceType, ID: id}, nil
+	if len(ids) == 0 {
+		return nil, ErrMissingSubject
+	}
+
+	compartments := make([]storage.Compartment, 0, len(ids))
+	for _, id := range ids {
+		compartments = append(compartments, storage.Compartment{Type: s.resourceType, ID: id})
+	}
+
+	return compartments, nil
 }
 
 // Rule authorizes one action on one resource type under one restriction. One
@@ -171,7 +209,7 @@ func NewRule(
 		return Rule{}, err
 	}
 
-	if subject.resourceType == "" || (subject.id == "" && subject.parameter == "") {
+	if subject.resourceType == "" || (len(subject.ids) == 0 && subject.parameter == "") {
 		return Rule{}, fmt.Errorf("%w: %s %s", ErrMissingSubject, resourceType, action)
 	}
 
@@ -297,20 +335,26 @@ func (r Rule) Covers(kind storage.Kind, resourceType storage.ResourceType, actio
 	return r.kind == kind && r.resourceType == resourceType && r.action == action
 }
 
-// compartment resolves the rule's restriction for one binding. An unrestricted
-// rule resolves to no Compartment, which is the explicit declaration, never an
-// absent one (LNK-5).
-func (r Rule) compartment(params Parameters) (*storage.Compartment, error) {
+// compartments resolves the rule's restriction for one binding, one entry per
+// Grant the rule mints. An unrestricted rule resolves to a single nil, which is
+// the explicit declaration of no restriction and never an absent one (LNK-5).
+func (r Rule) compartments(params Parameters) ([]*storage.Compartment, error) {
 	if r.unrestricted {
-		return nil, nil
+		return []*storage.Compartment{nil}, nil
 	}
 
-	compartment, err := r.subject.Resolve(params)
+	resolved, err := r.subject.Resolve(params)
 	if err != nil {
 		return nil, err
 	}
 
-	return &compartment, nil
+	held := make([]*storage.Compartment, 0, len(resolved))
+
+	for _, compartment := range resolved {
+		held = append(held, &compartment)
+	}
+
+	return held, nil
 }
 
 // Origin is why a policy is being compiled. Super admin is absent on purpose:
@@ -471,16 +515,18 @@ func (p AccessPolicy) Compile(req GrantRequest) ([]storage.Grant, error) {
 			continue
 		}
 
-		compartment, err := rule.compartment(values)
+		compartments, err := rule.compartments(values)
 		if err != nil {
 			return nil, err
 		}
 
-		grants = append(grants, storage.Grant{
-			Project: req.Project, Kind: req.Kind, Type: req.Type,
-			Action: req.Action, Source: source, Compartment: compartment,
-			Filter: rule.grantFilter(), Projection: rule.grantProjection(),
-		})
+		for _, compartment := range compartments {
+			grants = append(grants, storage.Grant{
+				Project: req.Project, Kind: req.Kind, Type: req.Type,
+				Action: req.Action, Source: source, Compartment: compartment,
+				Filter: rule.grantFilter(), Projection: rule.grantProjection(),
+			})
+		}
 	}
 
 	return grants, nil
