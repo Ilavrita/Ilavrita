@@ -159,6 +159,7 @@ type Rule struct {
 	action       storage.Action
 	subject      CompartmentSubject
 	unrestricted bool
+	filter       *storage.Filter
 }
 
 // NewRule authors a rule restricted to one compartment subject.
@@ -188,6 +189,46 @@ func NewUnrestrictedRule(kind storage.Kind, resourceType storage.ResourceType, a
 	}
 
 	return Rule{kind: kind, resourceType: resourceType, action: action, unrestricted: true}, nil
+}
+
+// WithFilter narrows the rule to the resources whose named element matches,
+// such as the final Observations of a patient whose preliminary ones a
+// reviewing clinician must not see.
+//
+// It takes a Filter by value because storage.NewFilter is the only thing that
+// builds one, so a rule cannot come to carry a restriction nobody validated. A
+// filter only ever narrows, so it needs no guard of its own — but neither does
+// it lift one: a filter on an unrestricted rule over a clinical type leaves it
+// unrestricted across every patient, which is what LNK-5 refuses.
+func (r Rule) WithFilter(filter storage.Filter) Rule {
+	// The receiver and the parameter are both copies, so this narrows a new rule
+	// and leaves the one it was called on alone.
+	r.filter = &filter
+
+	return r
+}
+
+// Filter returns the rule's element restriction, absent on a rule that narrows
+// by compartment alone.
+func (r Rule) Filter() (storage.Filter, bool) {
+	if r.filter == nil {
+		return storage.Filter{}, false
+	}
+
+	return *r.filter, true
+}
+
+// grantFilter hands a compiled Grant its own copy. A Grant's Filter field is
+// exported, so sharing the rule's pointer would let anyone holding one compiled
+// Grant rewrite the policy every later compilation reads.
+func (r Rule) grantFilter() *storage.Filter {
+	if r.filter == nil {
+		return nil
+	}
+
+	held := *r.filter
+
+	return &held
 }
 
 // Kind returns the resource family the rule covers.
@@ -399,6 +440,7 @@ func (p AccessPolicy) Compile(req GrantRequest) ([]storage.Grant, error) {
 		grants = append(grants, storage.Grant{
 			Project: req.Project, Kind: req.Kind, Type: req.Type,
 			Action: req.Action, Source: source, Compartment: compartment,
+			Filter: rule.grantFilter(),
 		})
 	}
 
