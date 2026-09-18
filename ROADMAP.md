@@ -32,21 +32,30 @@ single security and Project model, even though they ship in phases.
 - [x] Authentication, authorization and an audit trail
 - [ ] Typed search indexes — string, token, reference and date are in; number,
       quantity and URI are not
-- [ ] Binary and DocumentReference payloads — Binary is in, over local disk; the
-      S3-compatible store and any special handling of a DocumentReference's own
-      attachments are not
+- [ ] Binary and DocumentReference payloads — Binary is in, over local disk, with
+      the bytes made durable before the row that names them commits.
+      `DocumentReference` refuses inlined bytes and sends a client to `Binary`.
+      The S3-compatible store is not in
 - [ ] Reindexing — an install gaining the index backfills once; there is no
       operator-triggered reindex
-- [ ] Migrations, backup, restore, upgrade and rollback procedures — the schema
-      is prepared at startup, including rebuilding a table to adopt a constraint;
-      backup, restore and rollback are not
+- [x] Backup and restore — `ilavrita backup`, `verify-backup` and `restore`, with
+      the database snapshot and the payloads taken in an order that makes the
+      archive consistent
+- [ ] Upgrade and rollback procedures — the schema is prepared at startup,
+      including rebuilding a table to adopt a constraint; moving an install
+      between releases is not written down
 - [ ] Bundle batch and transaction, with proven atomic rollback
-- [ ] Structural validation and a baseline `$validate`
+- [x] Validation and `$validate` — every resource is checked against its own R4
+      base definition, on the operation and on every write alike
+- [ ] Terminology — a required binding is not checked, so `"status": "banana"`
+      passes
 - [ ] Single binary and container image
 
-**Structural validation is the one that matters most.** Everything else on this
-list is breadth; that one is the difference between a server that keeps a record
-and a server that keeps a record somebody can rely on.
+**Terminology is now the one that matters most.** A resource is checked against
+its own definition — an element nobody declared, a missing required one, a
+malformed date are all refused — but a code is not checked against the ValueSet
+its element is bound to. That is the remaining difference between a server that
+keeps a well-formed record and one that keeps a record somebody can rely on.
 
 ## Phase 2 — control plane and developer platform
 
