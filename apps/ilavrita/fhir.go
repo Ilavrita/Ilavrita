@@ -10,6 +10,7 @@ import (
 	"github.com/Ilavrita/Ilavrita/packages/files"
 	"github.com/Ilavrita/Ilavrita/packages/search"
 	"github.com/Ilavrita/Ilavrita/packages/storage"
+	"github.com/Ilavrita/Ilavrita/packages/subscription"
 	"github.com/pocketbase/pocketbase/apis"
 	"github.com/pocketbase/pocketbase/core"
 	"github.com/pocketbase/pocketbase/tools/router"
@@ -210,8 +211,14 @@ func baseURL(request *core.RequestEvent) (string, error) {
 // bounding them, and the Project and type that Scope was decided for. The Scope
 // travels with the stores, so no handler holds one without the other.
 type granted struct {
-	resources    storage.ResourceRepository
-	payloads     files.Store
+	resources storage.ResourceRepository
+	payloads  files.Store
+
+	// notifications is what a write owes whoever is watching, and standing is
+	// who a Subscription written here would deliver as.
+	notifications subscription.Queue
+	standing      subscription.Owner
+
 	searches     search.Repository
 	versions     storage.VersionStore
 	transactions storage.Transactor
@@ -272,10 +279,21 @@ func permit(request *core.RequestEvent, resourceType storage.ResourceType, actio
 		held.resources, held.versions = allowed.Resources, allowed.Versions
 		held.searches, held.transactions = allowed.Searches, allowed.Transactions
 		held.payloads, held.project = allowed.Payloads, allowed.Project
+		held.notifications = allowed.Notifications
 		grants = append(grants, allowed.Scope.Grants()...)
 	}
 
 	held.scope = storage.NewScope(grants...)
+
+	// Who a Subscription written here would deliver as. It is read from the
+	// session rather than from the body, because a client that could state it
+	// could subscribe as somebody else — and what a subscriber may be told is
+	// exactly what that somebody may read.
+	if session, found, err := serving.session(request); err == nil && found {
+		held.standing = subscription.Owner{
+			Membership: session.Membership(), Principal: session.Principal(),
+		}
+	}
 
 	// Whether a caller can read back what it is about to write is decided in
 	// storage, against the compartments the submitted resource declares. This

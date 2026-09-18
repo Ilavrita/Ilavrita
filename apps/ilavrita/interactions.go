@@ -238,6 +238,10 @@ func replaceResource(
 		return refuse(request, err)
 	}
 
+	if err := checkSubscription(key, content); err != nil {
+		return refuse(request, err)
+	}
+
 	row, carried, err := splitPayload(key, content)
 	if err != nil {
 		return refuse(request, err)
@@ -247,7 +251,7 @@ func replaceResource(
 		return held.resources.Update(ctx, held.scope, storage.ResourceRecord{
 			Key: key, Content: row, Compartments: compartments,
 		}, expect)
-	}, held.storing(key, carried))
+	}, held.afterWrite(key, carried))
 	if err != nil {
 		return refuse(request, err)
 	}
@@ -268,6 +272,10 @@ func createResourceAt(
 		return refuse(request, err)
 	}
 
+	if err := checkSubscription(key, content); err != nil {
+		return refuse(request, err)
+	}
+
 	row, carried, err := splitPayload(key, content)
 	if err != nil {
 		return refuse(request, err)
@@ -277,7 +285,7 @@ func createResourceAt(
 		return held.resources.Create(ctx, held.scope, storage.ResourceRecord{
 			Key: key, Content: row, Compartments: compartments,
 		})
-	}, held.storing(key, carried))
+	}, held.afterWrite(key, carried))
 	if err != nil {
 		return refuse(request, err)
 	}

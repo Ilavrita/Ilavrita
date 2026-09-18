@@ -578,6 +578,13 @@ func TestACompartmentSubjectIsCreatedByNamingIt(t *testing.T) {
 func replacement(resourceType, id string) string {
 	body := `{"resourceType":"` + resourceType + `","id":"` + id + `"`
 
+	// A Subscription states what it watches, how it delivers and whether it is
+	// on. All three are checked when it is written, so a fixture states them.
+	if resourceType == string(subscriptionType) {
+		body += `,"criteria":"Observation?status=final","status":"requested"` +
+			`,"channel":{"type":"rest-hook","endpoint":"https://example.test/hook"}`
+	}
+
 	// A Binary is bytes, and what a client called them is what this server
 	// hands back, so there is nothing to store without it.
 	if resourceType == string(binaryType) {

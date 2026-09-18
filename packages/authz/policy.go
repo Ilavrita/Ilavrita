@@ -607,6 +607,12 @@ func validateTriple(kind storage.Kind, resourceType storage.ResourceType, action
 // nonClinicalResourceTypes is the closed list of FHIR types an unrestricted rule
 // may cover: directory, terminology, conformance and definitional content. It is
 // an allowlist so an unclassified type is refused rather than assumed safe.
+//
+// Subscription is here because it is configuration: it holds a query and an
+// endpoint, never a patient's record. What a subscription then delivers is a
+// different question, decided against the standing that created it rather than
+// against the subscription — so a rule covering Subscription grants nothing
+// about the resources one would match.
 var nonClinicalResourceTypes = []storage.ResourceType{
 	"ActivityDefinition", "CapabilityStatement", "ChargeItemDefinition", "CodeSystem",
 	"CompartmentDefinition", "ConceptMap", "DeviceDefinition", "Endpoint",
@@ -616,8 +622,8 @@ var nonClinicalResourceTypes = []storage.ResourceType{
 	"OperationDefinition", "Organization", "OrganizationAffiliation", "PlanDefinition",
 	"Practitioner", "PractitionerRole", "Questionnaire", "ResearchDefinition",
 	"ResearchElementDefinition", "Schedule", "SearchParameter", "Slot",
-	"StructureDefinition", "StructureMap", "Substance", "TerminologyCapabilities",
-	"ValueSet",
+	"StructureDefinition", "StructureMap", "Subscription", "Substance",
+	"TerminologyCapabilities", "ValueSet",
 }
 
 // CarriesClinicalData reports whether a resource type may hold patient data. A

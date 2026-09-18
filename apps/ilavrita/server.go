@@ -13,6 +13,7 @@ import (
 	"github.com/Ilavrita/Ilavrita/packages/search"
 	"github.com/Ilavrita/Ilavrita/packages/storage"
 	sqlite "github.com/Ilavrita/Ilavrita/packages/storage/pocketbase"
+	"github.com/Ilavrita/Ilavrita/packages/subscription"
 	"github.com/pocketbase/pocketbase/core"
 )
 
@@ -31,6 +32,12 @@ type backend struct {
 	memberships  *sqlite.MembershipStore
 	applications *sqlite.ClientApplicationStore
 	resolvers    authz.Resolvers
+
+	// notifications is what a write owes whoever is watching. It is the
+	// interface rather than the store, so a backend wired without one holds a
+	// nil the write path can actually test for: a concrete nil handed to an
+	// interface field is not nil, and would be called.
+	notifications subscription.Queue
 
 	// payloads holds the bytes a Binary describes. A backend wired without one
 	// serves no payload, which is what a deployment with nowhere to put them
@@ -72,13 +79,14 @@ type sessionResolver interface {
 // writes, the commit boundary it writes within, and the Scope and Project it
 // was decided for. They travel together, so no route holds one without them.
 type access struct {
-	Resources    storage.ResourceRepository
-	Payloads     files.Store
-	Searches     search.Repository
-	Versions     storage.VersionStore
-	Transactions storage.Transactor
-	Scope        storage.Scope
-	Project      storage.ProjectID
+	Resources     storage.ResourceRepository
+	Payloads      files.Store
+	Notifications subscription.Queue
+	Searches      search.Repository
+	Versions      storage.VersionStore
+	Transactions  storage.Transactor
+	Scope         storage.Scope
+	Project       storage.ProjectID
 }
 
 // clock is the time this server reads, falling back to the real one so weak
@@ -141,16 +149,17 @@ const payloadDirectory = "payloads"
 // per request would open a second pool on every call.
 func newBackend(db *sql.DB, dataDir string) *backend {
 	return &backend{
-		resources:    sqlite.NewResourceStore(db),
-		users:        sqlite.NewUserStore(db),
-		projects:     sqlite.NewProjectStore(db),
-		sessions:     sqlite.NewSessionStore(db),
-		memberships:  sqlite.NewMembershipStore(db),
-		applications: sqlite.NewClientApplicationStore(db),
-		audits:       sqlite.NewAuditStore(db),
-		factors:      sqlite.NewFactorStore(db, sealingKey()),
-		payloads:     files.NewDisk(filepath.Join(dataDir, payloadDirectory)),
-		attempts:     newAttemptLimiter(sqlite.NewAttemptStore(db), nil),
+		resources:     sqlite.NewResourceStore(db),
+		users:         sqlite.NewUserStore(db),
+		projects:      sqlite.NewProjectStore(db),
+		sessions:      sqlite.NewSessionStore(db),
+		memberships:   sqlite.NewMembershipStore(db),
+		applications:  sqlite.NewClientApplicationStore(db),
+		audits:        sqlite.NewAuditStore(db),
+		factors:       sqlite.NewFactorStore(db, sealingKey()),
+		payloads:      files.NewDisk(filepath.Join(dataDir, payloadDirectory)),
+		notifications: sqlite.NewSubscriptionStore(db),
+		attempts:      newAttemptLimiter(sqlite.NewAttemptStore(db), nil),
 		resolvers: authz.Resolvers{
 			Memberships: sqlite.NewMembershipResolver(db),
 			Projects:    sqlite.NewProjectResolver(db),

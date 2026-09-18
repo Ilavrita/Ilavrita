@@ -11,6 +11,7 @@ import (
 	"github.com/Ilavrita/Ilavrita/packages/search"
 	"github.com/Ilavrita/Ilavrita/packages/storage"
 	sqlite "github.com/Ilavrita/Ilavrita/packages/storage/pocketbase"
+	"github.com/Ilavrita/Ilavrita/packages/subscription"
 	"github.com/pocketbase/pocketbase/core"
 )
 
@@ -72,6 +73,12 @@ var (
 
 	codeRefused = refusal{http.StatusUnauthorized, fhir.CodeLogin,
 		"The second-factor code was refused."}
+
+	subscriptionsUnavailable = refusal{http.StatusNotImplemented, fhir.CodeNotSupported,
+		"This deployment is not configured to hold subscriptions."}
+
+	unreadableSubscription = refusal{http.StatusBadRequest, fhir.CodeInvalid,
+		"This subscription states something this server could not honour."}
 
 	payloadUnavailable = refusal{http.StatusNotImplemented, fhir.CodeNotSupported,
 		"This deployment is not configured to hold resource payloads."}
@@ -148,6 +155,13 @@ func translate(err error) refusal {
 		return throttled
 	case errors.Is(err, errPayloadUnavailable):
 		return payloadUnavailable
+	case errors.Is(err, errSubscriptionsUnavailable), errors.Is(err, subscription.ErrMissingOwner):
+		return subscriptionsUnavailable
+	case errors.Is(err, subscription.ErrMalformedCriteria),
+		errors.Is(err, subscription.ErrUnknownChannel),
+		errors.Is(err, subscription.ErrMalformedEndpoint),
+		errors.Is(err, subscription.ErrUnknownStatus):
+		return unreadableSubscription
 	case errors.Is(err, errMissingContentType), errors.Is(err, errUnreadablePayload):
 		return unreadablePayload
 	case errors.Is(err, files.ErrTooLarge):

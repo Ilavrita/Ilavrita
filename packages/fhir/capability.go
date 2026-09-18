@@ -70,6 +70,7 @@ var servedResourceTypes = []string{
 	"Slot",
 	"StructureDefinition",
 	"StructureMap",
+	"Subscription",
 	"Substance",
 	"TerminologyCapabilities",
 	"ValueSet",

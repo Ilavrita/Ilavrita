@@ -81,12 +81,13 @@ func authorize(request *core.RequestEvent, want decision) (access, error) {
 	}
 
 	return access{
-		Resources:    serving.resources,
-		Payloads:     serving.payloads,
-		Searches:     serving.resources,
-		Versions:     serving.resources,
-		Transactions: serving.resources,
-		Scope:        scope,
-		Project:      decided.Project,
+		Resources:     serving.resources,
+		Payloads:      serving.payloads,
+		Notifications: serving.notifications,
+		Searches:      serving.resources,
+		Versions:      serving.resources,
+		Transactions:  serving.resources,
+		Scope:         scope,
+		Project:       decided.Project,
 	}, nil
 }

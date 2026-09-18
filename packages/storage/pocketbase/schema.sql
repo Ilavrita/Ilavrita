@@ -1305,3 +1305,101 @@ CREATE TABLE IF NOT EXISTS user_second_factors (
   CHECK (state <> 'active' OR activated_at IS NOT NULL),
   CHECK (state = 'active' OR activated_at IS NULL)
 );
+
+-- ===========================================================================
+-- Subscriptions. What a write owes a subscriber, kept as rows so a restart
+-- between the write and the notification loses neither.
+-- ===========================================================================
+
+-- Who a Subscription delivers as.
+--
+-- A notification carries what a resource says, so what a subscriber may be told
+-- is what the standing that created the subscription may read — never what the
+-- subscription asked for. The principal is recorded here because that is what a
+-- Scope is built from, and it is recorded when the Subscription is created
+-- because a client must not be able to state it.
+--
+-- The key cascades: standing withdrawn is a subscription that stops delivering,
+-- rather than one that goes on delivering as somebody who is no longer there.
+
+-- tenant: project_id
+CREATE TABLE IF NOT EXISTS subscription_owners (
+  project_id      TEXT NOT NULL,
+  subscription_id TEXT NOT NULL,
+  membership_id   TEXT NOT NULL,
+  principal_kind  TEXT NOT NULL,
+  principal_id    TEXT NOT NULL,
+  created_at      BIGINT NOT NULL,
+
+  PRIMARY KEY (project_id, subscription_id),
+
+  CHECK (subscription_id <> '' AND principal_kind <> '' AND principal_id <> ''),
+
+  FOREIGN KEY (project_id, membership_id)
+    REFERENCES project_memberships (project_id, id) ON DELETE CASCADE ON UPDATE RESTRICT
+);
+
+-- What was written, before anybody has worked out who should hear about it.
+--
+-- A write records one row here and nothing more. Matching every subscription
+-- inside the write would make every write cost as much as the subscription list
+-- is long, and would hold the transaction open while it did.
+
+-- tenant: project_id
+CREATE TABLE IF NOT EXISTS subscription_backlog (
+  project_id TEXT NOT NULL,
+  id         TEXT NOT NULL,
+  res_type   TEXT NOT NULL,
+  res_id     TEXT NOT NULL,
+  version_id TEXT NOT NULL,
+  at         BIGINT NOT NULL,
+
+  PRIMARY KEY (project_id, id),
+
+  CHECK (substr(id, 1, 4) = 'wrt_'),
+  CHECK (res_type <> '' AND res_id <> '' AND version_id <> '')
+);
+
+-- The order a backlog is worked through: oldest first, so a subscriber is told
+-- about writes in the order they happened.
+CREATE INDEX IF NOT EXISTS ix_subscription_backlog_at ON subscription_backlog (at, id);
+
+-- One thing one subscriber is owed.
+--
+-- It carries the resource's key and not its content. The resource is read at
+-- delivery time under the owner's own Scope, so access withdrawn between the
+-- write and the notification is access the notification does not have: a queue
+-- holding the body would deliver what the subscriber could no longer read.
+
+-- tenant: project_id
+CREATE TABLE IF NOT EXISTS subscription_deliveries (
+  project_id      TEXT NOT NULL,
+  id              TEXT NOT NULL,
+  subscription_id TEXT NOT NULL,
+  res_type        TEXT NOT NULL,
+  res_id          TEXT NOT NULL,
+  version_id      TEXT NOT NULL,
+  state           TEXT NOT NULL CHECK (state IN ('pending', 'delivered', 'abandoned')),
+  attempts        BIGINT NOT NULL DEFAULT 0,
+  due_at          BIGINT NOT NULL,
+  created_at      BIGINT NOT NULL,
+  settled_at      BIGINT,
+
+  PRIMARY KEY (project_id, id),
+
+  CHECK (substr(id, 1, 4) = 'dlv_'),
+  CHECK (res_type <> '' AND res_id <> '' AND version_id <> ''),
+  CHECK (attempts >= 0),
+
+  -- A settled delivery says when, and a pending one has not settled.
+  CHECK (state = 'pending' OR settled_at IS NOT NULL),
+  CHECK (state <> 'pending' OR settled_at IS NULL),
+
+  FOREIGN KEY (project_id, subscription_id)
+    REFERENCES subscription_owners (project_id, subscription_id)
+    ON DELETE CASCADE ON UPDATE RESTRICT
+);
+
+-- What a worker asks for: the pending deliveries that are due.
+CREATE INDEX IF NOT EXISTS ix_subscription_deliveries_due
+  ON subscription_deliveries (state, due_at, id);
