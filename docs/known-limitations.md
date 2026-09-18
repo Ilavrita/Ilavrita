@@ -146,6 +146,34 @@ Fan-out costs one search per subscription per write, done by a worker outside th
 request. It is fine at a handful of subscriptions and is the first thing to
 revisit if that number grows.
 
+## The base definitions are seeded, and not yet used to validate
+
+This build embeds the FHIR R4 specification's own definition bundles — 4.0.1, as
+published, gzipped and otherwise unmodified, with their digests recorded in
+`packages/conformance/definitions/SOURCE.md`. Startup seeds every
+`StructureDefinition` into an install-wide store, and
+`GET /fhir/R4/StructureDefinition/{id}` answers with the specification's own.
+
+**Seeding is idempotent and cheap.** A digest of what the build embeds is
+compared with what the install last seeded; when they match, startup reads one
+row and stops rather than parsing thirty-five megabytes of JSON. When they differ
+— a first start, or an upgrade — every definition is written and anything the new
+bundles no longer carry is removed, in one transaction: a seed half-done beside a
+marker saying it is done is the one state nothing would ever correct.
+
+They belong to no Project. A copy per Project would be the same bytes written as
+many times as there are tenants, and there is nothing tenant-specific about what
+an `Observation` is. A Project that writes its own `StructureDefinition` under
+one of those ids serves its own; the specification's is what is behind it.
+
+Two consequences worth knowing. The fallback answers a caller whose own Project
+holds no such row — which includes a confined caller who may not see one that is
+there, because an id must not be probeable. That is safe for the published
+specification and is why nothing confidential may be seeded into that store. And
+**nothing validates against them yet**: the definitions are readable and the
+validator still does not open them, so the section below is still the whole of
+what a write is checked against.
+
 ## Validation is structural, and says so
 
 `POST /fhir/R4/{type}/$validate` answers an `OperationOutcome` naming each issue

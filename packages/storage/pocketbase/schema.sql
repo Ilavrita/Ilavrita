@@ -365,6 +365,52 @@ CREATE INDEX IF NOT EXISTS ix_fhir_history_compartment_version
   ON fhir_resource_history_compartment (project_id, res_type, res_id, version_seq, comp_type, comp_id);
 
 -- ===========================================================================
+-- Canonical resources. The FHIR specification's own definitions, seeded from
+-- what this build embeds.
+-- ===========================================================================
+
+-- They belong to no Project: they are the specification, identical in every one
+-- of them, and a copy per Project would be the same bytes written as many times
+-- as there are tenants. Nothing writes here over the API — a seed is the only
+-- thing that does — so there is no version, no history and no tombstone.
+
+-- tenant-exempt: the base specification, the same for every Project
+CREATE TABLE IF NOT EXISTS canonical_resource (
+  res_type TEXT NOT NULL,
+  res_id   TEXT NOT NULL,
+  url      TEXT NOT NULL,
+  version  TEXT NOT NULL,
+  content  TEXT NOT NULL,
+
+  PRIMARY KEY (res_type, res_id),
+
+  CHECK (res_type <> '' AND res_id <> ''),
+  CHECK (url <> '' AND content <> '')
+);
+
+-- A canonical url is how a reference to a definition is resolved, which is the
+-- one lookup that is not by id.
+CREATE UNIQUE INDEX IF NOT EXISTS ux_canonical_resource_url
+  ON canonical_resource (url, version);
+
+-- What was seeded, so a start that would change nothing reads one row and stops
+-- rather than parsing the whole specification to find that out.
+
+-- tenant: none, one row describing what this install holds
+CREATE TABLE IF NOT EXISTS canonical_seed (
+  id        TEXT NOT NULL CHECK (id = 'canonical'),
+  digest    TEXT NOT NULL,
+  release   TEXT NOT NULL,
+  held      BIGINT NOT NULL,
+  seeded_at BIGINT NOT NULL,
+
+  PRIMARY KEY (id),
+
+  CHECK (digest <> '' AND release <> ''),
+  CHECK (held >= 0)
+);
+
+-- ===========================================================================
 -- Platform resources. Same document shape as FHIR resources, separate tables.
 -- ===========================================================================
 

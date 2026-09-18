@@ -95,11 +95,51 @@ func readResource(request *core.RequestEvent) error {
 	}
 
 	record, err := held.resources.Read(request.Request.Context(), held.scope, key)
+	if errors.Is(err, storage.ErrNotFound) {
+		return readCanonical(request, key, err)
+	}
+
 	if err != nil {
 		return refuse(request, err)
 	}
 
 	return respondPossiblePayload(request, held, record)
+}
+
+// readCanonical answers from the FHIR base definitions when the Project holds no
+// resource of that id.
+//
+// The Project's own store is asked first, so a Project that wrote its own
+// StructureDefinition for a type serves that one. What is behind this is the
+// specification: the same bytes in every Project, belonging to none of them.
+//
+// Authorization already happened — begin decided it against this caller's Scope
+// for this type, and refused a caller holding no read of it at all. The original
+// failure is carried so a deployment holding no definitions answers the same 404
+// it always did.
+//
+// What is behind this fallback is load-bearing and narrow. A confined caller
+// reads ErrNotFound for a row they may not see as well as for one that is not
+// there — an id must not be probeable — so this answers both. That is safe for
+// the FHIR base definitions, which are the published specification and belong to
+// no compartment, and it is why nothing confidential may ever be seeded here.
+func readCanonical(request *core.RequestEvent, key storage.ResourceKey, absent error) error {
+	if serving == nil || serving.definitions == nil {
+		return refuse(request, absent)
+	}
+
+	record, found, err := serving.definitions.Read(request.Request.Context(), key.Type, key.ID)
+	if err != nil {
+		return refuse(request, err)
+	}
+
+	if !found {
+		return refuse(request, absent)
+	}
+
+	record.Key = key
+
+	return respondResource(request, http.StatusOK, record)
 }
 
 // respondPossiblePayload answers a read with whatever the caller asked for: a

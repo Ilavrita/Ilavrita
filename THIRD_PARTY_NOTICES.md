@@ -8,6 +8,12 @@ third-party software under the licences recorded here.
 | Component | Origin | Licence | Notice |
 | --- | --- | --- | --- |
 | PocketBase (Ilavrita fork) | [`Ilavrita/pocketbase`](https://github.com/Ilavrita/pocketbase), vendored at `third_party/pocketbase` | MIT | [`LICENSES/PocketBase-MIT.txt`](LICENSES/PocketBase-MIT.txt) |
+| FHIR R4 base definitions | [hl7.org/fhir/R4](https://hl7.org/fhir/R4/), vendored at `packages/conformance/definitions` | CC0 1.0 | [`packages/conformance/definitions/SOURCE.md`](packages/conformance/definitions/SOURCE.md) |
+
+The FHIR definition bundles are shipped gzipped and otherwise unmodified, with
+their upstream digests recorded, so anybody can re-download them and compare.
+FHIR® and HL7® are registered trademarks of Health Level Seven International;
+Ilavrita is not produced, endorsed or certified by HL7.
 
 The fork is pinned as a git submodule rather than copied into this tree, so its
 history, copyright headers and licence file stay intact and auditable.

@@ -4,6 +4,8 @@ import (
 	"context"
 	"crypto/rand"
 	"database/sql"
+	"fmt"
+	"log"
 	"path/filepath"
 	"time"
 
@@ -49,6 +51,11 @@ type backend struct {
 	// serves no payload, which is what a deployment with nowhere to put them
 	// can honestly offer.
 	payloads files.Store
+
+	// definitions holds the FHIR specification's own definitions. They belong to
+	// no Project, so they are read beside the Project's own store rather than
+	// through a Scope: what a caller may read is decided before this is reached.
+	definitions *sqlite.CanonicalStore
 
 	// factors holds the second factor an identity proved. A backend wired
 	// without one requires none, which is what a deployment that configured no
@@ -156,6 +163,12 @@ func startServing(app core.App) error {
 
 	serving = newBackend(db.DB(), app.DataDir())
 
+	if err := seedDefinitions(context.Background(), serving.definitions); err != nil {
+		_ = db.Close()
+
+		return err
+	}
+
 	// The notifier outlives every request and stops with the process. A write
 	// records what it owes and returns; this is what pays it.
 	working, stop := context.WithCancel(context.Background())
@@ -213,6 +226,7 @@ func newBackend(db *sql.DB, dataDir string) *backend {
 		applications:  sqlite.NewClientApplicationStore(db),
 		audits:        sqlite.NewAuditStore(db),
 		factors:       sqlite.NewFactorStore(db, sealingKey()),
+		definitions:   sqlite.NewCanonicalStore(db),
 		payloads:      files.NewDisk(filepath.Join(dataDir, payloadDirectory)),
 		notifications: sqlite.NewSubscriptionStore(db),
 		sockets:       newHub(),
@@ -229,3 +243,27 @@ func newBackend(db *sql.DB, dataDir string) *backend {
 // A by-key interaction still reaches no other Project: authorizationRequest
 // names no grantor, and BuildScope consults no link nobody opted into. The real
 // resolver is wired here so the capability exists for the routes that will.
+
+// seedDefinitions brings the FHIR base definitions up to what this build
+// embeds, before the first request.
+//
+// A failure here is fatal, like every other failure at startup. A server that
+// could not seed them would answer 404 for StructureDefinition/Observation,
+// which is a wrong answer rather than a missing feature — and its
+// CapabilityStatement would still say it serves the type.
+//
+// It is idempotent, and cheap when there is nothing to do: the digest of what
+// this build embeds is compared with what the install last seeded, so an
+// ordinary start reads one row instead of parsing the specification.
+func seedDefinitions(ctx context.Context, store *sqlite.CanonicalStore) error {
+	seeded, changed, err := store.Seed(ctx, time.Now())
+	if err != nil {
+		return fmt.Errorf("ilavrita: seed the FHIR definitions: %w", err)
+	}
+
+	if changed {
+		log.Printf("seeded %d FHIR %s definitions", seeded.Held, seeded.Release)
+	}
+
+	return nil
+}
