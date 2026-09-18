@@ -26,7 +26,7 @@ single security and Project model, even though they ship in phases.
 - [x] Immutable version history and versioned read
 - [x] Optimistic concurrency through ETag and If-Match
 - [x] Search parser and SearchParameter registry
-- [x] Paginated searchset Bundles
+- [x] Paginated searchset and history Bundles
 - [x] OperationOutcome on every FHIR failure path
 - [x] Project isolation enforced in the query layer
 - [x] Authentication, authorization and an audit trail

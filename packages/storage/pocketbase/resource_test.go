@@ -206,7 +206,7 @@ func TestListVersionsDeniesAnotherProjectsResource(t *testing.T) {
 	store, _ := newStore(t)
 	key := seed(t, store, "prj_b", "shared")
 
-	_, err := store.ListVersions(t.Context(), fullScope("prj_a", "Patient"), key)
+	_, err := store.ListVersions(t.Context(), fullScope("prj_a", "Patient"), key, wholeHistory())
 	if !errors.Is(err, storage.ErrNotFound) {
 		t.Fatalf("a project A Scope listed a project B resource's history: err = %v", err)
 	}
@@ -242,7 +242,7 @@ func TestHistoryUnderAnOwnProjectKeyNeverReturnsAnotherProjectsRow(t *testing.T)
 
 	scope := fullScope("prj_a", "Patient")
 
-	if _, err := store.ListVersions(t.Context(), scope, patientKey("prj_a", "shared")); !errors.Is(err, storage.ErrNotFound) {
+	if _, err := store.ListVersions(t.Context(), scope, patientKey("prj_a", "shared"), wholeHistory()); !errors.Is(err, storage.ErrNotFound) {
 		t.Errorf("a project A key listed project B's history: err = %v", err)
 	}
 
@@ -308,7 +308,7 @@ func TestZeroScopeReadsNoHistory(t *testing.T) {
 
 	var empty storage.Scope
 
-	if _, err := store.ListVersions(t.Context(), empty, key); !errors.Is(err, storage.ErrNotFound) {
+	if _, err := store.ListVersions(t.Context(), empty, key, wholeHistory()); !errors.Is(err, storage.ErrNotFound) {
 		t.Fatalf("the zero Scope listed history: err = %v", err)
 	}
 
@@ -345,7 +345,7 @@ func TestZeroScopeCompilesToAQueryMatchingNoRows(t *testing.T) {
 	compiled := map[string]func() (string, []any, error){
 		"read":    func() (string, []any, error) { return currentStatement(empty, key, storage.ActionRead) },
 		"vread":   func() (string, []any, error) { return versionStatement(empty, key, "1") },
-		"history": func() (string, []any, error) { return versionsStatement(empty, key) },
+		"history": func() (string, []any, error) { return versionsStatement(empty, key, wholeHistory()) },
 		"write arm": func() (string, []any, error) {
 			return writeStatement(updateClauses.expecting, empty, key, storage.ActionWrite)
 		},
@@ -409,7 +409,7 @@ func TestReadGrantDoesNotAuthorizeHistory(t *testing.T) {
 
 	readOnly := storage.NewScope(fhirGrant("prj_a", "Patient", storage.ActionRead))
 
-	if _, err := store.ListVersions(t.Context(), readOnly, key); !errors.Is(err, storage.ErrNotFound) {
+	if _, err := store.ListVersions(t.Context(), readOnly, key, wholeHistory()); !errors.Is(err, storage.ErrNotFound) {
 		t.Errorf("a Scope covering only the current row's type listed its history: err = %v", err)
 	}
 
@@ -424,7 +424,7 @@ func TestHistoryGrantForAnotherTypeReadsNothing(t *testing.T) {
 
 	elsewhere := storage.NewScope(fhirGrant("prj_a", "Observation", storage.ActionHistory))
 
-	if _, err := store.ListVersions(t.Context(), elsewhere, key); !errors.Is(err, storage.ErrNotFound) {
+	if _, err := store.ListVersions(t.Context(), elsewhere, key, wholeHistory()); !errors.Is(err, storage.ErrNotFound) {
 		t.Errorf("an Observation history Grant listed a Patient's history: err = %v", err)
 	}
 }
@@ -480,10 +480,12 @@ func TestHistoryChecksTheCompartmentOfEachVersion(t *testing.T) {
 	scope := storage.NewScope(compartmentGrant("prj_a", "Patient", storage.ActionHistory,
 		storage.Compartment{Type: "Patient", ID: "pat-1"}))
 
-	versions, err := store.ListVersions(t.Context(), scope, key)
+	held, err := store.ListVersions(t.Context(), scope, key, wholeHistory())
 	if err != nil {
 		t.Fatalf("list versions: %v", err)
 	}
+
+	versions := held.Records
 
 	if len(versions) != 1 || versions[0].Version != "2" {
 		t.Fatalf("history served %d versions %v; a version outside the Grant's compartment must not be returned",
@@ -549,10 +551,12 @@ func TestRecreatedIdHidesTheVersionsWrittenBeforeTheDelete(t *testing.T) {
 		t.Fatalf("recreate: %v", err)
 	}
 
-	versions, err := store.ListVersions(t.Context(), scope, key)
+	held, err := store.ListVersions(t.Context(), scope, key, wholeHistory())
 	if err != nil {
 		t.Fatalf("list versions: %v", err)
 	}
+
+	versions := held.Records
 
 	if len(versions) != 1 || versions[0].Version != "4" {
 		t.Fatalf("the new owner inherited %d versions %v from before the delete", len(versions), versions)
@@ -647,10 +651,12 @@ func TestWriteReadDeleteRoundTrip(t *testing.T) {
 		t.Fatalf("a deleted resource read as %v, want ErrDeleted", err)
 	}
 
-	versions, err := store.ListVersions(t.Context(), scope, key)
+	held, err := store.ListVersions(t.Context(), scope, key, wholeHistory())
 	if err != nil {
 		t.Fatalf("list versions: %v", err)
 	}
+
+	versions := held.Records
 
 	if len(versions) != 3 {
 		t.Fatalf("history holds %d versions, want 3", len(versions))
@@ -700,7 +706,7 @@ func TestWithinTransactionRollsBackEveryStatement(t *testing.T) {
 		t.Fatalf("the rolled back create survived: err = %v", err)
 	}
 
-	if _, err := store.ListVersions(t.Context(), scope, key); !errors.Is(err, storage.ErrNotFound) {
+	if _, err := store.ListVersions(t.Context(), scope, key, wholeHistory()); !errors.Is(err, storage.ErrNotFound) {
 		t.Fatalf("the rolled back version survived: err = %v", err)
 	}
 }
@@ -774,10 +780,10 @@ func compiledStatements(t *testing.T, key storage.ResourceKey) map[string]struct
 	text, args, err = versionStatement(restricted, key, "1")
 	add("vread in compartment", text, args, err)
 
-	text, args, err = versionsStatement(scope, key)
+	text, args, err = versionsStatement(scope, key, wholeHistory())
 	add("history", text, args, err)
 
-	text, args, err = versionsStatement(restricted, key)
+	text, args, err = versionsStatement(restricted, key, wholeHistory())
 	add("history in compartment", text, args, err)
 
 	text, args, err = currentStatement(narrowed, key, storage.ActionRead)
@@ -786,7 +792,7 @@ func compiledStatements(t *testing.T, key storage.ResourceKey) map[string]struct
 	text, args, err = versionStatement(narrowed, key, "1")
 	add("vread under a filter", text, args, err)
 
-	text, args, err = versionsStatement(narrowed, key)
+	text, args, err = versionsStatement(narrowed, key, wholeHistory())
 	add("history under a filter", text, args, err)
 
 	return statements
@@ -1097,5 +1103,51 @@ func TestADeleteKeepsThePlacementItHad(t *testing.T) {
 	placed := placementOf(t, db, key)
 	if len(placed) != 1 || placed[0] != mine {
 		t.Errorf("the tombstone is placed at %v, want the placement it had", placed)
+	}
+}
+
+// wholeHistory is the window these tests read a history through. They are about
+// what a history holds rather than how it pages, so each one asks for more than
+// it wrote; TestHistoryIsPaged is what covers the paging.
+func wholeHistory() storage.VersionWindow {
+	return storage.VersionWindow{Count: storage.MaxVersions}
+}
+
+// TestAHistoryQueryIsBounded. Truncating the rows after they arrive would page
+// correctly and read the whole history to do it — which is the cost the paging
+// exists to avoid, and the one a client cannot see. What has to be bounded is
+// the statement.
+func TestAHistoryQueryIsBounded(t *testing.T) {
+	store, _ := newStore(t)
+	key := seed(t, store, "prj_a", "shared")
+	scope := fullScope("prj_a", "Patient")
+
+	text, args, err := versionsStatement(scope, key, storage.VersionWindow{Count: 3})
+	if err != nil {
+		t.Fatalf("compile: %v", err)
+	}
+
+	if !strings.Contains(text, "LIMIT ?") {
+		t.Errorf("the statement reads every version: %s", text)
+	}
+
+	// One more than the page, which is how a further page is known to exist
+	// without counting the rest.
+	if len(args) == 0 || args[len(args)-1] != 4 {
+		t.Errorf("it binds %v as its limit, want 4", args[len(args)-1:])
+	}
+
+	// And a cursor is a predicate rather than rows read and dropped.
+	resumed, args, err := versionsStatement(scope, key, storage.VersionWindow{Count: 3, Before: "7"})
+	if err != nil {
+		t.Fatalf("compile a resumed page: %v", err)
+	}
+
+	if !strings.Contains(resumed, "version_seq < ?") {
+		t.Errorf("a resumed page reads from the start: %s", resumed)
+	}
+
+	if len(args) < 2 || args[len(args)-2] != int64(7) {
+		t.Errorf("it resumes from %v, want 7", args[len(args)-2:len(args)-1])
 	}
 }

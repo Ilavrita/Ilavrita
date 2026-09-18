@@ -270,10 +270,12 @@ func TestAFilterIsCheckedAgainstTheVersionBeingReturned(t *testing.T) {
 		t.Error("the amended current row read through a filter it no longer matches")
 	}
 
-	versions, err := store.ListVersions(t.Context(), scope, key)
+	held, err := store.ListVersions(t.Context(), scope, key, wholeHistory())
 	if err != nil {
 		t.Fatalf("list versions: %v", err)
 	}
+
+	versions := held.Records
 
 	if len(versions) != 1 {
 		t.Fatalf("history returned %d versions, want only the one the filter matches", len(versions))

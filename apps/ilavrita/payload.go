@@ -349,11 +349,17 @@ func resourceURL(base string, key storage.ResourceKey) string {
 
 // historyBundle collects one resource's versions. ListVersions already returns
 // them newest first and that order is the answer, so nothing here re-sorts.
-func historyBundle(base string, records []storage.ResourceRecord) (json.RawMessage, error) {
-	entries := make([]fhir.BundleEntry, 0, len(records))
+func historyBundle(
+	base string, page storage.VersionPage, self, next string,
+) (json.RawMessage, error) {
+	entries := make([]fhir.BundleEntry, 0, len(page.Records))
 
-	for index, record := range records {
-		entry, err := historyEntry(base, record, versionVerb(record, index, len(records)))
+	for index, record := range page.Records {
+		// Which interaction produced a version is read from where it sits in the
+		// history, so it is only knowable on the page that holds the oldest one:
+		// anywhere else, the version below this page is the one that would say.
+		entry, err := historyEntry(base, record,
+			versionVerb(record, index, len(page.Records), page.More))
 		if err != nil {
 			return nil, err
 		}
@@ -361,7 +367,11 @@ func historyBundle(base string, records []storage.ResourceRecord) (json.RawMessa
 		entries = append(entries, entry)
 	}
 
-	bundle, err := json.Marshal(fhir.NewHistoryBundle(entries))
+	total, counted := page.Total()
+
+	bundle, err := json.Marshal(fhir.NewHistoryBundle(fhir.HistoryConfig{
+		Entries: entries, SelfURL: self, NextURL: next, Total: total, Counted: counted,
+	}))
 	if err != nil {
 		return nil, fmt.Errorf("ilavrita: encode a history bundle: %w", err)
 	}
@@ -372,12 +382,17 @@ func historyBundle(base string, records []storage.ResourceRecord) (json.RawMessa
 // versionVerb reconstructs which interaction wrote a version. Nothing stores it,
 // so it is derived: the oldest version of an identity is the create, a tombstone
 // is the delete, and every other version replaced the one before it.
-func versionVerb(record storage.ResourceRecord, index, total int) fhir.HTTPVerb {
+func versionVerb(record storage.ResourceRecord, index, held int, more bool) fhir.HTTPVerb {
 	switch {
 	case record.Deleted:
 		return fhir.VerbDelete
-	case index == total-1:
+
+	// The oldest version is the one that created the resource, and it is the
+	// last entry only on the last page. With a page still to come, the entry
+	// below this one is somewhere the client has not read yet.
+	case index == held-1 && !more:
 		return fhir.VerbPost
+
 	default:
 		return fhir.VerbPut
 	}

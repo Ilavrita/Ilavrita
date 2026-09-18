@@ -95,6 +95,10 @@ var (
 	invalidSubmission = refusal{http.StatusBadRequest, fhir.CodeInvalid,
 		"This resource is not one this server will store."}
 
+	malformedPaging = refusal{http.StatusBadRequest, fhir.CodeInvalid,
+		"That is not a page of history this server answers. _count is between 1 " +
+			"and 200, and _cursor is a version this server handed back."}
+
 	inlineAttachment = refusal{http.StatusBadRequest, fhir.CodeInvalid,
 		"A document's bytes are stored as a Binary and referenced by " +
 			"content.attachment.url, never carried in content.attachment.data."}
@@ -229,6 +233,8 @@ func translate(err error) refusal {
 		return notAuthorized
 	case errors.Is(err, errUnknownProject):
 		return unknownResource
+	case errors.Is(err, storage.ErrMalformedWindow):
+		return malformedPaging
 	case errors.Is(err, storage.ErrDenied):
 		return notAuthorized
 	case errors.Is(err, storage.ErrNotFound):

@@ -721,14 +721,30 @@ paths:
       tags: [FHIR]
       summary: Instance history
       description: |
-        Returns every version this caller may see, newest first, as a history
-        `Bundle`. A resource whose history ends in a deletion still has a
+        Returns one page of the versions this caller may see, newest first, as a
+        history `Bundle`. A resource whose history ends in a deletion still has a
         history, so this route answers `200` where a read of the same id answers
         `410`.
 
-        `_count`, `_since`, `_at` and `_list` are not implemented and are
-        ignored.
+        20 versions by default and at most 200, with a `next` link when more
+        follow. `_cursor` is a version this server handed back. A count outside
+        that range, or a cursor that is not a version, is refused with `400`
+        rather than rounded down: a caller who asked for a thousand and silently
+        got two hundred cannot tell a short page from the end of the history.
+
+        `total` is present only on a history that fits in one page. Counting a
+        longer one would be a second query over the same rows, and a total that
+        was guessed is worse than one that is absent.
+
+        Which interaction produced a version is read from where it sits in the
+        history, so only the page holding the oldest version marks an entry as
+        the `POST` that created the resource.
+
+        `_since`, `_at` and `_list` are not implemented and are ignored.
       operationId: getInstanceHistory
+      parameters:
+        - $ref: "#/components/parameters/SearchCount"
+        - $ref: "#/components/parameters/SearchCursor"
       responses:
         "200":
           $ref: "#/components/responses/History"

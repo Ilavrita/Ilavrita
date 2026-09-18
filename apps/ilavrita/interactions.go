@@ -463,7 +463,12 @@ func listResourceHistory(request *core.RequestEvent) error {
 		return refuse(request, err)
 	}
 
-	records, err := held.versions.ListVersions(request.Request.Context(), held.scope, key)
+	window, err := requestedWindow(request)
+	if err != nil {
+		return refuse(request, err)
+	}
+
+	page, err := held.versions.ListVersions(request.Request.Context(), held.scope, key, window)
 	if err != nil {
 		return refuse(request, err)
 	}
@@ -473,7 +478,10 @@ func listResourceHistory(request *core.RequestEvent) error {
 		return refuse(request, err)
 	}
 
-	bundle, err := historyBundle(base, records)
+	asked := request.Request.URL.Query()
+
+	bundle, err := historyBundle(base, page,
+		historyURL(base, key, asked, window.Before), nextHistoryURL(base, key, asked, page))
 	if err != nil {
 		return refuse(request, err)
 	}

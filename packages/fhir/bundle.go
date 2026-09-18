@@ -81,17 +81,48 @@ type EntryResponse struct {
 	LastModified string `json:"lastModified,omitempty"`
 }
 
-// NewHistoryBundle collects one resource's versions. The entries keep the order
-// they arrive in, which is newest first.
-func NewHistoryBundle(entries []BundleEntry) Bundle {
-	total := len(entries)
+// HistoryConfig is what one page of a resource's history states about itself.
+type HistoryConfig struct {
+	Entries []BundleEntry
 
-	return Bundle{
+	// SelfURL is the request that produced this page, and NextURL the one that
+	// produces the page after it. Next is empty when nothing follows: a link
+	// offered when nothing does is a promise the next request breaks.
+	SelfURL string
+	NextURL string
+
+	// Total is carried only when Counted says it was computed, which is only
+	// when the whole history fits in one page. A history longer than that would
+	// need a second query to count, and a total that was guessed is worse than
+	// one that is absent: a client can handle a missing total and cannot handle
+	// a wrong one.
+	Total   int
+	Counted bool
+}
+
+// NewHistoryBundle collects one page of a resource's versions. The entries keep
+// the order they arrive in, which is newest first.
+func NewHistoryBundle(config HistoryConfig) Bundle {
+	bundle := Bundle{
 		ResourceType: "Bundle",
 		Type:         BundleHistory,
-		Total:        &total,
-		Entry:        slices.Clone(entries),
+		Entry:        slices.Clone(config.Entries),
 	}
+
+	if config.Counted {
+		total := config.Total
+		bundle.Total = &total
+	}
+
+	if config.SelfURL != "" {
+		bundle.Link = append(bundle.Link, BundleLink{Relation: "self", URL: config.SelfURL})
+	}
+
+	if config.NextURL != "" {
+		bundle.Link = append(bundle.Link, BundleLink{Relation: "next", URL: config.NextURL})
+	}
+
+	return bundle
 }
 
 // SearchsetConfig is what one page of search results states about itself.

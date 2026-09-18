@@ -61,7 +61,8 @@ Every other `/fhir/R4` route answers `501 Not Implemented` as an
 | --- | --- |
 | Search | Working, over a declared parameter set; anything outside it is refused, never ignored |
 | `_include`, `_revinclude`, chaining, `_sort` | Not implemented; refused rather than ignored |
-| History paging and filtering (`_count`, `_since`, `_at`, `_list`) | Ignored; see below |
+| History paging (`_count`, `_cursor`) | Working; see below |
+| History filtering (`_since`, `_at`, `_list`) | Ignored |
 | Type-level and system-level history | Not implemented |
 | Bundle batch and transaction | Not implemented |
 | Conditional create, update, delete | Not implemented |
@@ -306,13 +307,25 @@ server's back — an edited store, a backup restored in halves — leaves a row 
 bytes are gone: reading it answers `500` and says so, rather than handing back a
 `Binary` that claims to be a PDF and carries nothing.
 
-## Instance history is unbounded
+## Instance history is paged
 
-`GET /fhir/R4/{Type}/{id}/_history` returns every version the caller may see, in
-one response, with no `_count` and no `next` link. A resource with a long
-history serialises entirely into memory. One pooled database connection per
-process compounds it: a long read blocks every other request in that process.
-Bound history growth operationally until paging is implemented.
+`GET /fhir/R4/{Type}/{id}/_history` returns 20 versions by default and at most
+200, newest first, with a `next` link when more follow. `_count` and `_cursor`
+are the same parameter names a search takes, and a cursor is a version this
+server handed back.
+
+A count outside that range, or a cursor that is not a version, is refused with
+`400` rather than rounded down — a caller who asked for a thousand and silently
+got two hundred cannot tell a short page from the end of the history.
+
+`total` is present only on a history that fits in one page. Counting a longer one
+would be a second query over the same rows, and a total that was guessed is worse
+than one that is absent.
+
+One consequence worth knowing: which interaction produced a version is read from
+where it sits in the history, so only the page holding the oldest version marks
+an entry as the `POST` that created the resource. Every entry on a page with more
+to come is a `PUT` or a `DELETE`.
 
 ## Version numbers count across identity reuse
 

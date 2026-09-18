@@ -196,10 +196,12 @@ func TestHistoryIsNarrowedByTheGrantsReachingEachVersion(t *testing.T) {
 
 	scope := storage.NewScope(projectedGrant(storage.ActionHistory, mustStoreProjection(t, "status")))
 
-	versions, err := store.ListVersions(t.Context(), scope, key)
+	held, err := store.ListVersions(t.Context(), scope, key, wholeHistory())
 	if err != nil {
 		t.Fatalf("list versions: %v", err)
 	}
+
+	versions := held.Records
 
 	if len(versions) != 2 {
 		t.Fatalf("history served %d versions, want both", len(versions))

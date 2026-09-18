@@ -16,7 +16,13 @@ type ResourceRepository interface {
 // evidence, not reconstructed from audit logs, which may be pruned.
 type VersionStore interface {
 	ReadVersion(ctx context.Context, scope Scope, key ResourceKey, version VersionID) (ResourceRecord, error)
-	ListVersions(ctx context.Context, scope Scope, key ResourceKey) ([]ResourceRecord, error)
+	// ListVersions reads one page of a resource's history, newest first. It is
+	// paged because a resource written to for years has a history no client
+	// asked to receive in one response — and because one pooled connection per
+	// process means a long read is every other request waiting behind it.
+	ListVersions(
+		ctx context.Context, scope Scope, key ResourceKey, window VersionWindow,
+	) (VersionPage, error)
 }
 
 // Transactor runs work inside a single commit boundary. A write, its version, its

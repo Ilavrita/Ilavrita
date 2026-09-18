@@ -386,7 +386,9 @@ func versionStatement(
 }
 
 // versionsStatement compiles a read of every visible version, newest first.
-func versionsStatement(scope storage.Scope, key storage.ResourceKey) (string, []any, error) {
+func versionsStatement(
+	scope storage.Scope, key storage.ResourceKey, window storage.VersionWindow,
+) (string, []any, error) {
 	arms, err := historyArms(scope, key, storage.ActionHistory)
 	if err != nil {
 		return "", nil, err
@@ -394,7 +396,27 @@ func versionsStatement(scope storage.Scope, key storage.ResourceKey) (string, []
 
 	text, args := union(historyColumns, historyRelation, arms)
 
-	return "SELECT " + recordColumns + " FROM (" + text + ") ORDER BY version_seq DESC", args, nil
+	statement := "SELECT " + recordColumns + " FROM (" + text + ")"
+
+	// History reads newest first, so resuming from a version means reading below
+	// its sequence. Every version this server mints is the decimal of that
+	// sequence, which is what lets a client resume from one it was handed.
+	if window.Before != "" {
+		before, err := window.Before.Sequence()
+		if err != nil {
+			return "", nil, err
+		}
+
+		statement += " WHERE version_seq < ?"
+		args = append(args, before)
+	}
+
+	// One more than asked for, so a further page is known to exist without
+	// counting the rest of a history that may be long.
+	statement += " ORDER BY version_seq DESC LIMIT ?"
+	args = append(args, window.Count+1)
+
+	return statement, args, nil
 }
 
 // authorizedExists compiles the arm set into an EXISTS a write can require, so
@@ -514,20 +536,22 @@ func (s *ResourceStore) ListVersions(
 	ctx context.Context,
 	scope storage.Scope,
 	key storage.ResourceKey,
-) ([]storage.ResourceRecord, error) {
+	window storage.VersionWindow,
+) (storage.VersionPage, error) {
 	if err := validateKey(key); err != nil {
-		return nil, err
+		return storage.VersionPage{}, err
 	}
 
-	text, args, err := versionsStatement(scope, key)
+	text, args, err := versionsStatement(scope, key, window)
 	if err != nil {
-		return nil, err
+		return storage.VersionPage{}, err
 	}
 
 	rows, err := s.conn(ctx).QueryContext(ctx, text, args...)
 	if err != nil {
-		return nil, fmt.Errorf("pocketbase: list versions: %w", err)
+		return storage.VersionPage{}, fmt.Errorf("pocketbase: list versions: %w", err)
 	}
+
 	defer func() { _ = rows.Close() }()
 
 	var records []storage.ResourceRecord
@@ -535,22 +559,30 @@ func (s *ResourceStore) ListVersions(
 	for rows.Next() {
 		record, _, err := scanRecord(rows)
 		if err != nil {
-			return nil, err
+			return storage.VersionPage{}, err
 		}
 
 		if err := assertInScope(scope, record, storage.ActionHistory); err != nil {
-			return nil, err
+			return storage.VersionPage{}, err
 		}
 
 		records = append(records, record)
 	}
 
 	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("pocketbase: list versions: %w", err)
+		return storage.VersionPage{}, fmt.Errorf("pocketbase: list versions: %w", err)
 	}
 
 	if len(records) == 0 {
-		return nil, storage.ErrNotFound
+		return storage.VersionPage{}, storage.ErrNotFound
+	}
+
+	page := storage.VersionPage{First: window.Before == ""}
+
+	// One more than the page was asked for is how a further page is known to
+	// exist without counting the rest. The extra row is read and dropped.
+	if len(records) > window.Count {
+		records, page.More = records[:window.Count], true
 	}
 
 	// Narrowing reads each version's placement, which is a query of its own. The
@@ -558,19 +590,21 @@ func (s *ResourceStore) ListVersions(
 	// issued while it is still open waits for a connection that only closing the
 	// cursor can release.
 	if err := rows.Close(); err != nil {
-		return nil, fmt.Errorf("pocketbase: close the version cursor: %w", err)
+		return storage.VersionPage{}, fmt.Errorf("pocketbase: close the version cursor: %w", err)
 	}
 
 	for index, record := range records {
 		narrowed, err := s.narrowed(ctx, scope, record, storage.ActionHistory, s.versionPlacement)
 		if err != nil {
-			return nil, err
+			return storage.VersionPage{}, err
 		}
 
 		records[index] = narrowed
 	}
 
-	return records, nil
+	page.Records = records
+
+	return page, nil
 }
 
 // Create writes a resource that does not exist yet. It never falls through to an
