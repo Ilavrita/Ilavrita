@@ -35,6 +35,7 @@ const (
 // confined grant could ever authorize.
 var servedResourceTypes = []string{
 	"ActivityDefinition",
+	"Binary",
 	"CapabilityStatement",
 	"ChargeItemDefinition",
 	"CodeSystem",

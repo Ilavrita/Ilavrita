@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/Ilavrita/Ilavrita/packages/fhir"
+	"github.com/Ilavrita/Ilavrita/packages/files"
 	"github.com/Ilavrita/Ilavrita/packages/search"
 	"github.com/Ilavrita/Ilavrita/packages/storage"
 	"github.com/pocketbase/pocketbase/apis"
@@ -210,6 +211,7 @@ func baseURL(request *core.RequestEvent) (string, error) {
 // travels with the stores, so no handler holds one without the other.
 type granted struct {
 	resources    storage.ResourceRepository
+	payloads     files.Store
 	searches     search.Repository
 	versions     storage.VersionStore
 	transactions storage.Transactor
@@ -269,7 +271,7 @@ func permit(request *core.RequestEvent, resourceType storage.ResourceType, actio
 
 		held.resources, held.versions = allowed.Resources, allowed.Versions
 		held.searches, held.transactions = allowed.Searches, allowed.Transactions
-		held.project = allowed.Project
+		held.payloads, held.project = allowed.Payloads, allowed.Project
 		grants = append(grants, allowed.Scope.Grants()...)
 	}
 
@@ -323,7 +325,12 @@ var (
 	// A posted search states a query, not a resource, so it is the one route
 	// that reads a form.
 	searchBodyMediaTypes = []string{formContentType}
-	acceptedFormats      = []string{"", "json", "application/json", fhir.ContentType}
+
+	// rawPayloadBodies is nil, which negotiate reads as "any media type". A
+	// Binary's whole point is that this server does not decide what a document
+	// is, so the one route that stores bytes accepts whatever they were called.
+	rawPayloadBodies []string
+	acceptedFormats  = []string{"", "json", "application/json", fhir.ContentType}
 )
 
 // negotiate refuses a request this server cannot answer in the representation
@@ -334,7 +341,12 @@ var (
 // resource, and a route that accepted both would accept a resource submitted as
 // a form.
 func negotiate(request *core.RequestEvent, accepted []string) error {
-	if !acceptsJSON(request.Request.Header.Get(acceptField)) {
+	// A Binary read may ask for the document rather than the resource, and what
+	// a document's media type is only the payload knows. That one route settles
+	// its own Accept, after it has read what the payload is.
+	binary := storage.ResourceType(request.Request.PathValue(resourceTypeParameter)) == binaryType
+
+	if !binary && !acceptsJSON(request.Request.Header.Get(acceptField)) {
 		return unsupportedAccept
 	}
 
@@ -342,7 +354,9 @@ func negotiate(request *core.RequestEvent, accepted []string) error {
 		return unsupportedAccept
 	}
 
-	if carriesBody(request.Request.Method) &&
+	// A nil list accepts any media type, which is what the payload route needs:
+	// nothing else may use it, and nothing else does.
+	if accepted != nil && carriesBody(request.Request.Method) &&
 		!slices.Contains(accepted, mediaType(request.Request.Header.Get(contentTypeField))) {
 		return unsupportedBody
 	}

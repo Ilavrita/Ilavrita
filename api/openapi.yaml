@@ -311,13 +311,31 @@ paths:
 
         The response always carries `ETag` and `Last-Modified` for the version
         written, and `Location` naming that version.
+
+        `Binary` also accepts the document itself. Send it under its own media
+        type — `application/pdf`, `image/png`, anything — and name what governs
+        access to it in `X-Security-Context`, because a PDF has nowhere else to
+        say it. A Binary naming nothing lands in no compartment and a confined
+        caller cannot write it, which is the answer an unattributed document
+        should get.
+
+        However a Binary arrives, its bytes are kept outside the database and
+        the row records what they are. A row carrying megabytes would make every
+        read of the metadata pay for them and every backup carry them.
       operationId: createResource
+      parameters:
+        - $ref: "#/components/parameters/SecurityContext"
       requestBody:
         required: true
         content:
           application/fhir+json:
             schema:
               $ref: "#/components/schemas/Resource"
+          application/octet-stream:
+            schema:
+              type: string
+              format: binary
+              description: A Binary's own bytes, under whatever media type they are.
       responses:
         "201":
           $ref: "#/components/responses/ResourceCreated"
@@ -498,6 +516,14 @@ paths:
         that this caller's authorization cannot see, answers `404`. The two are
         deliberately indistinguishable for an out-of-scope resource, so an id
         cannot be probed for.
+
+        Reading a `Binary` answers the document itself when the `Accept` names
+        its media type, by name or by family, and the resource — with the bytes
+        base64-encoded in `data` — otherwise. A wildcard answers the resource:
+        this server answers JSON for `*/*` everywhere else, and a route that
+        read a wildcard as "give me the document" would hand a browser a
+        download where every other route hands it a resource. An `Accept`
+        naming neither is `406`.
       operationId: readResource
       responses:
         "200":
@@ -708,6 +734,19 @@ components:
       schema:
         type: string
       example: Organization
+
+    SecurityContext:
+      name: X-Security-Context
+      in: header
+      required: false
+      description: |
+        What governs access to a raw `Binary` payload, as a `Type/id` reference.
+        It becomes the resource's `securityContext`, which is what places it in
+        a compartment. Only read when the body is the document itself; a Binary
+        sent as a resource states it in the resource.
+      schema:
+        type: string
+      example: Patient/pat-1
 
     SearchCount:
       name: _count

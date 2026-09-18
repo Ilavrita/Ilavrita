@@ -3,10 +3,12 @@ package main
 import (
 	"context"
 	"database/sql"
+	"path/filepath"
 	"time"
 
 	"github.com/Ilavrita/Ilavrita/packages/audit"
 	"github.com/Ilavrita/Ilavrita/packages/authz"
+	"github.com/Ilavrita/Ilavrita/packages/files"
 	"github.com/Ilavrita/Ilavrita/packages/project"
 	"github.com/Ilavrita/Ilavrita/packages/search"
 	"github.com/Ilavrita/Ilavrita/packages/storage"
@@ -29,6 +31,11 @@ type backend struct {
 	memberships  *sqlite.MembershipStore
 	applications *sqlite.ClientApplicationStore
 	resolvers    authz.Resolvers
+
+	// payloads holds the bytes a Binary describes. A backend wired without one
+	// serves no payload, which is what a deployment with nowhere to put them
+	// can honestly offer.
+	payloads files.Store
 
 	// factors holds the second factor an identity proved. A backend wired
 	// without one requires none, which is what a deployment that configured no
@@ -66,6 +73,7 @@ type sessionResolver interface {
 // was decided for. They travel together, so no route holds one without them.
 type access struct {
 	Resources    storage.ResourceRepository
+	Payloads     files.Store
 	Searches     search.Repository
 	Versions     storage.VersionStore
 	Transactions storage.Transactor
@@ -119,14 +127,19 @@ func startServing(app core.App) error {
 		return terminate.Next()
 	})
 
-	serving = newBackend(db.DB())
+	serving = newBackend(db.DB(), app.DataDir())
 
 	return nil
 }
 
+// payloadDirectory is where a Binary's bytes live, beside the database rather
+// than inside it: a row carrying megabytes makes every read of the metadata pay
+// for them and every backup of the database carry them.
+const payloadDirectory = "payloads"
+
 // newBackend binds one database to every port. Built once, because a store built
 // per request would open a second pool on every call.
-func newBackend(db *sql.DB) *backend {
+func newBackend(db *sql.DB, dataDir string) *backend {
 	return &backend{
 		resources:    sqlite.NewResourceStore(db),
 		users:        sqlite.NewUserStore(db),
@@ -136,6 +149,7 @@ func newBackend(db *sql.DB) *backend {
 		applications: sqlite.NewClientApplicationStore(db),
 		audits:       sqlite.NewAuditStore(db),
 		factors:      sqlite.NewFactorStore(db, sealingKey()),
+		payloads:     files.NewDisk(filepath.Join(dataDir, payloadDirectory)),
 		attempts:     newAttemptLimiter(sqlite.NewAttemptStore(db), nil),
 		resolvers: authz.Resolvers{
 			Memberships: sqlite.NewMembershipResolver(db),

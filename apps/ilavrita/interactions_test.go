@@ -578,6 +578,12 @@ func TestACompartmentSubjectIsCreatedByNamingIt(t *testing.T) {
 func replacement(resourceType, id string) string {
 	body := `{"resourceType":"` + resourceType + `","id":"` + id + `"`
 
+	// A Binary is bytes, and what a client called them is what this server
+	// hands back, so there is nothing to store without it.
+	if resourceType == string(binaryType) {
+		body += `,"contentType":"text/plain","data":"cmVwbGFjZWQ="`
+	}
+
 	if path, placed := compartmentPath(resourceType); placed {
 		body += `,"` + path + `":{"reference":"Patient/` + string(conformancePatient) + `"}`
 	}
@@ -689,7 +695,7 @@ func TestAWriteWhoseReadBackFailsCommitsNothing(t *testing.T) {
 
 	_, err = blind.written(context.Background(), key, func(ctx context.Context) error {
 		return blind.resources.Update(ctx, blind.scope, storage.ResourceRecord{Key: key, Content: content}, "1")
-	})
+	}, nil)
 
 	if !errors.Is(err, storage.ErrNotFound) {
 		t.Fatalf("the read-back answered %v, want %v", err, storage.ErrNotFound)

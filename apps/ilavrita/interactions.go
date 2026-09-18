@@ -24,6 +24,10 @@ var (
 // createResource mints a logical id and stores the submitted resource under it.
 // A body carrying its own id is refused: on this route the server assigns them.
 func createResource(request *core.RequestEvent) error {
+	if carriesRawPayload(request) {
+		return createPayload(request)
+	}
+
 	held, err := begin(request, writeActions)
 	if err != nil {
 		return refuse(request, err)
@@ -44,6 +48,17 @@ func createResource(request *core.RequestEvent) error {
 	}
 
 	return createResourceAt(request, held, key, content)
+}
+
+// mintedKey assigns the logical id the route owns, for a body that is not
+// encoded here.
+func (g granted) mintedKey() (storage.ResourceKey, error) {
+	id, err := mintLogicalID()
+	if err != nil {
+		return storage.ResourceKey{}, err
+	}
+
+	return storage.NewResourceKey(g.project, g.resourceType, id)
 }
 
 // minted assigns the logical id the route owns and encodes the body under it.
@@ -84,7 +99,33 @@ func readResource(request *core.RequestEvent) error {
 		return refuse(request, err)
 	}
 
-	return respondResource(request, http.StatusOK, record)
+	return respondPossiblePayload(request, held, record)
+}
+
+// respondPossiblePayload answers a read with whatever the caller asked for: a
+// Binary's own bytes when the Accept names them, and the resource otherwise.
+func respondPossiblePayload(
+	request *core.RequestEvent, held granted, record storage.ResourceRecord,
+) error {
+	if record.Key.Type != binaryType {
+		return respondResource(request, http.StatusOK, record)
+	}
+
+	served, err := servePayload(request, held, record)
+	if err != nil {
+		return refuse(request, err)
+	}
+
+	if served {
+		return nil
+	}
+
+	embedded, err := embedPayload(request.Request.Context(), held, record)
+	if err != nil {
+		return refuse(request, err)
+	}
+
+	return respondResource(request, http.StatusOK, embedded)
 }
 
 // readResourceVersion returns one immutable version. It authorizes under
@@ -113,7 +154,7 @@ func readResourceVersion(request *core.RequestEvent) error {
 		return refuse(request, err)
 	}
 
-	return respondResource(request, http.StatusOK, record)
+	return respondPossiblePayload(request, held, record)
 }
 
 // updateResource replaces a resource, or brings the id the client named into
@@ -197,11 +238,16 @@ func replaceResource(
 		return refuse(request, err)
 	}
 
+	row, carried, err := splitPayload(key, content)
+	if err != nil {
+		return refuse(request, err)
+	}
+
 	record, err := held.written(request.Request.Context(), key, func(ctx context.Context) error {
 		return held.resources.Update(ctx, held.scope, storage.ResourceRecord{
-			Key: key, Content: content, Compartments: compartments,
+			Key: key, Content: row, Compartments: compartments,
 		}, expect)
-	})
+	}, held.storing(key, carried))
 	if err != nil {
 		return refuse(request, err)
 	}
@@ -222,11 +268,16 @@ func createResourceAt(
 		return refuse(request, err)
 	}
 
+	row, carried, err := splitPayload(key, content)
+	if err != nil {
+		return refuse(request, err)
+	}
+
 	record, err := held.written(request.Request.Context(), key, func(ctx context.Context) error {
 		return held.resources.Create(ctx, held.scope, storage.ResourceRecord{
-			Key: key, Content: content, Compartments: compartments,
+			Key: key, Content: row, Compartments: compartments,
 		})
-	})
+	}, held.storing(key, carried))
 	if err != nil {
 		return refuse(request, err)
 	}
@@ -241,6 +292,7 @@ func (g granted) written(
 	ctx context.Context,
 	key storage.ResourceKey,
 	write func(ctx context.Context) error,
+	after func(ctx context.Context, record storage.ResourceRecord) error,
 ) (storage.ResourceRecord, error) {
 	var written storage.ResourceRecord
 
@@ -255,9 +307,21 @@ func (g granted) written(
 		}
 
 		record, err := g.resources.Read(ctx, g.scope, key)
+		if err != nil {
+			return err
+		}
+
 		written = record
 
-		return err
+		// A Binary's bytes are written here: the version the row settled on is
+		// what names them, and it is not known until the row exists. Inside the
+		// transaction, so bytes that cannot be written take the row with them
+		// rather than leaving a resource describing a document nobody has.
+		if after == nil {
+			return nil
+		}
+
+		return after(ctx, record)
 	})
 
 	return written, err

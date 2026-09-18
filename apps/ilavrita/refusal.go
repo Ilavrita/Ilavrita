@@ -6,6 +6,7 @@ import (
 	"net/http"
 
 	"github.com/Ilavrita/Ilavrita/packages/fhir"
+	"github.com/Ilavrita/Ilavrita/packages/files"
 	"github.com/Ilavrita/Ilavrita/packages/project"
 	"github.com/Ilavrita/Ilavrita/packages/search"
 	"github.com/Ilavrita/Ilavrita/packages/storage"
@@ -71,6 +72,12 @@ var (
 
 	codeRefused = refusal{http.StatusUnauthorized, fhir.CodeLogin,
 		"The second-factor code was refused."}
+
+	payloadUnavailable = refusal{http.StatusNotImplemented, fhir.CodeNotSupported,
+		"This deployment is not configured to hold resource payloads."}
+
+	unreadablePayload = refusal{http.StatusBadRequest, fhir.CodeInvalid,
+		"A payload states its content type and carries readable content."}
 
 	factorUnavailable = refusal{http.StatusNotImplemented, fhir.CodeNotSupported,
 		"This deployment is not configured to hold second factors."}
@@ -139,6 +146,14 @@ func translate(err error) refusal {
 		return unauthenticated
 	case errors.Is(err, errTooManyAttempts):
 		return throttled
+	case errors.Is(err, errPayloadUnavailable):
+		return payloadUnavailable
+	case errors.Is(err, errMissingContentType), errors.Is(err, errUnreadablePayload):
+		return unreadablePayload
+	case errors.Is(err, files.ErrTooLarge):
+		return oversizedBody
+	case errors.Is(err, files.ErrNotFound), errors.Is(err, files.ErrMalformedKey):
+		return unknownResource
 	case errors.Is(err, errFactorUnavailable):
 		return factorUnavailable
 	case errors.Is(err, errFactorNotEnrolled):

@@ -13,6 +13,7 @@ import (
 
 	"github.com/Ilavrita/Ilavrita/packages/authz"
 	"github.com/Ilavrita/Ilavrita/packages/fhir"
+	"github.com/Ilavrita/Ilavrita/packages/files"
 	"github.com/Ilavrita/Ilavrita/packages/project"
 	"github.com/Ilavrita/Ilavrita/packages/storage"
 	sqlite "github.com/Ilavrita/Ilavrita/packages/storage/pocketbase"
@@ -186,6 +187,7 @@ func serveUnder(t *testing.T, db *sql.DB, proj project.ID, policy authz.AccessPo
 		resources: sqlite.NewResourceStore(db),
 		users:     sqlite.NewUserStore(db),
 		audits:    sqlite.NewAuditStore(db),
+		payloads:  files.NewDisk(t.TempDir()),
 		attempts:  newAttemptLimiter(sqlite.NewAttemptStore(db), nil),
 		resolvers: authz.Resolvers{
 			Memberships: fixedMembership{conformanceMembership(t, proj)},
@@ -336,7 +338,12 @@ type call struct {
 	host        string
 	origin      string
 	bearer      string
-	anonymous   bool
+
+	// securityContext is the header a raw Binary submission names its access
+	// context in, because a PDF has nowhere else to say it.
+	securityContext string
+
+	anonymous bool
 }
 
 func (c call) send(t *testing.T, routes http.Handler) *httptest.ResponseRecorder {
@@ -370,6 +377,10 @@ func (c call) send(t *testing.T, routes http.Handler) *httptest.ResponseRecorder
 
 	if c.origin != "" {
 		sent.Header.Set(originField, c.origin)
+	}
+
+	if c.securityContext != "" {
+		sent.Header.Set(securityContextField, c.securityContext)
 	}
 
 	// The surface authenticates now, so a call that names no session reaches
@@ -496,6 +507,12 @@ func resourcePath(resourceType, id string) string {
 func submission(resourceType string) string {
 	body := `{"resourceType":"` + resourceType + `"`
 
+	// A Binary is bytes, and what a client called them is what this server
+	// hands back, so there is nothing to store without it.
+	if resourceType == string(binaryType) {
+		body += `,"contentType":"text/plain","data":"aGVsbG8="`
+	}
+
 	if path, placed := compartmentPath(resourceType); placed {
 		body += `,"` + path + `":{"reference":"Patient/` + string(conformancePatient) + `"}`
 	}
@@ -512,6 +529,11 @@ func compartmentPath(resourceType string) (string, bool) {
 		return "patient", true
 	case "Coverage":
 		return "beneficiary", true
+	case "Binary":
+		// R4 places a Binary in no compartment of its own. securityContext is
+		// the element it added for exactly this: the resource that governs
+		// access to the payload.
+		return "securityContext", true
 	case "Task":
 		return "for", true
 	default:

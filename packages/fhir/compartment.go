@@ -23,7 +23,18 @@ var compartmentTypes = []string{"Patient", "Encounter", "RelatedPerson", "Practi
 // unreachable by any confined grant, and advertising one would publish a create
 // nobody can perform.
 var compartmentPaths = map[string][]string{
-	"AllergyIntolerance":       {"patient", "encounter", "recorder", "asserter"},
+	"AllergyIntolerance": {"patient", "encounter", "recorder", "asserter"},
+
+	// Binary is the one type here that R4 places in no compartment of its own:
+	// it is bytes, and what they are about is only knowable from whatever points
+	// at them. securityContext is the element R4 added for exactly this — the
+	// resource that governs access to the payload — so it is what places one.
+	//
+	// A Binary naming none lands nowhere, and a confined caller cannot write it.
+	// That is the right answer: an unattributed blob in a clinical server is a
+	// document nobody can say whose it is.
+	"Binary": {"securityContext"},
+
 	"CarePlan":                 {"subject", "encounter"},
 	"CareTeam":                 {"subject", "encounter"},
 	"Claim":                    {"patient", "provider"},
