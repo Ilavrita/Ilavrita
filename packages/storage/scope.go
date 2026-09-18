@@ -47,10 +47,14 @@ type Compartment struct {
 // Carrying the type and action prevents a Scope issued for one from being reused
 // for another, which is how an _include silently widens a read.
 //
-// Compartment and Filter each narrow it and neither can widen it: absent means
-// unrestricted in that dimension, so a Grant nobody narrowed reaches every
-// resource of its type. A backend that cannot compile one of them must refuse
-// the Grant, because ignoring a restriction is the same as widening it.
+// Compartment, Filter and Projection each narrow it and none can widen it:
+// absent means unrestricted in that dimension, so a Grant nobody narrowed
+// reaches every resource of its type and returns all of it. A backend that
+// cannot apply one of them must refuse the Grant, because ignoring a
+// restriction is the same as widening it.
+//
+// The three narrow different things. Compartment and Filter decide which
+// resources the Grant reaches; Projection decides how much of one it returns.
 type Grant struct {
 	Project     ProjectID
 	Kind        Kind
@@ -59,6 +63,7 @@ type Grant struct {
 	Source      GrantSource
 	Compartment *Compartment
 	Filter      *Filter
+	Projection  *Projection
 }
 
 // Scope is an authorization decision: every Grant a principal holds for one

@@ -435,7 +435,12 @@ func (s *ResourceStore) Read(ctx context.Context, scope storage.Scope, key stora
 		return storage.ResourceRecord{}, err
 	}
 
-	return s.readCurrent(ctx, scope, key, storage.ActionRead)
+	record, err := s.readCurrent(ctx, scope, key, storage.ActionRead)
+	if err != nil {
+		return storage.ResourceRecord{}, err
+	}
+
+	return s.narrowed(ctx, scope, record, storage.ActionRead, s.currentPlacement)
 }
 
 func (s *ResourceStore) readCurrent(
@@ -500,7 +505,7 @@ func (s *ResourceStore) ReadVersion(
 		return storage.ResourceRecord{}, storage.ErrDeleted
 	}
 
-	return record, nil
+	return s.narrowed(ctx, scope, record, storage.ActionHistory, s.versionPlacement)
 }
 
 // ListVersions returns every version the Scope authorizes, newest first. A
@@ -546,6 +551,23 @@ func (s *ResourceStore) ListVersions(
 
 	if len(records) == 0 {
 		return nil, storage.ErrNotFound
+	}
+
+	// Narrowing reads each version's placement, which is a query of its own. The
+	// cursor above is closed first: this pool holds one connection, and a query
+	// issued while it is still open waits for a connection that only closing the
+	// cursor can release.
+	if err := rows.Close(); err != nil {
+		return nil, fmt.Errorf("pocketbase: close the version cursor: %w", err)
+	}
+
+	for index, record := range records {
+		narrowed, err := s.narrowed(ctx, scope, record, storage.ActionHistory, s.versionPlacement)
+		if err != nil {
+			return nil, err
+		}
+
+		records[index] = narrowed
 	}
 
 	return records, nil
@@ -726,6 +748,10 @@ func (s *ResourceStore) Update(
 	expect storage.VersionID,
 ) error {
 	if err := validateWrite(record); err != nil {
+		return err
+	}
+
+	if err := refuseBlindReplace(scope, record.Key); err != nil {
 		return err
 	}
 
