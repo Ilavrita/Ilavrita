@@ -11,11 +11,35 @@ It is an engineering determination, not legal advice.
 
 ## Current state
 
-The FOSSA checks on pull requests are **red**: 27 licence issues and 1
-vulnerability. Of those 28: seventeen relate to `modernc.org/libc` and are an open licensing
-question, one is a genuine security advisory, and ten are scanner artefacts
-(including two that are simply Ilavrita's own licence). None can be cleared from this repository —
-see [clearing them](#clearing-them).
+The `License Compliance` check on `dev` is **red: 15 issues**, read from the
+commit status at `6da26a9` and again at `8a17b23` on 2026-09-19.
+
+```bash
+gh api repos/Ilavrita/Ilavrita/commits/<sha>/status \
+  --jq '.statuses[] | select(.context=="License Compliance") | .description'
+```
+
+**That is a live count, and the breakdown below is not.** The groups and verdicts
+in this page were established against a scan of **28 issues** (27 licence, 1
+vulnerability) recorded on 2026-09-14. The count has since moved to 15 without
+this page being re-derived, so:
+
+- The **determinations** below still hold. They are about what each module
+  contains and whether it reaches a released artefact, and that does not change
+  because a scanner's issue count did.
+- The **attribution** does not. Which of today's 15 belongs to which group has not
+  been checked, and this page should not be read as saying it has.
+
+Re-deriving it means opening the FOSSA project and listing the current issues per
+package. Until that is done, the honest statement is: 15 open issues, the
+`modernc.org/libc` question and CVE-2023-36308 are both still open, and the
+remainder are believed to be the scanner artefacts described below.
+
+**The engineering checks being green says nothing about this.** Lint, tests, the
+container build and the description check all pass at `8a17b23`; License
+Compliance is a separate, still-red work queue.
+
+### Evidence from the scan of 2026-09-14
 
 | Group | Count | Verdict |
 | --- | --- | --- |
@@ -128,10 +152,15 @@ impact only, EPSS 0.4%, and NVD notes it is unclear whether any common use case
 carries a security consequence. The realistic effect is a panic on one request,
 not data exposure.
 
-It becomes material when Binary and DocumentReference payloads are implemented
-(FR-032) — untrusted clinical documents are exactly the input this advisory is
-about — so it remains a **release gate for any build that accepts uploaded
-images**.
+Payloads are now implemented (FR-032), which this page previously named as the
+point at which the advisory becomes material. Re-checked on 2026-09-19: it does
+not, because Ilavrita's payload path decodes nothing. `Binary` bytes are hashed
+and written to disk and served back verbatim, and `DocumentReference` refuses
+inlined bytes altogether. Nothing under `/fhir/R4` reaches an image decoder.
+
+It remains a **release gate for any build that restores the PocketBase thumbnail
+route**, and it would become one again the day Ilavrita itself renders, resizes
+or inspects an uploaded image.
 
 ## Clearing them
 

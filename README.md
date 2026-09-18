@@ -154,19 +154,41 @@ $ curl -s -H 'Accept: application/fhir+json' http://127.0.0.1:8090/fhir/R4/metad
   "fhirVersion": "4.0.1",
   "format": ["application/fhir+json"],
   "software": {"name": "Ilavrita", "version": "dev"},
-  "rest": [{"mode": "server"}]
+  "rest": [{
+    "mode": "server",
+    "resource": [
+      {
+        "type": "Patient",
+        "interaction": [
+          {"code": "create"}, {"code": "read"}, {"code": "update"},
+          {"code": "delete"}, {"code": "history-instance"}, {"code": "vread"},
+          {"code": "search-type"}
+        ],
+        "searchParam": [
+          {"name": "_id", "type": "token"}, {"name": "_lastUpdated", "type": "date"},
+          {"name": "identifier", "type": "token"}, {"name": "family", "type": "string"},
+          {"name": "given", "type": "string"}, {"name": "gender", "type": "token"},
+          {"name": "active", "type": "token"}, {"name": "birthdate", "type": "date"}
+        ],
+        "operation": [{"name": "validate", "definition": "..."}],
+        "versioning": "versioned",
+        "updateCreate": true
+      }
+    ]
+  }]
 }
 ```
 
-`rest[].resource` is empty. A resource appears there only once the matching
-interaction is implemented and covered by tests.
+`rest[].resource` carries 126 entries, one per declared type. A resource appears
+there only once the conformance suite covers every status and header rule for it,
+and the statement is generated from the routes that were actually registered — so
+it cannot name something this build does not serve.
 
-Anything else under the FHIR base returns a FHIR-shaped failure, never a
-framework error:
+Every FHIR route requires an authenticated principal:
 
 ```console
 $ curl -s -i http://127.0.0.1:8090/fhir/R4/Patient/123 | head -2
-HTTP/1.1 501 Not Implemented
+HTTP/1.1 401 Unauthorized
 Content-Type: application/fhir+json
 ```
 
@@ -175,10 +197,22 @@ Content-Type: application/fhir+json
   "resourceType": "OperationOutcome",
   "issue": [{
     "severity": "error",
-    "code": "not-supported",
-    "diagnostics": "This interaction is not implemented. See the CapabilityStatement at /fhir/R4/metadata."
+    "code": "login",
+    "diagnostics": "This request carries no authenticated principal."
   }]
 }
+```
+
+A type the statement does not declare answers `404` on every route, and an
+interaction this build does not implement answers `501` — always as an
+`OperationOutcome`, never a framework error:
+
+```console
+$ curl -s -i http://127.0.0.1:8090/fhir/R4/Appointment/123 | head -1
+HTTP/1.1 404 Not Found
+
+$ curl -s -i http://127.0.0.1:8090/fhir/R4/Patient/_history | head -1
+HTTP/1.1 501 Not Implemented
 ```
 
 The HTTP surface is described in [`api/openapi.yaml`](api/openapi.yaml) and CI
@@ -313,10 +347,15 @@ Pull requests are labelled automatically by area and size.
 
 Report vulnerabilities through [SECURITY.md](SECURITY.md), never a public issue.
 
-[docs/security.md](docs/security.md) describes the intended controls — Project
-isolation enforced in the query layer, authorization before results are returned,
-audit evidence independent of the FHIR `AuditEvent` resource, and no resource
-bodies in logs. **None of it is implemented yet.**
+[docs/security.md](docs/security.md) describes the controls and says for each one
+whether it is enforced today. Project isolation, authorization, privilege
+separation, authentication, audit and the rules around deleted data are enforced
+and tested. Request correlation is not implemented, and TLS is a deployment
+concern.
+
+**Nothing here has had an external security review.** The tests are ours, and
+that is the reason to keep patient data out of this build — not an absent
+boundary.
 
 Releases are signed and attested — container images with Cosign plus build
 provenance and an SBOM bound to the digest, npm packages with npm provenance.
@@ -324,8 +363,15 @@ provenance and an SBOM bound to the digest, npm packages with npm provenance.
 
 Dependencies are scanned by CodeQL, GitHub dependency review and FOSSA. Findings
 are reviewed and recorded in [docs/license-compliance.md](docs/license-compliance.md)
-rather than silently ignored — including the FOSSA checks that are currently red,
-where 27 of 28 are explained and one is a genuine open advisory.
+rather than silently ignored.
+
+**The FOSSA licence check is red, and is an open work queue** — not something the
+green engineering checks cover. Two questions are genuinely open: whether
+`modernc.org/libc`'s glibc-derived headers affect the planned commercial licence,
+which needs legal review rather than a scanner, and CVE-2023-36308 in a transitive
+dependency with no fixed version. The rest are believed to be scanner artefacts.
+That page carries the live count and the date it was read; this one deliberately
+does not, because a number here would be stale the week after it was written.
 
 > Ilavrita holds no certification, and running it does not make an organisation
 > compliant with HIPAA, GDPR, EHDS or any other regime. It provides technical

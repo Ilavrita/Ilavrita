@@ -203,8 +203,14 @@ func advertisedOperations() []fhir.OperationCapability {
 // registered from, so the statement can name nothing this server does not serve.
 func advertisedInteractions() []fhir.Interaction {
 	codes := make([]fhir.Interaction, 0, len(servedInteractions))
+
 	for _, served := range servedInteractions {
-		codes = append(codes, served.code)
+		// One interaction is served by more than one route — a search answers a
+		// GET on the type and a POST to _search — and a statement naming it
+		// twice would be declaring two things a client can only do once.
+		if !slices.Contains(codes, served.code) {
+			codes = append(codes, served.code)
+		}
 	}
 
 	return codes

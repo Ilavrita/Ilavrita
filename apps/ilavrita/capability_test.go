@@ -94,9 +94,11 @@ func isRegistered(method, path string) bool {
 // every advertised code names a registered route and a real R4 interaction.
 func TestEveryAdvertisedInteractionNamesARegisteredRoute(t *testing.T) {
 	for _, resource := range advertised(t) {
-		if len(resource.Interaction) != len(servedInteractions) {
+		// The distinct codes, not the rows: one interaction may be served by
+		// more than one route, and a search is.
+		if len(resource.Interaction) != len(advertisedInteractions()) {
 			t.Fatalf("%s advertises %d interaction(s), want %d",
-				resource.Type, len(resource.Interaction), len(servedInteractions))
+				resource.Type, len(resource.Interaction), len(advertisedInteractions()))
 		}
 
 		for _, interaction := range resource.Interaction {
@@ -229,6 +231,41 @@ func TestEveryAdvertisedTypeDeclaresHowItBehaves(t *testing.T) {
 
 		if !resource.UpdateCreate {
 			t.Errorf("%s does not declare updateCreate, but update creates the id a client names", resource.Type)
+		}
+	}
+}
+
+// TestAnInteractionIsDeclaredOnce. One interaction is served by more than one
+// route — a search answers a GET on the type and a POST to _search — and a
+// statement naming it twice would be declaring two things a client can only do
+// once.
+func TestAnInteractionIsDeclaredOnce(t *testing.T) {
+	routes := servingFHIR(t, everyAction)
+
+	answer := call{method: http.MethodGet, path: fhir.BasePath + "/metadata"}.send(t, routes)
+	assertStatus(t, answer, http.StatusOK)
+
+	var statement fhir.CapabilityStatement
+	if err := json.Unmarshal(answer.Body.Bytes(), &statement); err != nil {
+		t.Fatalf("decode the statement: %v", err)
+	}
+
+	for _, resource := range statement.Rest[0].Resource {
+		seen := map[fhir.Interaction]bool{}
+
+		for _, interaction := range resource.Interaction {
+			if seen[interaction.Code] {
+				t.Errorf("%s declares %s twice", resource.Type, interaction.Code)
+			}
+
+			seen[interaction.Code] = true
+		}
+
+		// And the ones that are served are all there, so deduplicating did not
+		// drop one.
+		if len(seen) != len(advertisedInteractions()) {
+			t.Errorf("%s declares %d interactions, and %d are served",
+				resource.Type, len(seen), len(advertisedInteractions()))
 		}
 	}
 }
