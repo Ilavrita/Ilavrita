@@ -23,7 +23,7 @@
 > **Ilavrita serves FHIR R4 today, and is not ready for patient data.**
 >
 > The by-key interactions, search, authorization, audit and payload storage are
-> implemented and tested across 68 resource types. What is missing is listed
+> implemented and tested across 126 resource types. What is missing is listed
 > below and in [docs/known-limitations.md](docs/known-limitations.md); the
 > CapabilityStatement advertises only what the routes actually serve, because a
 > server must never claim behaviour it has not implemented and tested.
@@ -80,7 +80,7 @@ and an architecture that does not have to be rewritten to reach a clustered one.
 | --- | --- |
 | `GET /healthz`, `GET /version` | Working |
 | `GET /fhir/R4/metadata` | Working — advertises exactly what the routes serve |
-| FHIR create, read, update, delete, history, vread | Working, 68 resource types |
+| FHIR create, read, update, delete, history, vread | Working, 126 resource types |
 | FHIR search | Working — `GET` and `POST /_search`, over a declared parameter set |
 | Project isolation and authorization | Enforced — compartments, element filters, field restriction |
 | Audit trail | Working — every interaction and login, in the transaction that did it |

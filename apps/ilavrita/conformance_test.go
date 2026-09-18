@@ -589,8 +589,16 @@ func submission(resourceType string) string {
 // derivation the server actually performs.
 func compartmentPath(resourceType string) (string, bool) {
 	switch resourceType {
-	case "AllergyIntolerance", "Claim", "Consent", "Immunization", "RelatedPerson":
+	case "AllergyIntolerance", "BodyStructure", "Claim", "ClaimResponse", "Consent",
+		"CoverageEligibilityRequest", "CoverageEligibilityResponse", "DetectedIssue",
+		"EpisodeOfCare", "ExplanationOfBenefit", "FamilyMemberHistory", "Immunization",
+		"ImmunizationEvaluation", "ImmunizationRecommendation", "MolecularSequence",
+		"NutritionOrder", "RelatedPerson", "SupplyDelivery", "VisionPrescription":
 		return "patient", true
+	case "AppointmentResponse":
+		return "actor", true
+	case "ResearchSubject":
+		return "individual", true
 	case "Coverage":
 		return "beneficiary", true
 	case "Binary":

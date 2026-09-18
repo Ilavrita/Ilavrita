@@ -32,6 +32,24 @@ A resource type is declared only once the conformance suite covers every status
 and header rule for it. A type that is not declared answers `404` on every route,
 whatever the storage layer would otherwise accept.
 
+126 of R4's 146 types are declared. The list is not a subset of what the storage
+layer can hold — it holds any type name — but of what a policy can authorize: 64
+types carry no patient data, so an unrestricted rule may cover them, and 62 are
+clinical types this build can place in a compartment from their own content. A
+type on neither footing is one no policy could reach, so declaring it would
+publish a route every confined caller is refused on.
+
+The twenty that are not declared are there for one of three reasons. `Bundle`,
+`OperationOutcome` and `Parameters` are wire formats rather than things to store.
+`Appointment`, `Group`, `Person`, `Provenance`, `AuditEvent`, `MessageHeader`,
+`Linkage`, `EnrollmentRequest`, `EnrollmentResponse`, `SupplyRequest`,
+`PaymentNotice` and `PaymentReconciliation` reach their subject through a nested
+element — `Appointment.participant.actor`, `Person.link.target` — and the
+derivation reads top-level elements only. `Basic`, `BiologicallyDerivedProduct`,
+`DeviceMetric`, `ResearchStudy` and `VerificationResult` are unclassified, which
+is the safe answer rather than the finished one: an unclassified type is treated
+as carrying patient data, so nothing may cover it outright.
+
 ## What is not implemented
 
 Every other `/fhir/R4` route answers `501 Not Implemented` as an

@@ -614,16 +614,22 @@ func validateTriple(kind storage.Kind, resourceType storage.ResourceType, action
 // against the subscription — so a rule covering Subscription grants nothing
 // about the resources one would match.
 var nonClinicalResourceTypes = []storage.ResourceType{
-	"ActivityDefinition", "CapabilityStatement", "ChargeItemDefinition", "CodeSystem",
-	"CompartmentDefinition", "ConceptMap", "DeviceDefinition", "Endpoint",
-	"EventDefinition", "ExampleScenario", "GraphDefinition", "HealthcareService",
-	"ImplementationGuide", "InsurancePlan", "Library", "Location", "Measure",
-	"Medication", "MedicationKnowledge", "MessageDefinition", "NamingSystem",
-	"OperationDefinition", "Organization", "OrganizationAffiliation", "PlanDefinition",
-	"Practitioner", "PractitionerRole", "Questionnaire", "ResearchDefinition",
-	"ResearchElementDefinition", "Schedule", "SearchParameter", "Slot",
-	"StructureDefinition", "StructureMap", "Subscription", "Substance",
-	"TerminologyCapabilities", "ValueSet",
+	"ActivityDefinition", "CapabilityStatement", "CatalogEntry", "ChargeItemDefinition",
+	"CodeSystem", "CompartmentDefinition", "ConceptMap", "DeviceDefinition",
+	"EffectEvidenceSynthesis", "Endpoint", "EventDefinition", "Evidence", "EvidenceVariable",
+	"ExampleScenario", "GraphDefinition", "HealthcareService", "ImplementationGuide",
+	"InsurancePlan", "Library", "Location", "Measure", "Medication", "MedicationKnowledge",
+	"MedicinalProduct", "MedicinalProductAuthorization", "MedicinalProductContraindication",
+	"MedicinalProductIndication", "MedicinalProductIngredient", "MedicinalProductInteraction",
+	"MedicinalProductManufactured", "MedicinalProductPackaged", "MedicinalProductPharmaceutical",
+	"MedicinalProductUndesirableEffect", "MessageDefinition", "NamingSystem",
+	"ObservationDefinition", "OperationDefinition", "Organization", "OrganizationAffiliation",
+	"PlanDefinition", "Practitioner", "PractitionerRole", "Questionnaire", "ResearchDefinition",
+	"ResearchElementDefinition", "RiskEvidenceSynthesis", "Schedule", "SearchParameter", "Slot", "SpecimenDefinition",
+	"StructureDefinition", "StructureMap", "Subscription", "Substance", "SubstanceNucleicAcid",
+	"SubstancePolymer", "SubstanceProtein", "SubstanceReferenceInformation",
+	"SubstanceSourceMaterial", "SubstanceSpecification", "TerminologyCapabilities", "TestReport",
+	"TestScript", "ValueSet",
 }
 
 // CarriesClinicalData reports whether a resource type may hold patient data. A
