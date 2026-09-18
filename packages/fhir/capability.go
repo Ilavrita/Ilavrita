@@ -24,13 +24,51 @@ const (
 // servedResourceTypes is the closed list of R4 types this build serves. Storage
 // accepts any type name, so this list alone decides which names are endpoints:
 // it gates every route and fills the statement, so the two cannot disagree.
+//
+// Every entry is a type authz classifies as carrying no patient data — directory,
+// terminology, conformance and definitional content. A clinical type is not
+// withheld because the handlers could not serve it, but because nothing on this
+// build turns a request into a principal: authentication exists as a store and
+// not yet as a route. TestEveryServedTypeCarriesNoClinicalData holds the line.
 var servedResourceTypes = []string{
+	"ActivityDefinition",
+	"CapabilityStatement",
+	"ChargeItemDefinition",
+	"CodeSystem",
+	"CompartmentDefinition",
+	"ConceptMap",
+	"DeviceDefinition",
 	"Endpoint",
+	"EventDefinition",
+	"ExampleScenario",
+	"GraphDefinition",
 	"HealthcareService",
+	"ImplementationGuide",
+	"InsurancePlan",
+	"Library",
 	"Location",
+	"Measure",
+	"Medication",
+	"MedicationKnowledge",
+	"MessageDefinition",
+	"NamingSystem",
+	"OperationDefinition",
 	"Organization",
+	"OrganizationAffiliation",
+	"PlanDefinition",
 	"Practitioner",
 	"PractitionerRole",
+	"Questionnaire",
+	"ResearchDefinition",
+	"ResearchElementDefinition",
+	"Schedule",
+	"SearchParameter",
+	"Slot",
+	"StructureDefinition",
+	"StructureMap",
+	"Substance",
+	"TerminologyCapabilities",
+	"ValueSet",
 }
 
 // ServesResourceType reports whether this build declares a type. An undeclared
