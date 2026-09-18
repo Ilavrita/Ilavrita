@@ -64,6 +64,7 @@ func administeredServer(t *testing.T) (http.Handler, string, *sql.DB) {
 		sessions:     sqlite.NewSessionStore(db),
 		memberships:  sqlite.NewMembershipStore(db),
 		applications: sqlite.NewClientApplicationStore(db),
+		attempts:     newAttemptLimiter(nil),
 		resolvers: authz.Resolvers{
 			Memberships: sqlite.NewMembershipResolver(db),
 			Projects:    sqlite.NewProjectResolver(db),

@@ -27,6 +27,10 @@ type backend struct {
 	memberships  *sqlite.MembershipStore
 	applications *sqlite.ClientApplicationStore
 	resolvers    authz.Resolvers
+
+	// attempts throttles the login route. It is per process, so it holds only
+	// what this instance has seen.
+	attempts *attemptLimiter
 }
 
 // sessionResolver is the whole of what this server does with sessions: issue one
@@ -101,6 +105,7 @@ func newBackend(db *sql.DB) *backend {
 		sessions:     sqlite.NewSessionStore(db),
 		memberships:  sqlite.NewMembershipStore(db),
 		applications: sqlite.NewClientApplicationStore(db),
+		attempts:     newAttemptLimiter(nil),
 		resolvers: authz.Resolvers{
 			Memberships: sqlite.NewMembershipResolver(db),
 			Projects:    sqlite.NewProjectResolver(db),

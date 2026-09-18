@@ -41,6 +41,11 @@ const (
 	// CodeDuplicate reports a create naming a logical id another resource holds.
 	CodeDuplicate IssueCode = "duplicate"
 
+	// CodeThrottled reports a request refused for its rate rather than its
+	// content. R4 lists it under "transient": the same request may succeed
+	// later, which is exactly what a login limit is saying.
+	CodeThrottled IssueCode = "throttled"
+
 	// CodeTooCostly reports a request this server refuses to spend resources on,
 	// such as a body larger than it accepts. It is distinct from CodeInvalid:
 	// the request is well formed, and only its size is refused.

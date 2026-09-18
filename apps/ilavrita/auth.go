@@ -41,6 +41,11 @@ var (
 	// tells an attacker which addresses and Projects exist.
 	errCredentialsRefused = errors.New("ilavrita: those credentials do not authenticate here")
 
+	// errTooManyAttempts reports a login refused for its rate rather than its
+	// credential. It is deliberately the same answer whether or not the address
+	// exists, so the limit cannot be used to enumerate one.
+	errTooManyAttempts = errors.New("ilavrita: too many login attempts; wait before trying again")
+
 	// errMalformedLogin reports a body this server cannot read as a login.
 	errMalformedLogin = errors.New("ilavrita: a login names a project, an email address and a password")
 )
@@ -105,10 +110,23 @@ func logIn(request *core.RequestEvent) error {
 		return refuse(request, errMalformedLogin)
 	}
 
+	// Asked before the password is proved: argon2id is expensive by design, and
+	// answering a guess is the work an attacker wants this server to do.
+	identity := body.Project + "|" + strings.ToLower(strings.TrimSpace(body.Email))
+	address := request.RemoteIP()
+
+	if !serving.attempts.permits(identity, address) {
+		return refuse(request, errTooManyAttempts)
+	}
+
 	issued, token, err := serving.authenticate(request.Request.Context(), body)
 	if err != nil {
+		serving.attempts.failed(identity, address)
+
 		return refuse(request, err)
 	}
+
+	serving.attempts.succeeded(identity)
 
 	return request.JSON(http.StatusOK, loginResponse{
 		Token:      token.Reveal(),

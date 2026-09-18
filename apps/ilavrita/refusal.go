@@ -70,6 +70,9 @@ var (
 	unreadableLogin = refusal{http.StatusBadRequest, fhir.CodeInvalid,
 		"A login names a project, an email address and a password."}
 
+	throttled = refusal{http.StatusTooManyRequests, fhir.CodeThrottled,
+		"Too many login attempts. Wait before trying again."}
+
 	notAuthorized = refusal{http.StatusForbidden, fhir.CodeForbidden,
 		"This principal may not perform this interaction on this resource type."}
 
@@ -117,6 +120,8 @@ func translate(err error) refusal {
 		return refused
 	case errors.Is(err, errNoPrincipal), errors.Is(err, errCredentialsRefused):
 		return unauthenticated
+	case errors.Is(err, errTooManyAttempts):
+		return throttled
 	case errors.Is(err, errMalformedLogin), errors.Is(err, errMalformedControlRequest):
 		return unreadableLogin
 	case errors.Is(err, errNotAdmin), errors.Is(err, errNotSuperAdmin):

@@ -158,8 +158,10 @@ None of these are visible from reading the code.
 - **A compartment subject is created by naming it.** A `POST /Patient` mints an id no confined
   grant can name in advance, so it is refused; `PUT /Patient/{id}` under a grant naming that
   patient is how one is provisioned. Correct, and surprising the first time.
-- **No audit trail, MFA or login rate limit.** A password can be guessed as fast as argon2id
-  answers, and nothing records that anyone authenticated.
+- **No audit trail and no MFA.** Nothing records that anyone authenticated. The login route is
+  rate limited now — five failures per identity, twenty per address, fifteen-minute window,
+  checked before argon2id runs — but the counter is per process, so it is a limit rather than a
+  guarantee behind more than one instance.
 - **The control plane is a working subset, not the whole surface.** It creates Projects,
   invites identities, grants standing and registers client applications. AccessPolicy authoring,
   link management, credential rotation and every list endpoint are still store-only.

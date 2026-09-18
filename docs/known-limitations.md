@@ -93,9 +93,12 @@ A session lives eight hours and may not exceed twelve. An unknown address, a wro
 disabled identity and an identity holding no standing in the Project are the same answer, because
 telling them apart tells an attacker which addresses and Projects exist.
 
-**What is still missing:** there is no audit trail, no MFA, and no rate limit on the login route,
-so a password can be guessed as fast as argon2id answers. There is no refresh: a session simply
-expires and the credential is proved again.
+The login route is rate limited: five failed attempts per identity and twenty per client address
+in a fifteen-minute window, checked before the password is proved, cleared by a success. It counts
+in process memory, so a second instance counts its own attempts.
+
+**What is still missing:** there is no audit trail and no MFA. There is no refresh either: a
+session expires and the credential is proved again.
 
 ## Out of scope for v0.1
 
