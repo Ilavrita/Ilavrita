@@ -56,7 +56,7 @@ func newProject(kind Kind, cfg Config) (Project, error) {
 
 	// 'system' is the platform_resource sentinel for a system-scoped row, so a
 	// Project claiming it would collide with system scope.
-	if cfg.ID == systemScope {
+	if cfg.ID == SystemScope {
 		return Project{}, fmt.Errorf("%w: %q is the system sentinel", ErrInvalidProjectID, cfg.ID)
 	}
 

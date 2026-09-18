@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Ilavrita/Ilavrita/packages/audit"
 	"github.com/Ilavrita/Ilavrita/packages/project"
 	"github.com/pocketbase/pocketbase/apis"
 	"github.com/pocketbase/pocketbase/core"
@@ -116,12 +117,43 @@ func logIn(request *core.RequestEvent) error {
 	address := request.RemoteIP()
 
 	if !serving.attempts.permits(identity, address) {
+		serving.refusedLogin(request.Request.Context(), audit.OutcomeRefused, audit.ReasonThrottled)
+
 		return refuse(request, errTooManyAttempts)
 	}
 
-	issued, token, err := serving.authenticate(request.Request.Context(), body)
+	var (
+		issued project.Session
+		token  project.SessionToken
+	)
+
+	// The session and the record of it share one commit boundary: a token
+	// handed out by a process that then failed to write down that it had is a
+	// credential nothing accounts for (AUD-1).
+	err := serving.resources.WithinTransaction(request.Request.Context(), func(ctx context.Context) error {
+		var err error
+
+		issued, token, err = serving.authenticate(ctx, body)
+		if err != nil {
+			return err
+		}
+
+		return serving.recordLogin(ctx, issued)
+	})
 	if err != nil {
-		serving.attempts.failed(identity, address)
+		outcome, reason := audit.OutcomeFailed, audit.ReasonUnavailable
+
+		// A fault is not a wrong password. Counting one would let an outage in
+		// this server lock out the people whose credentials are correct.
+		if errors.Is(err, errCredentialsRefused) {
+			outcome, reason = audit.OutcomeRefused, audit.ReasonNotAuthorized
+
+			serving.attempts.failed(identity, address)
+		}
+
+		// Recorded outside the transaction that failed, so it survives the
+		// rollback.
+		serving.refusedLogin(request.Request.Context(), outcome, reason)
 
 		return refuse(request, err)
 	}
@@ -288,6 +320,38 @@ func describeSession(request *core.RequestEvent) error {
 // session resolves the token a request presents, or nothing. A malformed header
 // and an unknown token are the same answer: nothing named a session.
 func (b *backend) session(request *core.RequestEvent) (project.Session, bool, error) {
+	// Answered from the lookup already performed for this request, when one was.
+	if held, carried := request.Request.Context().Value(sessionKey{}).(resolvedSession); carried {
+		return held.session, held.found, held.err
+	}
+
+	return b.lookUpSession(request).unpack()
+}
+
+// sessionKey carries one request's session lookup, so nothing looks it up twice
+// and nothing can answer differently the second time.
+type sessionKey struct{}
+
+// resolvedSession is what one lookup came to, error included: a lookup that
+// failed must fail the same way for every reader of it.
+type resolvedSession struct {
+	session project.Session
+	found   bool
+	err     error
+}
+
+func (r resolvedSession) unpack() (project.Session, bool, error) {
+	return r.session, r.found, r.err
+}
+
+// lookUpSession turns the presented token back into a session.
+func (b *backend) lookUpSession(request *core.RequestEvent) resolvedSession {
+	session, found, err := b.readSession(request)
+
+	return resolvedSession{session: session, found: found, err: err}
+}
+
+func (b *backend) readSession(request *core.RequestEvent) (project.Session, bool, error) {
 	// A backend with no session port names nobody. It is a wiring mistake rather
 	// than a decision, but the answer that fails closed is the same one.
 	if b.sessions == nil {
@@ -305,4 +369,42 @@ func (b *backend) session(request *core.RequestEvent) (project.Session, bool, er
 	}
 
 	return b.sessions.Resolve(request.Request.Context(), token, time.Now().UTC())
+}
+
+// recordLogin writes down one credential this server proved. It returns its
+// error so the caller inside the transaction fails with it: a token handed out
+// by a process that then failed to record it is a credential nothing accounts
+// for (AUD-1).
+func (b *backend) recordLogin(ctx context.Context, issued project.Session) error {
+	return b.record(ctx, audit.EventConfig{
+		Project:    issued.Project(),
+		Principal:  issued.Principal(),
+		Membership: issued.Membership(),
+		Action:     audit.ActionAuthenticate,
+		Outcome:    audit.OutcomeAllowed,
+	})
+}
+
+// refusedLogin writes down one attempt this server did not honour.
+//
+// It names nobody and no Project. The route answers a wrong password and an
+// unknown address alike, and a record naming the user it found would say which
+// of the checks got that far — turning the trail into the address oracle that
+// the uniform answer exists to prevent (AUD-5). What an operator needs is still
+// there: refusals are counted, and a run of them is the signal, not which
+// address each one guessed at.
+//
+// Nothing is left to undo by the time this is called, so a record that cannot
+// be written is reported rather than changing the answer the caller was given.
+func (b *backend) refusedLogin(ctx context.Context, outcome audit.Outcome, reason audit.Reason) {
+	err := b.record(ctx, audit.EventConfig{
+		Project:   project.SystemScope,
+		Principal: audit.UnidentifiedPrincipal,
+		Action:    audit.ActionAuthenticate,
+		Outcome:   outcome,
+		Reason:    reason,
+	})
+	if err != nil {
+		report(err)
+	}
 }

@@ -39,6 +39,7 @@ func authenticatedServer(t *testing.T) (http.Handler, *sql.DB) {
 		users:     sqlite.NewUserStore(db),
 		projects:  sqlite.NewProjectStore(db),
 		sessions:  sqlite.NewSessionStore(db),
+		audits:    sqlite.NewAuditStore(db),
 		attempts:  newAttemptLimiter(nil),
 		resolvers: authz.Resolvers{
 			Memberships: sqlite.NewMembershipResolver(db),

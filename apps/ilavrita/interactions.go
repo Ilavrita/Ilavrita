@@ -245,6 +245,11 @@ func (g granted) written(
 	var written storage.ResourceRecord
 
 	err := g.transactions.WithinTransaction(ctx, func(ctx context.Context) error {
+		// The audit is written by the decorator around this interaction, and a
+		// create mints an id no URL carries. This is the one thing it cannot
+		// read off the request.
+		settle(ctx, key)
+
 		if err := write(ctx); err != nil {
 			return err
 		}

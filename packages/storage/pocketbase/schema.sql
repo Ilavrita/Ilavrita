@@ -1090,3 +1090,80 @@ BEGIN
   UPDATE project_memberships SET authz_version = authz_version + 1
    WHERE project_id = new.project_id AND bot_id = new.id;
 END;
+
+-- ===========================================================================
+-- Audit. What happened, independently of the FHIR AuditEvent resource, so a
+-- client cannot edit the record of its own actions.
+-- ===========================================================================
+
+-- project_id holds the literal 'system' for an event outside every Project, so
+-- it carries no foreign key to projects — the same reason platform_resource
+-- carries none. A login naming a slug that resolves to nothing still happened,
+-- and the row must not record the caller's own spelling of that slug.
+
+-- No foreign key names the principal or the membership either. An audit row
+-- outlives the standing it records: a key would either block withdrawing a
+-- membership or erase the evidence that it once acted.
+
+-- detail is drawn from a closed vocabulary rather than being free text, so
+-- nothing a caller supplied can reach the record. A row that quoted a request
+-- would hold the very content this table is kept clear of, and one that quoted
+-- a login would hold the password (AUD-2).
+
+-- tenant: project_id
+CREATE TABLE IF NOT EXISTS audit_events (
+  project_id     TEXT NOT NULL,
+  id             TEXT NOT NULL,
+  at             BIGINT NOT NULL,
+  principal_kind TEXT NOT NULL,
+  principal_id   TEXT NOT NULL,
+  membership_id  TEXT,
+  action         TEXT NOT NULL CHECK (action IN (
+    'read', 'write', 'delete', 'search', 'history', 'authenticate'
+  )),
+  res_type       TEXT,
+  res_id         TEXT,
+  outcome        TEXT NOT NULL CHECK (outcome IN ('allowed', 'refused', 'failed')),
+  detail         TEXT NOT NULL DEFAULT '' CHECK (detail IN (
+    '', 'not-authorized', 'not-found', 'deleted', 'version-conflict',
+    'already-exists', 'malformed', 'unidentified', 'throttled', 'unavailable'
+  )),
+
+  PRIMARY KEY (project_id, id),
+
+  CHECK (project_id <> ''),
+  CHECK (substr(id, 1, 4) = 'aud_'),
+  CHECK (principal_kind <> '' AND principal_id <> ''),
+  CHECK (membership_id IS NULL OR membership_id <> ''),
+
+  -- A resource is named by both halves or by neither, so no row points at a
+  -- type with no id or an id belonging to no type. Both halves are tested for
+  -- NULL explicitly: "res_id <> ''" is NULL when res_id is, and a CHECK passes
+  -- on NULL, so the emptiness tests alone would admit a half-named row.
+  CHECK (
+    (res_type IS NULL AND res_id IS NULL)
+    OR (res_type IS NOT NULL AND res_id IS NOT NULL AND res_type <> '' AND res_id <> '')
+  )
+);
+
+-- An incident reads one Project's events in the order they happened.
+CREATE INDEX IF NOT EXISTS ix_audit_events_at ON audit_events (project_id, at, id);
+
+-- Nothing revises an audit row. A record whoever acted can edit afterwards is
+-- not a record (AUD-4).
+CREATE TRIGGER IF NOT EXISTS audit_events_no_update
+BEFORE UPDATE ON audit_events
+BEGIN
+  SELECT RAISE(ABORT, 'audit_events is append-only');
+END;
+
+-- Deletion is confined to the purge worker, which only runs against a Project
+-- the database itself reports as deleting. This is the fhir_resource_history
+-- rule, for the same reason: erasing a Project has to be possible, and erasing
+-- what it did while it existed has to not be.
+CREATE TRIGGER IF NOT EXISTS audit_events_no_delete
+BEFORE DELETE ON audit_events
+WHEN (SELECT state FROM projects WHERE id = OLD.project_id) IS NOT 'deleting'
+BEGIN
+  SELECT RAISE(ABORT, 'audit_events is append-only');
+END;

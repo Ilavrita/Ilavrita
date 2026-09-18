@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"time"
 
+	"github.com/Ilavrita/Ilavrita/packages/audit"
 	"github.com/Ilavrita/Ilavrita/packages/authz"
 	"github.com/Ilavrita/Ilavrita/packages/project"
 	"github.com/Ilavrita/Ilavrita/packages/storage"
@@ -27,6 +28,12 @@ type backend struct {
 	memberships  *sqlite.MembershipStore
 	applications *sqlite.ClientApplicationStore
 	resolvers    authz.Resolvers
+
+	// audits records what happened. A backend wired without one records
+	// nothing, which is a wiring mistake rather than a decision — so the
+	// decorator asks before it opens a transaction, and a process serving
+	// without it is one that cannot answer an incident.
+	audits audit.Recorder
 
 	// attempts throttles the login route. It is per process, so it holds only
 	// what this instance has seen.
@@ -105,6 +112,7 @@ func newBackend(db *sql.DB) *backend {
 		sessions:     sqlite.NewSessionStore(db),
 		memberships:  sqlite.NewMembershipStore(db),
 		applications: sqlite.NewClientApplicationStore(db),
+		audits:       sqlite.NewAuditStore(db),
 		attempts:     newAttemptLimiter(nil),
 		resolvers: authz.Resolvers{
 			Memberships: sqlite.NewMembershipResolver(db),

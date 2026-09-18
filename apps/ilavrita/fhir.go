@@ -80,7 +80,7 @@ func registerFHIRRoutes(routes *router.Router[*core.RequestEvent]) {
 	}
 
 	for _, served := range servedInteractions {
-		base.Route(served.method, served.path, served.handler)
+		base.Route(served.method, served.path, audited(served.code, served.handler))
 	}
 
 	base.Any(everythingElse, rejectUnimplemented)
