@@ -12,9 +12,16 @@ cd "$(dirname "$0")/.."
 readonly PORT="${ILAVRITA_VERIFY_PORT:-8111}"
 WORKDIR=$(mktemp -d)
 
+# The server deletes its own WAL and SHM files as it shuts down, so the wait is
+# what stops the removal below racing it. set -e would otherwise let a vanished
+# file decide this script's exit status even though every check passed.
 cleanup() {
-  [ -n "${SERVER_PID:-}" ] && kill "$SERVER_PID" 2>/dev/null || true
-  $RM -r "$WORKDIR"
+  if [ -n "${SERVER_PID:-}" ]; then
+    kill "$SERVER_PID" 2>/dev/null || true
+    wait "$SERVER_PID" 2>/dev/null || true
+  fi
+
+  $RM -rf "$WORKDIR" 2>/dev/null || true
 }
 RM=$(command -v rm)
 trap cleanup EXIT
