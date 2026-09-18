@@ -16,6 +16,13 @@ var (
 	ErrMembershipPrincipalKeysMissing = errors.New(
 		"pocketbase: project_memberships is missing its principal foreign keys")
 
+	// ErrRuleFilterColumnsMissing reports an access_policy_rules table with
+	// nowhere to state a filter. A rule that cannot record its restriction
+	// compiles to a Grant narrowed by nothing, which reaches further than the
+	// policy says, so a database without the columns is refused.
+	ErrRuleFilterColumnsMissing = errors.New(
+		"pocketbase: access_policy_rules is missing its filter columns")
+
 	// ErrRebuildWouldDropColumn reports an old table holding a column the current
 	// declaration does not. The rebuild copies rows, so a dropped column is lost
 	// data and the rebuild refuses rather than performing it.
@@ -43,7 +50,13 @@ var (
 // rebuildTable is the name its replacement is built under before the rename.
 const (
 	membershipTable = "project_memberships"
-	rebuildTable    = "project_memberships_new"
+
+	// membershipRebuildTable is the scratch name its replacement is built under
+	// before the rename.
+	membershipRebuildTable = membershipTable + "_new"
+
+	// ruleTable holds the access policy rules a filter is stated on.
+	ruleTable = "access_policy_rules"
 )
 
 // principalParents are the registries project_memberships must name, each with
@@ -62,21 +75,30 @@ func PrepareSchema(ctx context.Context, db *sql.DB) error {
 		return err
 	}
 
-	rebuilt, err := rebuildMembershipPrincipalKeys(ctx, db)
+	memberships, err := rebuildMembershipPrincipalKeys(ctx, db)
 	if err != nil {
 		return err
 	}
 
-	// The rebuild drops the table, and its indexes and triggers go with it. The
-	// file is the only definition of them, so it is replayed rather than a second
-	// hand-written list kept in step with it.
-	if rebuilt {
+	filters, err := rebuildRuleFilters(ctx, db)
+	if err != nil {
+		return err
+	}
+
+	// A rebuild drops its table, and that table's indexes and triggers go with
+	// it. The file is the only definition of them, so it is replayed rather than
+	// a second hand-written list kept in step with it.
+	if memberships || filters {
 		if err := ApplySchema(ctx, db); err != nil {
 			return err
 		}
 	}
 
 	if err := AssertMembershipPrincipalKeys(ctx, db); err != nil {
+		return err
+	}
+
+	if err := AssertRuleFilterColumns(ctx, db); err != nil {
 		return err
 	}
 
@@ -158,10 +180,65 @@ func AssertNoSystemClientApplicationDocuments(ctx context.Context, db *sql.DB) e
 	return nil
 }
 
+// rebuild describes one table replaced by its current declaration. SQLite has no
+// ALTER TABLE ADD CONSTRAINT and the schema is applied with IF NOT EXISTS, so a
+// constraint added to a table that already exists reaches only databases created
+// afterwards unless the table is rebuilt.
+type rebuild struct {
+	table       string
+	replacement string
+	declaration string
+	columns     []string
+
+	// finishing are statements the rename leaves to be re-made inside the same
+	// transaction, before the foreign key check reads the result.
+	finishing []string
+}
+
+// planRebuild reads what the copy must carry across. A column the current
+// declaration does not name is refused rather than dropped.
+func planRebuild(ctx context.Context, db *sql.DB, table string, finishing ...string) (rebuild, error) {
+	replacement := table + "_new"
+
+	declaration, err := tableDeclaration(table, replacement)
+	if err != nil {
+		return rebuild{}, err
+	}
+
+	columns, err := copyableColumns(ctx, db, table, declaration)
+	if err != nil {
+		return rebuild{}, err
+	}
+
+	return rebuild{
+		table: table, replacement: replacement,
+		declaration: declaration, columns: columns, finishing: finishing,
+	}, nil
+}
+
+// performRebuild runs one plan with foreign keys suspended for its duration.
+func performRebuild(ctx context.Context, db *sql.DB, plan rebuild) error {
+	// The pragma is per-connection and a no-op inside a transaction, so the whole
+	// rebuild runs on one connection with the toggle outside the transaction.
+	pinned, err := db.Conn(ctx)
+	if err != nil {
+		return fmt.Errorf("pocketbase: reserve a connection for the rebuild: %w", err)
+	}
+	defer func() { _ = pinned.Close() }()
+
+	if _, err := pinned.ExecContext(ctx, "PRAGMA foreign_keys = OFF"); err != nil {
+		return fmt.Errorf("pocketbase: suspend foreign keys for the rebuild: %w", err)
+	}
+
+	// Enforcement is restored on every path, including the one where the rebuild
+	// failed, so no later work on this connection runs with it off.
+	defer func() { _, _ = pinned.ExecContext(ctx, "PRAGMA foreign_keys = ON") }()
+
+	return runRebuild(ctx, pinned, plan)
+}
+
 // rebuildMembershipPrincipalKeys adopts the principal foreign keys onto a table
-// that already exists. SQLite has no ALTER TABLE ADD CONSTRAINT and the schema is
-// applied with IF NOT EXISTS, so the table is rebuilt or the constraint would
-// reach only databases created after it was declared.
+// that already exists.
 func rebuildMembershipPrincipalKeys(ctx context.Context, db *sql.DB) (bool, error) {
 	needed, err := rebuildNeeded(ctx, db)
 	if err != nil || !needed {
@@ -172,37 +249,92 @@ func rebuildMembershipPrincipalKeys(ctx context.Context, db *sql.DB) (bool, erro
 		return false, err
 	}
 
-	declaration, err := membershipDeclaration()
+	// ux_pm_link_sourced is the parent key project_membership_policies' own
+	// three-column foreign key resolves against, not merely an index. Without it
+	// the check at the end of the rebuild reports a schema mismatch rather than
+	// a row.
+	plan, err := planRebuild(ctx, db, membershipTable,
+		"CREATE UNIQUE INDEX IF NOT EXISTS ux_pm_link_sourced"+
+			" ON "+membershipTable+" (project_id, id, link_sourced)")
 	if err != nil {
 		return false, err
 	}
 
-	columns, err := copyableColumns(ctx, db, declaration)
-	if err != nil {
-		return false, err
-	}
-
-	// The pragma is per-connection and a no-op inside a transaction, so the whole
-	// rebuild runs on one connection with the toggle outside the transaction.
-	pinned, err := db.Conn(ctx)
-	if err != nil {
-		return false, fmt.Errorf("pocketbase: reserve a connection for the rebuild: %w", err)
-	}
-	defer func() { _ = pinned.Close() }()
-
-	if _, err := pinned.ExecContext(ctx, "PRAGMA foreign_keys = OFF"); err != nil {
-		return false, fmt.Errorf("pocketbase: suspend foreign keys for the rebuild: %w", err)
-	}
-
-	// Enforcement is restored on every path, including the one where the rebuild
-	// failed, so no later work on this connection runs with it off.
-	defer func() { _, _ = pinned.ExecContext(ctx, "PRAGMA foreign_keys = ON") }()
-
-	if err := runRebuild(ctx, pinned, declaration, columns); err != nil {
+	if err := performRebuild(ctx, db, plan); err != nil {
 		return false, err
 	}
 
 	return true, nil
+}
+
+// rebuildRuleFilters adopts the filter columns and their checks onto an
+// access_policy_rules table that predates them. Every existing rule carries no
+// filter, so the copy has nothing the new checks can reject.
+func rebuildRuleFilters(ctx context.Context, db *sql.DB) (bool, error) {
+	present, err := hasColumn(ctx, db, ruleTable, "filter_path")
+	if err != nil || present {
+		return false, err
+	}
+
+	plan, err := planRebuild(ctx, db, ruleTable)
+	if err != nil {
+		return false, err
+	}
+
+	if err := performRebuild(ctx, db, plan); err != nil {
+		return false, err
+	}
+
+	return true, nil
+}
+
+// AssertRuleFilterColumns refuses a database whose policy rules cannot state a
+// filter. A rule row with nowhere to record one compiles to a Grant narrowed by
+// nothing, which is wider than the policy says.
+func AssertRuleFilterColumns(ctx context.Context, db *sql.DB) error {
+	for _, column := range []string{"filter_path", "filter_comparator", "filter_values"} {
+		present, err := hasColumn(ctx, db, ruleTable, column)
+		if err != nil {
+			return err
+		}
+
+		if !present {
+			return fmt.Errorf("%w: %s.%s", ErrRuleFilterColumnsMissing, ruleTable, column)
+		}
+	}
+
+	return nil
+}
+
+// hasColumn reports whether a table declares one column.
+func hasColumn(ctx context.Context, db *sql.DB, table, column string) (bool, error) {
+	rows, err := conn(ctx, db).QueryContext(ctx, "PRAGMA table_info("+table+")")
+	if err != nil {
+		return false, fmt.Errorf("pocketbase: read %s columns: %w", table, err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	for rows.Next() {
+		var (
+			cid, notNull, primaryKey int
+			name, kind               string
+			fallback                 sql.NullString
+		)
+
+		if err := rows.Scan(&cid, &name, &kind, &notNull, &fallback, &primaryKey); err != nil {
+			return false, fmt.Errorf("pocketbase: scan %s columns: %w", table, err)
+		}
+
+		if name == column {
+			return true, nil
+		}
+	}
+
+	if err := rows.Err(); err != nil {
+		return false, fmt.Errorf("pocketbase: read %s columns: %w", table, err)
+	}
+
+	return false, nil
 }
 
 // rebuildNeeded reports whether the table is missing a principal key. A database
@@ -222,32 +354,33 @@ func rebuildNeeded(ctx context.Context, db *sql.DB) (bool, error) {
 	return false, nil
 }
 
-// membershipDeclaration returns the current CREATE TABLE text under the rebuild
-// name. Only the first occurrence is substituted: the self-referencing inviter
-// key must keep naming the final table, which this one becomes after the rename.
-func membershipDeclaration() (string, error) {
+// tableDeclaration returns the current CREATE TABLE text under the rebuild name.
+// Only the first occurrence is substituted: a self-referencing key, such as
+// project_memberships' inviter, must keep naming the final table, which this one
+// becomes after the rename.
+func tableDeclaration(table, replacement string) (string, error) {
 	statements, err := splitStatements(schema)
 	if err != nil {
 		return "", fmt.Errorf("pocketbase: read schema: %w", err)
 	}
 
-	const opening = "CREATE TABLE IF NOT EXISTS " + membershipTable
+	opening := "CREATE TABLE IF NOT EXISTS " + table
 
 	for _, statement := range statements {
 		if strings.HasPrefix(statement, opening) {
-			return strings.Replace(statement, membershipTable, rebuildTable, 1), nil
+			return strings.Replace(statement, table, replacement, 1), nil
 		}
 	}
 
-	return "", fmt.Errorf("pocketbase: the schema declares no %s table", membershipTable)
+	return "", fmt.Errorf("pocketbase: the schema declares no %s table", table)
 }
 
 // copyableColumns lists the columns the copy carries: the stored ones, excluding
 // every generated column, which cannot be inserted into and is recomputed anyway.
-func copyableColumns(ctx context.Context, db *sql.DB, declaration string) ([]string, error) {
-	rows, err := conn(ctx, db).QueryContext(ctx, "PRAGMA table_xinfo("+membershipTable+")")
+func copyableColumns(ctx context.Context, db *sql.DB, table, declaration string) ([]string, error) {
+	rows, err := conn(ctx, db).QueryContext(ctx, "PRAGMA table_xinfo("+table+")")
 	if err != nil {
-		return nil, fmt.Errorf("pocketbase: read %s columns: %w", membershipTable, err)
+		return nil, fmt.Errorf("pocketbase: read %s columns: %w", table, err)
 	}
 	defer func() { _ = rows.Close() }()
 
@@ -261,7 +394,7 @@ func copyableColumns(ctx context.Context, db *sql.DB, declaration string) ([]str
 		)
 
 		if err := rows.Scan(&cid, &name, &kind, &notNull, &fallback, &primaryKey, &hidden); err != nil {
-			return nil, fmt.Errorf("pocketbase: scan %s columns: %w", membershipTable, err)
+			return nil, fmt.Errorf("pocketbase: scan %s columns: %w", table, err)
 		}
 
 		// hidden reports 3 for a stored generated column and 2 for a virtual one.
@@ -272,18 +405,18 @@ func copyableColumns(ctx context.Context, db *sql.DB, declaration string) ([]str
 		// A column the current declaration does not name would be dropped by the
 		// copy, which is data loss rather than a migration.
 		if !strings.Contains(declaration, name) {
-			return nil, fmt.Errorf("%w: %s.%s", ErrRebuildWouldDropColumn, membershipTable, name)
+			return nil, fmt.Errorf("%w: %s.%s", ErrRebuildWouldDropColumn, table, name)
 		}
 
 		columns = append(columns, name)
 	}
 
 	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("pocketbase: read %s columns: %w", membershipTable, err)
+		return nil, fmt.Errorf("pocketbase: read %s columns: %w", table, err)
 	}
 
 	if len(columns) == 0 {
-		return nil, fmt.Errorf("pocketbase: %s declares no copyable column", membershipTable)
+		return nil, fmt.Errorf("pocketbase: %s declares no copyable column", table)
 	}
 
 	return columns, nil
@@ -349,35 +482,29 @@ func refuseNonEmpty(ctx context.Context, db *sql.DB, query string, sentinel erro
 // runRebuild performs the copy inside one transaction. Nothing is committed until
 // the foreign key check has run over the result, so a database that cannot carry
 // the constraint keeps the table it had.
-func runRebuild(ctx context.Context, pinned *sql.Conn, declaration string, columns []string) error {
+func runRebuild(ctx context.Context, pinned *sql.Conn, plan rebuild) error {
 	tx, err := pinned.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("pocketbase: begin the rebuild: %w", err)
 	}
 	defer func() { _ = tx.Rollback() }()
 
-	list := strings.Join(columns, ", ")
+	list := strings.Join(plan.columns, ", ")
 
 	// A trigger on another table whose body names this one is re-validated by the
 	// rename, and the table it names is gone by then. They are dropped here and
 	// restored by the schema replay, which is their only definition.
-	dependent, err := triggersNaming(ctx, tx, membershipTable)
+	dependent, err := triggersNaming(ctx, tx, plan.table)
 	if err != nil {
 		return err
 	}
 
-	steps := []string{
-		declaration,
-		"INSERT INTO " + rebuildTable + " (" + list + ") SELECT " + list + " FROM " + membershipTable,
-		"DROP TABLE " + membershipTable,
-		"ALTER TABLE " + rebuildTable + " RENAME TO " + membershipTable,
-
-		// ux_pm_link_sourced is the parent key project_membership_policies' own
-		// three-column foreign key resolves against, not merely an index. Without
-		// it the check below reports a schema mismatch rather than a row.
-		"CREATE UNIQUE INDEX IF NOT EXISTS ux_pm_link_sourced" +
-			" ON " + membershipTable + " (project_id, id, link_sourced)",
-	}
+	steps := append([]string{
+		plan.declaration,
+		"INSERT INTO " + plan.replacement + " (" + list + ") SELECT " + list + " FROM " + plan.table,
+		"DROP TABLE " + plan.table,
+		"ALTER TABLE " + plan.replacement + " RENAME TO " + plan.table,
+	}, plan.finishing...)
 
 	for _, trigger := range dependent {
 		if _, err := tx.ExecContext(ctx, "DROP TRIGGER IF EXISTS "+trigger); err != nil {

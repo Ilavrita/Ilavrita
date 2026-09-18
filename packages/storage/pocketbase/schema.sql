@@ -492,6 +492,9 @@ CREATE TABLE IF NOT EXISTS access_policy_rules (
   compartment_type  TEXT,
   compartment_id    TEXT,
   compartment_param TEXT,
+  filter_path       TEXT,
+  filter_comparator TEXT,
+  filter_values     TEXT,
 
   PRIMARY KEY (project_id, policy_id, ordinal),
 
@@ -500,6 +503,28 @@ CREATE TABLE IF NOT EXISTS access_policy_rules (
   CHECK (compartment_type IS NULL OR compartment_type <> ''),
   CHECK (compartment_id IS NULL OR compartment_id <> ''),
   CHECK (compartment_param IS NULL OR compartment_param <> ''),
+
+  -- A filter narrows the rule to the resources whose named element matches. It
+  -- is stated in full or not at all: a path with no comparator is a restriction
+  -- nothing can apply, and a restriction nothing applies is a rule that reaches
+  -- further than it says it does.
+  CHECK (
+    (filter_path IS NULL AND filter_comparator IS NULL AND filter_values IS NULL)
+    OR (filter_path IS NOT NULL AND filter_comparator IS NOT NULL AND filter_values IS NOT NULL)
+  ),
+  CHECK (filter_path IS NULL OR filter_path <> ''),
+  CHECK (filter_comparator IS NULL OR filter_comparator IN ('eq', 'in')),
+
+  -- sqlite-only: json_valid, json_type and json_array_length. PostgreSQL holds
+  -- the values in a jsonb column and uses jsonb_typeof and jsonb_array_length.
+  CHECK (filter_values IS NULL OR (
+    json_valid(filter_values) AND json_type(filter_values) = 'array'
+    AND json_array_length(filter_values) >= 1
+  )),
+
+  -- Equality names exactly one value, which is what makes it a different
+  -- statement from membership over a set that happens to hold one.
+  CHECK (filter_comparator <> 'eq' OR json_array_length(filter_values) = 1),
 
   -- An unrestricted rule says so and names no subject; a restricted one names a
   -- subject type plus either a literal id or one parameter, never both.

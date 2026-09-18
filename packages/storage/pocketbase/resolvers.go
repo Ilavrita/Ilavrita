@@ -26,6 +26,12 @@ var (
 	// three restriction shapes its own CHECK allows, which is schema drift and
 	// never a guess at which shape was meant.
 	ErrUnreadableRule = errors.New("pocketbase: access policy rule states no readable restriction")
+
+	// ErrUnreadableFilter reports a rule row stating a filter this server cannot
+	// read: some of the three columns but not all, or a value list that is not a
+	// list. It denies rather than compiling the rule without the filter, because
+	// a rule missing its filter reaches further than the row says it does.
+	ErrUnreadableFilter = errors.New("pocketbase: access policy rule states an unreadable filter")
 )
 
 // The columns a membership rebuilds from, in the order membershipRow reads them.
@@ -75,7 +81,8 @@ const (
 		" WHERE project_id = ? AND policy_id = ? ORDER BY name"
 
 	policyRuleQuery = "SELECT kind, res_type, action, unrestricted," +
-		" compartment_type, compartment_id, compartment_param FROM access_policy_rules" +
+		" compartment_type, compartment_id, compartment_param," +
+		" filter_path, filter_comparator, filter_values FROM access_policy_rules" +
 		" WHERE project_id = ? AND policy_id = ? ORDER BY ordinal"
 )
 
@@ -450,12 +457,16 @@ type ruleRow struct {
 	compartmentType  sql.NullString
 	compartmentID    sql.NullString
 	compartmentParam sql.NullString
+	filterPath       sql.NullString
+	filterComparator sql.NullString
+	filterValues     sql.NullString
 }
 
 func (r *ruleRow) dest() []any {
 	return []any{
 		&r.kind, &r.resourceType, &r.action, &r.unrestricted,
 		&r.compartmentType, &r.compartmentID, &r.compartmentParam,
+		&r.filterPath, &r.filterComparator, &r.filterValues,
 	}
 }
 
@@ -497,6 +508,25 @@ func (r *PolicyResolver) rules(ctx context.Context, ref project.PolicyRef) ([]au
 // The three shapes are the ones the row's own CHECK allows; a fourth is drift,
 // and it fails rather than resolving to the widest of the three.
 func buildRule(row ruleRow) (authz.Rule, error) {
+	rule, err := buildRestriction(row)
+	if err != nil {
+		return authz.Rule{}, err
+	}
+
+	filter, err := buildFilter(row)
+	if err != nil {
+		return authz.Rule{}, err
+	}
+
+	if filter == nil {
+		return rule, nil
+	}
+
+	return rule.WithFilter(*filter), nil
+}
+
+// buildRestriction rebuilds the rule's compartment restriction.
+func buildRestriction(row ruleRow) (authz.Rule, error) {
 	kind := storage.Kind(row.kind)
 	resourceType := storage.ResourceType(row.resourceType)
 	action := storage.Action(row.action)
@@ -522,4 +552,41 @@ func buildRule(row ruleRow) (authz.Rule, error) {
 	default:
 		return authz.Rule{}, fmt.Errorf("%w: %s %s", ErrUnreadableRule, row.resourceType, row.action)
 	}
+}
+
+// buildFilter rebuilds the rule's element restriction, if it states one. The
+// three columns are stated together or not at all, which the row's own CHECK
+// enforces; a row stating some of them is drift, and it denies rather than
+// compiling to a rule that reaches further than the row says.
+func buildFilter(row ruleRow) (*storage.Filter, error) {
+	stated := 0
+
+	for _, column := range []sql.NullString{row.filterPath, row.filterComparator, row.filterValues} {
+		if column.Valid {
+			stated++
+		}
+	}
+
+	if stated == 0 {
+		return nil, nil
+	}
+
+	if stated != 3 {
+		return nil, fmt.Errorf("%w: %s %s states %d of its three filter columns",
+			ErrUnreadableFilter, row.resourceType, row.action, stated)
+	}
+
+	var values []string
+
+	if err := json.Unmarshal([]byte(row.filterValues.String), &values); err != nil {
+		return nil, fmt.Errorf("%w: %s %s: %w", ErrUnreadableFilter, row.resourceType, row.action, err)
+	}
+
+	filter, err := storage.NewFilter(
+		row.filterPath.String, storage.Comparator(row.filterComparator.String), values...)
+	if err != nil {
+		return nil, fmt.Errorf("%w: %s %s: %w", ErrUnreadableFilter, row.resourceType, row.action, err)
+	}
+
+	return &filter, nil
 }

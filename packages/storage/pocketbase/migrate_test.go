@@ -245,7 +245,7 @@ func TestARebuildLeavesTheChildTablesPointingAtTheRebuiltTable(t *testing.T) {
 			t.Errorf("%s no longer references project_memberships:\n%s", child, declaration)
 		}
 
-		if strings.Contains(declaration, rebuildTable) {
+		if strings.Contains(declaration, membershipRebuildTable) {
 			t.Errorf("%s points at the rebuild's scratch name:\n%s", child, declaration)
 		}
 	}
@@ -255,12 +255,12 @@ func TestARebuildLeavesTheChildTablesPointingAtTheRebuiltTable(t *testing.T) {
 // of the table name is substituted, so the inviter key keeps naming the final
 // table rather than the scratch one.
 func TestTheSelfReferencingInviterKeySurvivesTheRebuild(t *testing.T) {
-	declaration, err := membershipDeclaration()
+	declaration, err := tableDeclaration(membershipTable, membershipRebuildTable)
 	if err != nil {
-		t.Fatalf("membershipDeclaration: %v", err)
+		t.Fatalf("tableDeclaration: %v", err)
 	}
 
-	if !strings.Contains(declaration, "CREATE TABLE IF NOT EXISTS "+rebuildTable) {
+	if !strings.Contains(declaration, "CREATE TABLE IF NOT EXISTS "+membershipRebuildTable) {
 		t.Error("the declaration does not create the rebuild table")
 	}
 
@@ -268,7 +268,7 @@ func TestTheSelfReferencingInviterKeySurvivesTheRebuild(t *testing.T) {
 		t.Error("the inviter key no longer names the final table")
 	}
 
-	if strings.Contains(declaration, "REFERENCES "+rebuildTable) {
+	if strings.Contains(declaration, "REFERENCES "+membershipRebuildTable) {
 		t.Error("the inviter key was rewritten to the scratch name")
 	}
 }
@@ -426,12 +426,12 @@ func TestTheRebuildRestoresForeignKeyEnforcementBeforeItReturns(t *testing.T) {
 func TestTheCopyCarriesNoGeneratedColumn(t *testing.T) {
 	db := legacyDatabase(t)
 
-	declaration, err := membershipDeclaration()
+	declaration, err := tableDeclaration(membershipTable, membershipRebuildTable)
 	if err != nil {
-		t.Fatalf("membershipDeclaration: %v", err)
+		t.Fatalf("tableDeclaration: %v", err)
 	}
 
-	columns, err := copyableColumns(t.Context(), db, declaration)
+	columns, err := copyableColumns(t.Context(), db, membershipTable, declaration)
 	if err != nil {
 		t.Fatalf("copyableColumns: %v", err)
 	}
