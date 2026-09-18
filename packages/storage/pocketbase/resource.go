@@ -660,7 +660,7 @@ func (s *ResourceStore) create(ctx context.Context, scope storage.Scope, record 
 
 	switch {
 	case err == nil:
-		if err := s.writeCompartments(ctx, key, record.Compartments); err != nil {
+		if err := s.writeProjections(ctx, key, record); err != nil {
 			return err
 		}
 
@@ -670,6 +670,21 @@ func (s *ResourceStore) create(ctx context.Context, scope storage.Scope, record 
 	default:
 		return fmt.Errorf("pocketbase: create resource: %w", err)
 	}
+}
+
+// writeProjections replaces everything derived from a resource's content: the
+// compartments it lands in and the values it is searchable by. They are
+// replaced together because they are derived from the same content at the same
+// moment, and one maintained without the other is the decorative predicate this
+// store has already been bitten by once.
+func (s *ResourceStore) writeProjections(
+	ctx context.Context, key storage.ResourceKey, record storage.ResourceRecord,
+) error {
+	if err := s.writeCompartments(ctx, key, record.Compartments); err != nil {
+		return err
+	}
+
+	return s.writeSearchIndex(ctx, key, record.Content)
 }
 
 // writeCompartments replaces the row's compartment projection with the one its
@@ -729,9 +744,9 @@ func (s *ResourceStore) recreate(
 		return fmt.Errorf("pocketbase: recreate resource: %w", err)
 	}
 
-	// The previous owner's compartment projection must not describe the new
-	// resource; the history rows it produced stay behind the old epoch.
-	if err := s.writeCompartments(ctx, key, record.Compartments); err != nil {
+	// The previous owner's projections must not describe the new resource; the
+	// history rows they produced stay behind the old epoch.
+	if err := s.writeProjections(ctx, key, record); err != nil {
 		return err
 	}
 
@@ -851,7 +866,9 @@ func (s *ResourceStore) mutate(
 	// version landed. A delete states nothing: its tombstone keeps the placement
 	// it had, so the row stays attributable to whoever could reach it.
 	if change.action == storage.ActionWrite {
-		if err := s.writeCompartments(ctx, key, change.compartments); err != nil {
+		if err := s.writeProjections(ctx, key, storage.ResourceRecord{
+			Key: key, Content: change.content, Compartments: change.compartments,
+		}); err != nil {
 			return err
 		}
 	}

@@ -1167,3 +1167,81 @@ WHEN (SELECT state FROM projects WHERE id = OLD.project_id) IS NOT 'deleting'
 BEGIN
   SELECT RAISE(ABORT, 'audit_events is append-only');
 END;
+
+-- ===========================================================================
+-- Search index. Derived from a resource's own content when it is written, in
+-- the transaction that writes it, exactly as its compartments are. A predicate
+-- with no writer is decorative, so the projection and the reader land together.
+-- ===========================================================================
+
+-- One row per indexed value. A resource carrying three categories has three
+-- token rows for that parameter, and a search naming any of them finds it.
+
+-- The columns a kind does not use are NULL, and the CHECK below makes a
+-- half-formed row unrepresentable rather than leaving each reader to decide
+-- what a token with a date bound means.
+
+-- Nothing here is version-dimensioned. Search answers over current state, and a
+-- tombstone is excluded by the fhir_resource row it joins rather than by
+-- clearing its index, so a delete stays one statement.
+
+-- tenant: project_id
+CREATE TABLE IF NOT EXISTS fhir_search_index (
+  project_id TEXT NOT NULL,
+  res_type   TEXT NOT NULL,
+  res_id     TEXT NOT NULL,
+  param      TEXT NOT NULL,
+  kind       TEXT NOT NULL CHECK (kind IN ('token', 'string', 'reference', 'date')),
+
+  -- token: the code. reference: the "Type/id" it names.
+  code       TEXT,
+
+  -- token: the system the code was recorded under, NULL when it carried none.
+  system     TEXT,
+
+  -- string: the value case-folded, so a prefix match need not guess how it was
+  -- capitalised.
+  folded     TEXT,
+
+  -- date: the span the value names, inclusive at both ends.
+  lower      BIGINT,
+  upper      BIGINT,
+
+  CHECK (project_id <> '' AND res_type <> '' AND res_id <> '' AND param <> ''),
+
+  -- Each kind fills its own columns and no others.
+  CHECK (
+    (kind IN ('token', 'reference')
+      AND code IS NOT NULL AND code <> ''
+      AND folded IS NULL AND lower IS NULL AND upper IS NULL)
+    OR (kind = 'string'
+      AND folded IS NOT NULL AND folded <> ''
+      AND code IS NULL AND system IS NULL AND lower IS NULL AND upper IS NULL)
+    OR (kind = 'date'
+      AND lower IS NOT NULL AND upper IS NOT NULL AND upper >= lower
+      AND code IS NULL AND system IS NULL AND folded IS NULL)
+  ),
+
+  -- Only a token is qualified by a system.
+  CHECK (system IS NULL OR kind = 'token'),
+
+  FOREIGN KEY (project_id, res_type, res_id)
+    REFERENCES fhir_resource (project_id, res_type, res_id) ON DELETE CASCADE ON UPDATE RESTRICT
+);
+
+-- The lookup a token or a reference compiles to: one parameter's values within
+-- one Project and type.
+CREATE INDEX IF NOT EXISTS ix_fhir_search_index_code
+  ON fhir_search_index (project_id, res_type, param, code);
+
+-- The prefix scan a string compiles to.
+CREATE INDEX IF NOT EXISTS ix_fhir_search_index_folded
+  ON fhir_search_index (project_id, res_type, param, folded);
+
+-- The range scan a date compiles to.
+CREATE INDEX IF NOT EXISTS ix_fhir_search_index_span
+  ON fhir_search_index (project_id, res_type, param, lower, upper);
+
+-- What a rewrite clears before it projects again.
+CREATE INDEX IF NOT EXISTS ix_fhir_search_index_resource
+  ON fhir_search_index (project_id, res_type, res_id);
