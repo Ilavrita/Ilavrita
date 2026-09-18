@@ -67,7 +67,7 @@ type Filter struct {
 // stated here: a backend reads a single element and a repeating one the same
 // way, so a rule's author does not have to know which one FHIR chose.
 func NewFilter(path string, comparator Comparator, values ...string) (Filter, error) {
-	segments, err := parseFilterPath(path)
+	segments, err := ParseElementPath(path)
 	if err != nil {
 		return Filter{}, err
 	}
@@ -83,8 +83,11 @@ func NewFilter(path string, comparator Comparator, values ...string) (Filter, er
 	return Filter{path: segments, comparator: comparator, values: slices.Clone(values)}, nil
 }
 
-// parseFilterPath splits a path into the hops a backend walks.
-func parseFilterPath(path string) ([]string, error) {
+// ParseElementPath splits a dotted element path into the hops a backend walks,
+// refusing anything it cannot read. It is exported because a filter and a search
+// parameter name elements the same way, and two spellings of "what this server
+// can read" would eventually disagree about one.
+func ParseElementPath(path string) ([]string, error) {
 	if path == "" {
 		return nil, ErrMissingFilterPath
 	}
