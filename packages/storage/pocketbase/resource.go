@@ -261,7 +261,7 @@ func reachesEveryCompartment(grants []storage.Grant) bool {
 }
 
 // currentArm compiles one Grant against the current-state table.
-func currentArm(grant storage.Grant, key storage.ResourceKey) arm {
+func currentArm(grant storage.Grant, key storage.ResourceKey) (arm, error) {
 	var compiled arm
 
 	compiled.relation(grant.Project, currentKeyPredicate, string(key.Type), string(key.ID))
@@ -272,12 +272,23 @@ func currentArm(grant storage.Grant, key storage.ResourceKey) arm {
 			string(key.Type), string(key.ID))
 	}
 
-	return compiled
+	predicate, args, err := filterPredicate("r.content", grant.Filter)
+	if err != nil {
+		return arm{}, err
+	}
+
+	if predicate != "" {
+		compiled.filter(predicate, args...)
+	}
+
+	return compiled, nil
 }
 
-// historyArm compiles one Grant against the history table. The Compartment is
-// checked per version, never inherited from the current row.
-func historyArm(grant storage.Grant, key storage.ResourceKey) arm {
+// historyArm compiles one Grant against the history table. The Compartment and
+// the Filter are both checked against the version being returned, never against
+// whatever the current row now says: a resource that has since been amended out
+// of a Grant's reach must not hand over the versions it was once inside.
+func historyArm(grant storage.Grant, key storage.ResourceKey) (arm, error) {
 	var compiled arm
 
 	compiled.relation(grant.Project, historyKeyPredicate, string(key.Type), string(key.ID))
@@ -289,63 +300,106 @@ func historyArm(grant storage.Grant, key storage.ResourceKey) arm {
 			string(key.Type), string(key.ID))
 	}
 
-	return compiled
+	predicate, args, err := filterPredicate("h.content", grant.Filter)
+	if err != nil {
+		return arm{}, err
+	}
+
+	if predicate != "" {
+		compiled.filter(predicate, args...)
+	}
+
+	return compiled, nil
 }
 
-func currentArms(scope storage.Scope, key storage.ResourceKey, action storage.Action) []arm {
-	grants := authorizedGrants(scope, key, action)
+func currentArms(scope storage.Scope, key storage.ResourceKey, action storage.Action) ([]arm, error) {
+	return compileArms(authorizedGrants(scope, key, action), key, currentArm)
+}
+
+func historyArms(scope storage.Scope, key storage.ResourceKey, action storage.Action) ([]arm, error) {
+	return compileArms(authorizedGrants(scope, key, action), key, historyArm)
+}
+
+// compileArms compiles every Grant or none. One Grant this backend cannot
+// compile fails the request: keeping the arms it could compile would answer
+// under a Scope narrower than the caller holds, and dropping the failing arm's
+// own restriction would answer under a wider one.
+func compileArms(
+	grants []storage.Grant,
+	key storage.ResourceKey,
+	compile func(storage.Grant, storage.ResourceKey) (arm, error),
+) ([]arm, error) {
 	arms := make([]arm, 0, len(grants))
 
 	for _, grant := range grants {
-		arms = append(arms, currentArm(grant, key))
+		compiled, err := compile(grant, key)
+		if err != nil {
+			return nil, err
+		}
+
+		arms = append(arms, compiled)
 	}
 
-	return arms
-}
-
-func historyArms(scope storage.Scope, key storage.ResourceKey, action storage.Action) []arm {
-	grants := authorizedGrants(scope, key, action)
-	arms := make([]arm, 0, len(grants))
-
-	for _, grant := range grants {
-		arms = append(arms, historyArm(grant, key))
-	}
-
-	return arms
+	return arms, nil
 }
 
 // currentStatement compiles a by-key read of the current row.
-func currentStatement(scope storage.Scope, key storage.ResourceKey, action storage.Action) (string, []any) {
-	text, args := union(currentColumns, currentRelation, currentArms(scope, key, action))
+func currentStatement(
+	scope storage.Scope, key storage.ResourceKey, action storage.Action,
+) (string, []any, error) {
+	arms, err := currentArms(scope, key, action)
+	if err != nil {
+		return "", nil, err
+	}
 
-	return text + " LIMIT 1", args
+	text, args := union(currentColumns, currentRelation, arms)
+
+	return text + " LIMIT 1", args, nil
 }
 
 // versionStatement compiles a read of one named version.
-func versionStatement(scope storage.Scope, key storage.ResourceKey, version storage.VersionID) (string, []any) {
-	arms := historyArms(scope, key, storage.ActionHistory)
+func versionStatement(
+	scope storage.Scope, key storage.ResourceKey, version storage.VersionID,
+) (string, []any, error) {
+	arms, err := historyArms(scope, key, storage.ActionHistory)
+	if err != nil {
+		return "", nil, err
+	}
+
 	for index := range arms {
 		arms[index].filter("h.version_id = ?", string(version))
 	}
 
 	text, args := union(historyColumns, historyRelation, arms)
 
-	return "SELECT " + recordColumns + " FROM (" + text + ") LIMIT 1", args
+	return "SELECT " + recordColumns + " FROM (" + text + ") LIMIT 1", args, nil
 }
 
 // versionsStatement compiles a read of every visible version, newest first.
-func versionsStatement(scope storage.Scope, key storage.ResourceKey) (string, []any) {
-	text, args := union(historyColumns, historyRelation, historyArms(scope, key, storage.ActionHistory))
+func versionsStatement(scope storage.Scope, key storage.ResourceKey) (string, []any, error) {
+	arms, err := historyArms(scope, key, storage.ActionHistory)
+	if err != nil {
+		return "", nil, err
+	}
 
-	return "SELECT " + recordColumns + " FROM (" + text + ") ORDER BY version_seq DESC", args
+	text, args := union(historyColumns, historyRelation, arms)
+
+	return "SELECT " + recordColumns + " FROM (" + text + ") ORDER BY version_seq DESC", args, nil
 }
 
 // authorizedExists compiles the arm set into an EXISTS a write can require, so
 // a write and a read of the same row share one authorization predicate.
-func authorizedExists(scope storage.Scope, key storage.ResourceKey, action storage.Action) (string, []any) {
-	text, args := union("1", currentRelation, currentArms(scope, key, action))
+func authorizedExists(
+	scope storage.Scope, key storage.ResourceKey, action storage.Action,
+) (string, []any, error) {
+	arms, err := currentArms(scope, key, action)
+	if err != nil {
+		return "", nil, err
+	}
 
-	return "EXISTS (" + text + ")", args
+	text, args := union("1", currentRelation, arms)
+
+	return "EXISTS (" + text + ")", args, nil
 }
 
 // writeStatement assembles a scoped write: a SET clause, the key, and the same
@@ -355,10 +409,13 @@ func writeStatement(
 	scope storage.Scope,
 	key storage.ResourceKey,
 	action storage.Action,
-) (string, []any) {
-	exists, args := authorizedExists(scope, key, action)
+) (string, []any, error) {
+	exists, args, err := authorizedExists(scope, key, action)
+	if err != nil {
+		return "", nil, err
+	}
 
-	return prefix + exists + " RETURNING version_seq, identity_epoch", args
+	return prefix + exists + " RETURNING version_seq, identity_epoch", args, nil
 }
 
 // Read returns the current version of a resource. A row outside the Scope is
@@ -377,7 +434,10 @@ func (s *ResourceStore) readCurrent(
 	key storage.ResourceKey,
 	action storage.Action,
 ) (storage.ResourceRecord, error) {
-	text, args := currentStatement(scope, key, action)
+	text, args, err := currentStatement(scope, key, action)
+	if err != nil {
+		return storage.ResourceRecord{}, err
+	}
 
 	record, deleted, err := scanRecord(s.conn(ctx).QueryRowContext(ctx, text, args...))
 	if err != nil {
@@ -412,7 +472,10 @@ func (s *ResourceStore) ReadVersion(
 		return storage.ResourceRecord{}, fmt.Errorf("pocketbase: read version needs a version id")
 	}
 
-	text, args := versionStatement(scope, key, version)
+	text, args, err := versionStatement(scope, key, version)
+	if err != nil {
+		return storage.ResourceRecord{}, err
+	}
 
 	record, deleted, err := scanRecord(s.conn(ctx).QueryRowContext(ctx, text, args...))
 	if err != nil {
@@ -441,7 +504,10 @@ func (s *ResourceStore) ListVersions(
 		return nil, err
 	}
 
-	text, args := versionsStatement(scope, key)
+	text, args, err := versionsStatement(scope, key)
+	if err != nil {
+		return nil, err
+	}
 
 	rows, err := s.conn(ctx).QueryContext(ctx, text, args...)
 	if err != nil {
@@ -585,7 +651,11 @@ func (s *ResourceStore) recreate(
 	record storage.ResourceRecord,
 	stamp time.Time,
 ) error {
-	update, existsArgs := writeStatement(recreatePrefix, scope, record.Key, storage.ActionWrite)
+	update, existsArgs, err := writeStatement(recreatePrefix, scope, record.Key, storage.ActionWrite)
+	if err != nil {
+		return err
+	}
+
 	key := record.Key
 	args := append([]any{stamp.UnixMilli(), string(record.Content),
 		string(key.Project), string(key.Type), string(key.ID)}, existsArgs...)
@@ -683,7 +753,10 @@ func (s *ResourceStore) mutate(
 		return storage.ErrDenied
 	}
 
-	statement, existsArgs := writeStatement(change.prefix, scope, key, change.action)
+	statement, existsArgs, err := writeStatement(change.prefix, scope, key, change.action)
+	if err != nil {
+		return err
+	}
 
 	args := append([]any{}, change.leading...)
 	args = append(args, string(key.Project), string(key.Type), string(key.ID))

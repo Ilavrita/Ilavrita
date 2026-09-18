@@ -342,17 +342,20 @@ func TestZeroScopeCompilesToAQueryMatchingNoRows(t *testing.T) {
 
 	var empty storage.Scope
 
-	compiled := map[string]func() (string, []any){
-		"read":    func() (string, []any) { return currentStatement(empty, key, storage.ActionRead) },
-		"vread":   func() (string, []any) { return versionStatement(empty, key, "1") },
-		"history": func() (string, []any) { return versionsStatement(empty, key) },
-		"write arm": func() (string, []any) {
+	compiled := map[string]func() (string, []any, error){
+		"read":    func() (string, []any, error) { return currentStatement(empty, key, storage.ActionRead) },
+		"vread":   func() (string, []any, error) { return versionStatement(empty, key, "1") },
+		"history": func() (string, []any, error) { return versionsStatement(empty, key) },
+		"write arm": func() (string, []any, error) {
 			return writeStatement(updateClauses.expecting, empty, key, storage.ActionWrite)
 		},
 	}
 
 	for name, compile := range compiled {
-		text, args := compile()
+		text, args, err := compile()
+		if err != nil {
+			t.Fatalf("%s did not compile: %v", name, err)
+		}
 
 		if !strings.Contains(text, "1 = 0") {
 			t.Errorf("%s compiled without a constantly false predicate: %s", name, text)
@@ -714,10 +717,12 @@ func TestAssertInScopeRejectsARowFromAnotherProject(t *testing.T) {
 
 // compiledStatements is every statement shape the store emits under a Scope
 // that authorizes it, so the structural guards below cover all of them.
-func compiledStatements(key storage.ResourceKey) map[string]struct {
+func compiledStatements(t *testing.T, key storage.ResourceKey) map[string]struct {
 	text string
 	args []any
 } {
+	t.Helper()
+
 	scope := fullScope(key.Project, key.Type)
 	restricted := storage.NewScope(
 		compartmentGrant(key.Project, key.Type, storage.ActionRead,
@@ -726,37 +731,75 @@ func compiledStatements(key storage.ResourceKey) map[string]struct {
 			storage.Compartment{Type: "Patient", ID: "pat-1"}),
 	)
 
+	// A filtered Grant compiles relations of its own, so the structural guards
+	// below have to see one or the newest predicate is the one nothing checks.
+	deep, err := storage.NewFilter("category.coding.code", storage.ComparatorIn, "vital-signs", "laboratory")
+	if err != nil {
+		t.Fatalf("build filter: %v", err)
+	}
+
+	narrowed := storage.NewScope(
+		filteredGrant(key.Project, key.Type, storage.ActionRead, deep),
+		filteredGrant(key.Project, key.Type, storage.ActionHistory, deep),
+	)
+
 	statements := map[string]struct {
 		text string
 		args []any
 	}{}
 
-	add := func(name, text string, args []any) {
+	add := func(name, text string, args []any, err error) {
+		if err != nil {
+			t.Fatalf("%s did not compile: %v", name, err)
+		}
+
 		statements[name] = struct {
 			text string
 			args []any
 		}{text: text, args: args}
 	}
 
-	text, args := currentStatement(scope, key, storage.ActionRead)
-	add("read", text, args)
+	text, args, err := currentStatement(scope, key, storage.ActionRead)
+	add("read", text, args, err)
 
-	text, args = currentStatement(restricted, key, storage.ActionRead)
-	add("read in compartment", text, args)
+	text, args, err = currentStatement(restricted, key, storage.ActionRead)
+	add("read in compartment", text, args, err)
 
-	text, args = versionStatement(scope, key, "1")
-	add("vread", text, args)
+	text, args, err = versionStatement(scope, key, "1")
+	add("vread", text, args, err)
 
-	text, args = versionStatement(restricted, key, "1")
-	add("vread in compartment", text, args)
+	text, args, err = versionStatement(restricted, key, "1")
+	add("vread in compartment", text, args, err)
 
-	text, args = versionsStatement(scope, key)
-	add("history", text, args)
+	text, args, err = versionsStatement(scope, key)
+	add("history", text, args, err)
 
-	text, args = versionsStatement(restricted, key)
-	add("history in compartment", text, args)
+	text, args, err = versionsStatement(restricted, key)
+	add("history in compartment", text, args, err)
+
+	text, args, err = currentStatement(narrowed, key, storage.ActionRead)
+	add("read under a filter", text, args, err)
+
+	text, args, err = versionStatement(narrowed, key, "1")
+	add("vread under a filter", text, args, err)
+
+	text, args, err = versionsStatement(narrowed, key)
+	add("history under a filter", text, args, err)
 
 	return statements
+}
+
+// filteredGrant is one Grant narrowed by an element filter.
+func filteredGrant(
+	project storage.ProjectID,
+	resourceType storage.ResourceType,
+	action storage.Action,
+	filter storage.Filter,
+) storage.Grant {
+	grant := fhirGrant(project, resourceType, action)
+	grant.Filter = &filter
+
+	return grant
 }
 
 // TestEveryArmBindsOneProjectPerRelation counts the tables an arm reads against
@@ -766,17 +809,33 @@ func TestEveryArmBindsOneProjectPerRelation(t *testing.T) {
 	key := patientKey("prj_a", "shared")
 	compartment := storage.Compartment{Type: "Patient", ID: "pat-1"}
 
+	mustArm := func(compiled arm, err error) arm {
+		t.Helper()
+
+		if err != nil {
+			t.Fatalf("compile arm: %v", err)
+		}
+
+		return compiled
+	}
+
 	arms := map[string]struct {
 		compiled arm
 		relation string
 	}{
-		"current": {currentArm(fhirGrant("prj_a", "Patient", storage.ActionRead), key), currentRelation},
-		"current in compartment": {
-			currentArm(compartmentGrant("prj_a", "Patient", storage.ActionRead, compartment), key), currentRelation,
+		"current": {
+			mustArm(currentArm(fhirGrant("prj_a", "Patient", storage.ActionRead), key)), currentRelation,
 		},
-		"history": {historyArm(fhirGrant("prj_a", "Patient", storage.ActionHistory), key), historyRelation},
+		"current in compartment": {
+			mustArm(currentArm(compartmentGrant("prj_a", "Patient", storage.ActionRead, compartment), key)),
+			currentRelation,
+		},
+		"history": {
+			mustArm(historyArm(fhirGrant("prj_a", "Patient", storage.ActionHistory), key)), historyRelation,
+		},
 		"history in compartment": {
-			historyArm(compartmentGrant("prj_a", "Patient", storage.ActionHistory, compartment), key), historyRelation,
+			mustArm(historyArm(compartmentGrant("prj_a", "Patient", storage.ActionHistory, compartment), key)),
+			historyRelation,
 		},
 	}
 
@@ -810,7 +869,7 @@ func TestEveryArmBindsOneProjectPerRelation(t *testing.T) {
 func TestNoCompiledStatementComparesTwoProjectColumns(t *testing.T) {
 	relative := regexp.MustCompile(`project_id\s*=\s*[^?\s]`)
 
-	for name, statement := range compiledStatements(patientKey("prj_a", "shared")) {
+	for name, statement := range compiledStatements(t, patientKey("prj_a", "shared")) {
 		if match := relative.FindString(statement.text); match != "" {
 			t.Errorf("%s compares project_id to something other than a bound literal (%q): %s",
 				name, match, statement.text)
@@ -852,7 +911,7 @@ func TestCompiledStatementsNeitherScanNorSkipScan(t *testing.T) {
 
 	aliases := map[string]bool{"r": true, "h": true, "c": true, "hc": true, "e": true}
 
-	for name, statement := range compiledStatements(key) {
+	for name, statement := range compiledStatements(t, key) {
 		rows, err := db.QueryContext(t.Context(), "EXPLAIN QUERY PLAN "+statement.text, statement.args...)
 		if err != nil {
 			t.Fatalf("explain %s: %v", name, err)
@@ -895,7 +954,11 @@ func TestDroppingTheProjectPredicateCrossesProjects(t *testing.T) {
 	seed(t, store, "prj_a", "shared")
 	seed(t, store, "prj_b", "shared")
 
-	text, args := currentStatement(fullScope("prj_a", "Patient"), patientKey("prj_a", "shared"), storage.ActionRead)
+	text, args, err := currentStatement(fullScope("prj_a", "Patient"), patientKey("prj_a", "shared"), storage.ActionRead)
+	if err != nil {
+		t.Fatalf("the read did not compile: %v", err)
+	}
+
 	unlimited := strings.Replace(text, " LIMIT 1", "", 1)
 
 	if got := countRows(t, db, unlimited, args); got != 1 {

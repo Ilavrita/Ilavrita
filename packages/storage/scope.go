@@ -46,6 +46,11 @@ type Compartment struct {
 // Grant authorizes exactly one Action on one resource type in one Project.
 // Carrying the type and action prevents a Scope issued for one from being reused
 // for another, which is how an _include silently widens a read.
+//
+// Compartment and Filter each narrow it and neither can widen it: absent means
+// unrestricted in that dimension, so a Grant nobody narrowed reaches every
+// resource of its type. A backend that cannot compile one of them must refuse
+// the Grant, because ignoring a restriction is the same as widening it.
 type Grant struct {
 	Project     ProjectID
 	Kind        Kind
@@ -53,6 +58,7 @@ type Grant struct {
 	Action      Action
 	Source      GrantSource
 	Compartment *Compartment
+	Filter      *Filter
 }
 
 // Scope is an authorization decision: every Grant a principal holds for one
