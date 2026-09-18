@@ -127,7 +127,8 @@ func TestARestoredInstallIsTheOneThatWasTakenFrom(t *testing.T) {
 		t.Errorf("the restored row holds %q", content)
 	}
 
-	body, err := os.ReadFile(filepath.Join(into, "payloads", "prj_a", "Binary", "bin-1", "1"))
+	body, err := os.ReadFile( //nolint:gosec // a path this test made under its own temporary directory.
+		filepath.Join(into, "payloads", "prj_a", "Binary", "bin-1", "1"))
 	if err != nil {
 		t.Fatalf("read the restored payload: %v", err)
 	}
@@ -224,7 +225,8 @@ func TestADirectoryThatIsNotAnArchiveIsRefused(t *testing.T) {
 func TestAManifestCannotNameSomewhereElse(t *testing.T) {
 	archive := taken(t, anInstall(t))
 
-	body, err := os.ReadFile(filepath.Join(archive, backup.ManifestFile))
+	body, err := os.ReadFile( //nolint:gosec // as above.
+		filepath.Join(archive, backup.ManifestFile))
 	if err != nil {
 		t.Fatalf("read the manifest: %v", err)
 	}
