@@ -37,7 +37,7 @@ Every other `/fhir/R4` route answers `501 Not Implemented` as an
 | Conditional read (`If-None-Match`, `If-Modified-Since`) | Not implemented |
 | Patch | Not implemented |
 | Validation and `$validate` | Not implemented |
-| Clinical resource types | Not served: no route authenticates anyone, and an unrestricted policy rule may not cover a type that carries patient data |
+| Clinical resource types | Not served: no policy can authorize creating one, because a create needs an unconfined grant and an unconfined rule may not cover a type carrying patient data |
 | Authentication | Working: password login, sessions, logout; see below |
 | Audit trail | Not implemented |
 | Binary and DocumentReference payloads | Not implemented |

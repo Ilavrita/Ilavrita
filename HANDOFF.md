@@ -25,8 +25,8 @@ own commit, on the day a login route lands — see §6.
 
 **Authentication works.** `POST /auth/login` proves an argon2id password and issues a session;
 `Authorization: Bearer <token>` names the caller on every later request. A FHIR route answers
-`401` to anything else. `ILAVRITA_DEV_PRINCIPAL` still exists as a fallback when no session is
-presented, and is now the last thing standing between this build and clinical data — see §7.
+`401` to anything else. There is no development principal and no environment variable that names
+one: a request authenticates or it reaches nothing.
 
 Do not deploy this anywhere near patient data yet: no audit trail, no MFA, no rate limit on the
 login route, and no search.
@@ -145,9 +145,14 @@ None of these are visible from reading the code.
 
 - **No search.** The largest remaining piece and the PRD's own top risk (R-001).
   `packages/search` is a doc comment. `storage` has no `Search` method.
-- **`ILAVRITA_DEV_PRINCIPAL` still resolves a request** when no session is presented. It
-  exists only because there was no login route; there is one now, so it is owed a deliberate
-  removal. Until then it is what stops clinical types being served.
+- **No policy can authorize creating a clinical resource.** This, and not authentication, is what
+  withholds Patient and Observation. `ResourceStore.Create` requires an *unconfined* write and an
+  unconfined read, because storage projects no compartment for a row that does not exist yet
+  (`resource.go`); `NewUnrestrictedRule` refuses an unconfined rule over a clinical type (LNK-5).
+  The two together make a clinical create unauthorizable by construction, so advertising one would
+  publish an interaction nobody can perform. Closing it means determining a new resource's
+  compartment from its submitted body — FHIR compartment definitions — and letting a
+  compartment-restricted grant authorize a create that lands inside it.
 - **No audit trail, MFA or login rate limit.** A password can be guessed as fast as argon2id
   answers, and nothing records that anyone authenticated.
 - **The control plane is a working subset, not the whole surface.** It creates Projects,
@@ -187,9 +192,15 @@ principal; `POST /auth/logout` destroys the material. A wrong password and an un
 are the same answer. A revoked membership stops an existing token reaching without waiting for
 it to expire.
 
-**2a. Retire `ILAVRITA_DEV_PRINCIPAL`.** It is the one path left that proves nothing, and
-removing it is what makes step 4 safe. The conformance suite uses it, so this is a real change
-rather than a deletion.
+**2a. Retire `ILAVRITA_DEV_PRINCIPAL`. Done.** It is gone: the constant, the parser, the startup
+warning and the struct field. `backend.sessions` is an interface so a test can decide what a token
+means, and a backend wired with no session port identifies nobody rather than panicking. The
+conformance suite carries a bearer token and is served as a user principal, because a session is
+what a password login issues and a password belongs to a person.
+
+**2b. Compartment determination at create.** This is what actually gates step 4, and it was
+mistaken for an authentication problem. Until a create can be authorized by a compartment-restricted
+grant, no clinical type can be advertised without publishing an interaction nobody can perform.
 
 **3. Tenant isolation proven at all three levels.** The mechanisms exist; what is missing is
 an authenticated end-to-end test at each level:
@@ -201,10 +212,9 @@ an authenticated end-to-end test at each level:
    - **Super Admin** — authority held only through an active membership in the
      `kind='super'` Project, audited, and never implying clinical data access.
 
-**4. Expose the remaining FHIR resource types.** Currently six non-clinical types are
-served; Patient, Observation and the rest of the PRD's initial coverage are withheld
-deliberately. **This step depends on step 2.** Serving PHI-bearing endpoints on a build
-without authentication is the one ordering mistake that would matter here.
+**4. Expose the clinical resource types.** 38 non-clinical types are served. Patient, Observation
+and the rest are withheld. **This step depends on step 2b, not on step 2**, which is a correction:
+authentication was necessary and is done, and it turned out not to be sufficient.
 
 Search is not in this sequence and remains the largest unstarted piece (§6).
 
