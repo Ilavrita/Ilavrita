@@ -57,7 +57,7 @@ func (s *CanonicalStore) Seed(ctx context.Context, at time.Time) (Seeded, bool, 
 		return held, false, nil
 	}
 
-	definitions, err := conformance.StructureDefinitions()
+	definitions, err := conformance.Canonical()
 	if err != nil {
 		return Seeded{}, false, err
 	}

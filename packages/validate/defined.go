@@ -5,6 +5,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 
 	"github.com/Ilavrita/Ilavrita/packages/conformance"
 )
@@ -30,6 +31,18 @@ var primitiveShapes = map[string]*regexp.Regexp{
 var numericTypes = map[string]bool{
 	"integer": true, "decimal": true, "positiveInt": true, "unsignedInt": true,
 }
+
+// terminology is what this build can decide a code against. A build that cannot
+// read its own value sets checks no binding, which is silence rather than a
+// refusal: the sets are what this server knows, not what a client did wrong.
+var terminology = sync.OnceValue(func() conformance.Terminology {
+	held, err := conformance.Terminologies()
+	if err != nil {
+		return conformance.Terminology{}
+	}
+
+	return held
+})
 
 // againstDefinition checks a resource against what its own definition says it
 // may hold.
@@ -129,6 +142,7 @@ func (r *Report) checkMember(
 	}
 
 	r.checkCardinality(element, value, where+"."+name)
+	r.checkBinding(element, value, where+"."+name)
 
 	// An element this build cannot say what is inside is left alone. Walking
 	// into one would report every element it holds as one nobody declared,
@@ -213,6 +227,93 @@ func members(value any) []heldValue {
 	}
 
 	return held
+}
+
+// checkBinding holds a coded element to the value set it is bound to.
+//
+// Only a required binding is a rule. An extensible one says a code should come
+// from the set and R4 permits another; a preferred or example one is a
+// suggestion. Refusing any of those would refuse resources the specification
+// allows.
+//
+// A set this build did not resolve decides nothing. R4 binds elements to MIME
+// types, to UCUM units and to sets published elsewhere, and a code in one of
+// those is unchecked rather than refused.
+func (r *Report) checkBinding(element conformance.Element, value any, where string) {
+	if !element.Binding.Required() {
+		return
+	}
+
+	admitted, resolved := terminology().Admits(element.Binding.ValueSet)
+	if !resolved {
+		return
+	}
+
+	for _, each := range members(value) {
+		r.checkCoded(admitted, element, each.value, where+each.at)
+	}
+}
+
+// checkCoded holds one value to the set, whether it is written as a bare code or
+// inside a Coding.
+func (r *Report) checkCoded(
+	admitted conformance.Admitted, element conformance.Element, value any, where string,
+) {
+	switch held := value.(type) {
+	case string:
+		// A `code` carries no system of its own: the binding is what says which
+		// system it is in.
+		if !admitted.Holds(conformance.Coded{Code: held}) {
+			r.note(SeverityError, where, notInTheSet(element))
+		}
+
+	case map[string]any:
+		// A Coding names its own system; a CodeableConcept holds Codings.
+		for _, coding := range codingsIn(held) {
+			if coding.Code == "" {
+				continue
+			}
+
+			if !admitted.Holds(coding) {
+				r.note(SeverityError, where, notInTheSet(element))
+			}
+		}
+	}
+}
+
+// codingsIn reads the codes one object states, whether it is a Coding itself or
+// a CodeableConcept holding them.
+func codingsIn(held map[string]any) []conformance.Coded {
+	if code, stated := held["code"].(string); stated {
+		system, _ := held["system"].(string)
+
+		return []conformance.Coded{{System: system, Code: code}}
+	}
+
+	list, nested := held["coding"].([]any)
+	if !nested {
+		return nil
+	}
+
+	var found []conformance.Coded
+
+	for _, each := range list {
+		coding, isObject := each.(map[string]any)
+		if !isObject {
+			continue
+		}
+
+		found = append(found, codingsIn(coding)...)
+	}
+
+	return found
+}
+
+// notInTheSet says which set a code was judged against, because a refusal that
+// only says "not allowed" leaves a client with nowhere to look.
+func notInTheSet(element conformance.Element) string {
+	return "This element is bound to " + element.Binding.ValueSet +
+		", which does not hold that code."
 }
 
 // checkCardinality holds a member to how many of it there may be.

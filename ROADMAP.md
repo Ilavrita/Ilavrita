@@ -49,15 +49,16 @@ single security and Project model, even though they ship in phases.
 - [ ] Bundle batch and transaction, with proven atomic rollback
 - [x] Validation and `$validate` — every resource is checked against its own R4
       base definition, on the operation and on every write alike
-- [ ] Terminology — a required binding is not checked, so `"status": "banana"`
-      passes
+- [x] Terminology for required bindings — a code is checked against the value set
+      its element is bound to, from the specification's own bundled sets. LOINC
+      and SNOMED are not bundled and cannot be: SNOMED's licence forbids it
 - [ ] Single binary and container image
 
-**Terminology is now the one that matters most.** A resource is checked against
-its own definition — an element nobody declared, a missing required one, a
-malformed date are all refused — but a code is not checked against the ValueSet
-its element is bound to. That is the remaining difference between a server that
-keeps a well-formed record and one that keeps a record somebody can rely on.
+**Bundle transaction is now the one that matters most.** A resource is checked
+against its own definition and its required bindings, so what this server keeps
+is a record a client can rely on. What it cannot yet do is write several
+resources as one act, which is what a clinical workflow needs on almost every
+real write.
 
 ## Phase 2 — control plane and developer platform
 

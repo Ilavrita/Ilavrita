@@ -161,12 +161,17 @@ None of these are visible from reading the code.
 - **A compartment subject is created by naming it.** A `POST /Patient` mints an id no confined
   grant can name in advance, so it is refused; `PUT /Patient/{id}` under a grant naming that
   patient is how one is provisioned. Correct, and surprising the first time.
-- **Nothing checks a resource against a profile or a terminology.** The R4 base definitions are
+- **Nothing checks a resource against a profile.** The R4 base definitions and value sets are
   embedded, seeded at startup and read by the validator: an element nobody declared, a required one
-  that is absent, a repeating element written as a value, a choice written twice and a malformed
-  date are all refused, on `$validate` and on every write alike. What is not checked is a binding —
-  `"status": "banana"` passes — nor a profile, nor a FHIRPath invariant, nor whether a reference
-  resolves. That is the remaining gap between this and a server somebody should trust with a chart.
+  that is absent, a repeating element written as a value, a choice written twice, a malformed date
+  and a code outside its required binding are all refused, on `$validate` and on every write alike.
+  What is not checked is a profile constraining the base, a FHIRPath invariant, or whether a
+  reference resolves.
+- **LOINC and SNOMED are not bundled and cannot be.** SNOMED CT is licensed per country and per
+  affiliate, so redistributing it in an AGPL repo is not an option; using it in a Member country
+  (Germany is one) is free but must be registered with the National Release Center. A terminology
+  importer that loads a deployment'"'"'s own licensed copy is the shape that works, and it is not
+  built yet.
 - **A resource that nests past six levels of its own kind is unchecked there.** R4 lets an element
   hold its own kind and a snapshot cannot write that out, so the model expands it to a bound. Past
   it the content is not walked at all, because an element with no children in the model would have

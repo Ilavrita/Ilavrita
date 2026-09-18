@@ -5,6 +5,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/Ilavrita/Ilavrita/packages/conformance"
+	"github.com/Ilavrita/Ilavrita/packages/storage"
 	"github.com/Ilavrita/Ilavrita/packages/validate"
 )
 
@@ -386,5 +388,108 @@ func TestNestingPastTheBoundIsUncheckedRatherThanRefused(t *testing.T) {
 
 	if validate.Resource("Questionnaire", []byte(shallow)).OK() {
 		t.Error("an element nobody declared was accepted inside an item")
+	}
+}
+
+// TestACodeIsCheckedAgainstTheSetItIsBoundTo. This is the rule the whole
+// terminology bundle exists for: an element bound to a value set holds a code
+// from it, and "banana" is not a status however well-formed the resource is.
+func TestACodeIsCheckedAgainstTheSetItIsBoundTo(t *testing.T) {
+	for described, held := range map[string]struct {
+		resourceType storage.ResourceType
+		body         string
+		where        string
+	}{
+		"a status nobody defined": {
+			"Observation",
+			`{"resourceType":"Observation","status":"banana","code":{"text":"a reading"}}`,
+			"Observation.status"},
+		"a gender nobody defined": {
+			"Patient", `{"resourceType":"Patient","gender":"unspecified"}`, "Patient.gender"},
+		"a code in a Coding": {
+			"Patient",
+			`{"resourceType":"Patient","link":[{"other":{"reference":"Patient/p2"},"type":"sideways"}]}`,
+			"Patient.link[0].type"},
+	} {
+		report := validate.Resource(held.resourceType, []byte(held.body))
+
+		if report.OK() {
+			t.Errorf("%s was accepted", described)
+
+			continue
+		}
+
+		found := false
+
+		for _, issue := range report.Issues() {
+			if issue.Expression == held.where && strings.Contains(issue.Detail, "bound to") {
+				found = true
+
+				if !strings.Contains(issue.Detail, "http://hl7.org/fhir/ValueSet/") {
+					t.Errorf("%s does not say which set: %s", described, issue.Detail)
+				}
+			}
+		}
+
+		if !found {
+			t.Errorf("%s was faulted elsewhere: %v", described, report.Issues())
+		}
+	}
+}
+
+// TestACodeFromTheSetIsAccepted, so the binding refuses what is wrong rather
+// than what is merely coded.
+func TestACodeFromTheSetIsAccepted(t *testing.T) {
+	for described, held := range map[string]struct {
+		resourceType storage.ResourceType
+		body         string
+	}{
+		"every Observation status": {"Observation",
+			`{"resourceType":"Observation","status":"amended","code":{"text":"a reading"}}`},
+		"a gender":         {"Patient", `{"resourceType":"Patient","gender":"other"}`},
+		"a boolean beside": {"Patient", `{"resourceType":"Patient","active":true,"gender":"male"}`},
+	} {
+		if report := validate.Resource(held.resourceType, []byte(held.body)); !report.OK() {
+			t.Errorf("%s was refused: %v", described, report.Issues())
+		}
+	}
+}
+
+// TestOnlyARequiredBindingIsARule. An extensible binding says a code should come
+// from the set and R4 permits another; a preferred or example one is a
+// suggestion. Refusing any of those would refuse resources the specification
+// allows.
+func TestOnlyARequiredBindingIsARule(t *testing.T) {
+	// Observation.category is example-bound, and Observation.code is
+	// example-bound too — both hold whatever coding a deployment uses.
+	body := an(`"category":[{"coding":[{"system":"http://example.test/local","code":"our-own"}]}]`)
+
+	if report := validate.Resource("Observation", []byte(body)); !report.OK() {
+		t.Errorf("a code outside an example binding was refused: %v", report.Issues())
+	}
+}
+
+// TestASetThisBuildCannotResolveDecidesNothing. R4 binds elements to MIME types,
+// to UCUM units and to sets published elsewhere. None of that is content this
+// build holds, and a code in one of them is unchecked rather than refused —
+// which is the difference between "not in the set" and "I could not tell".
+func TestASetThisBuildCannotResolveDecidesNothing(t *testing.T) {
+	held, err := conformance.Terminologies()
+	if err != nil {
+		t.Fatalf("read the terminology: %v", err)
+	}
+
+	// mimetypes is bound required and is defined by IANA, not by FHIR.
+	if _, resolved := held.Admits("http://hl7.org/fhir/ValueSet/mimetypes"); resolved {
+		t.Fatal("this build claims to hold the IANA media type registry")
+	}
+
+	// So an Attachment saying it is any media type at all is accepted.
+	body := `{"resourceType":"DocumentReference","status":"current",` +
+		`"content":[{"attachment":{"contentType":"application/x-invented","url":"Binary/b1"}}]}`
+
+	if report := validate.Resource("DocumentReference", []byte(body)); !report.OK() {
+		t.Errorf("a media type was judged against a set this build does not hold: %v",
+			report.Issues())
 	}
 }

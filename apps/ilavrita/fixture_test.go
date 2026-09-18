@@ -95,6 +95,20 @@ func valueOf(
 	code string,
 	depth int,
 ) json.RawMessage {
+	// A coded element bound to a value set takes a code from it. Anything else
+	// is a body the server refuses, which would make this suite prove the routes
+	// work on something no client could send.
+	if bound, ok := boundCode(element); ok {
+		switch code {
+		case "code":
+			return json.RawMessage(`"` + bound.Code + `"`)
+		case "Coding":
+			return json.RawMessage(coding(bound))
+		case "CodeableConcept":
+			return json.RawMessage(`{"coding":[` + coding(bound) + `]}`)
+		}
+	}
+
 	if held, known := primitiveFixtures[code]; known {
 		return json.RawMessage(held)
 	}
@@ -118,6 +132,42 @@ func valueOf(
 	_ = element
 
 	return encoded(filledUnder(model, named, "", depth+1))
+}
+
+// boundCode returns a code the element's own binding admits, and reports whether
+// there is one. A binding this build did not resolve decides nothing, so the
+// fixture falls back to a plain token.
+func boundCode(element conformance.Element) (conformance.Coded, bool) {
+	if !element.Binding.Required() {
+		return conformance.Coded{}, false
+	}
+
+	model, err := conformance.Terminologies()
+	if err != nil {
+		panic("the fixtures need the terminology: " + err.Error())
+	}
+
+	admitted, resolved := model.Admits(element.Binding.ValueSet)
+	if !resolved {
+		return conformance.Coded{}, false
+	}
+
+	held := admitted.Codes()
+	if len(held) == 0 {
+		return conformance.Coded{}, false
+	}
+
+	// The first in order, so a fixture is the same on every run.
+	return held[0], true
+}
+
+// coding writes one code as R4 writes a Coding.
+func coding(held conformance.Coded) string {
+	if held.System == "" {
+		return `{"code":"` + held.Code + `"}`
+	}
+
+	return `{"system":"` + held.System + `","code":"` + held.Code + `"}`
 }
 
 // primitiveFixtures is one acceptable value for each primitive an element may

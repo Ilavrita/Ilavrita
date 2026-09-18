@@ -19,14 +19,15 @@ import (
 	"sync"
 )
 
-//go:embed definitions/profiles-resources.json.gz definitions/profiles-types.json.gz
+//go:embed definitions/profiles-resources.json.gz definitions/profiles-types.json.gz definitions/valuesets.json.gz
 var bundles embed.FS
 
-// The bundles this build embeds, in the order they are read. Resources first,
-// so a digest of the pair is stable rather than depending on a map's ordering.
+// The bundles this build embeds, in the order they are read, so a digest of the
+// set is stable rather than depending on a map's ordering.
 var embedded = []string{
 	"definitions/profiles-resources.json.gz",
 	"definitions/profiles-types.json.gz",
+	"definitions/valuesets.json.gz",
 }
 
 // Release is the FHIR version these definitions are from. It is stated here as
@@ -84,6 +85,18 @@ var Digest = sync.OnceValue(func() string {
 func StructureDefinitions() ([]Definition, error) {
 	return bundled(func(definition Definition) bool {
 		return definition.Type == "StructureDefinition" && definition.URL != ""
+	})
+}
+
+// seededTypes are the resource types an install holds as canonical content: the
+// definitions that say what a resource is, and the terminology that says what a
+// coded element may hold.
+var seededTypes = []string{"StructureDefinition", "ValueSet", "CodeSystem"}
+
+// Canonical returns every resource an install seeds, ordered by type and id.
+func Canonical() ([]Definition, error) {
+	return bundled(func(definition Definition) bool {
+		return definition.URL != "" && slices.Contains(seededTypes, definition.Type)
 	})
 }
 

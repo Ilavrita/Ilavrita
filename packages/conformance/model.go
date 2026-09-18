@@ -29,6 +29,11 @@ type Element struct {
 	// is what makes the member's name carry the type.
 	Choice bool
 
+	// Binding is the value set a coded element is bound to, and how strictly.
+	// Only a required binding is a rule: an extensible or preferred one says
+	// what a code should be, and R4 permits another.
+	Binding Binding
+
 	// Opaque reports an element this build cannot say what is inside.
 	//
 	// R4 lets an element hold its own kind — a Questionnaire.item holds items,
@@ -45,6 +50,21 @@ func (e Element) Repeats() bool { return e.Max != "1" && e.Max != "0" }
 
 // Required reports whether a resource must carry it.
 func (e Element) Required() bool { return e.Min > 0 }
+
+// Binding is what a coded element is bound to.
+//
+// Strength is R4's own vocabulary — "required", "extensible", "preferred" or
+// "example" — and only the first of those makes a code outside the set wrong.
+// ValueSet is the canonical url, with any version suffix taken off, because that
+// is how the set is named where it is defined.
+type Binding struct {
+	Strength string
+	ValueSet string
+}
+
+// Required reports whether a code outside this binding's set is an error rather
+// than a suggestion.
+func (b Binding) Required() bool { return b.Strength == "required" && b.ValueSet != "" }
 
 // Structure is one type's elements, by the path beneath its root.
 //
@@ -215,6 +235,10 @@ type snapshotElement struct {
 	Type             []struct {
 		Code string `json:"code"`
 	} `json:"type"`
+	Binding struct {
+		Strength string `json:"strength"`
+		ValueSet string `json:"valueSet"`
+	} `json:"binding"`
 }
 
 // structureOf reads one definition into the elements it declares.
@@ -266,6 +290,12 @@ func elementOf(held snapshotElement) Element {
 		Min:    held.Min,
 		Max:    held.Max,
 		Choice: strings.HasSuffix(held.Path, "[x]"),
+		Binding: Binding{
+			Strength: held.Binding.Strength,
+			// The version suffix is taken off: a binding names "…|4.0.1" and the
+			// set is defined under the url without it.
+			ValueSet: strings.SplitN(held.Binding.ValueSet, "|", 2)[0],
+		},
 	}
 
 	for _, named := range held.Type {

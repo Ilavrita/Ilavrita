@@ -4,12 +4,15 @@ This page is the authoritative statement of what Ilavrita does not do, and it is
 kept accurate on purpose: a healthcare server that overstates its capabilities is
 worse than one that does little.
 
-The largest thing it does not do is **check a resource against a profile or a
-terminology**. It checks every resource against its own base definition — see
-below — so an element nobody declared, a missing required one or a malformed date
-is refused. What it cannot tell you is that `"status": "banana"` is not a status,
-because a required binding is a ValueSet this build does not hold. That, more
-than anything else here, is why patient data does not belong in this build yet.
+The largest thing it does not do is **check a resource against a profile**. Every
+resource is checked against its own base definition and its required bindings —
+see below — so an element nobody declared, a missing required one, a malformed
+date and a code outside the set it is bound to are all refused. What it cannot
+tell you is that a resource fails a profile somebody wrote for it, or a FHIRPath
+invariant, or that a reference points at nothing.
+
+That, and the absence of an external security review, is why patient data does
+not belong in this build yet.
 
 ## What works
 
@@ -148,13 +151,14 @@ Fan-out costs one search per subscription per write, done by a worker outside th
 request. It is fine at a handful of subscriptions and is the first thing to
 revisit if that number grows.
 
-## The base definitions are seeded, and not yet used to validate
+## The base definitions and terminology are seeded
 
-This build embeds the FHIR R4 specification's own definition bundles — 4.0.1, as
-published, gzipped and otherwise unmodified, with their digests recorded in
-`packages/conformance/definitions/SOURCE.md`. Startup seeds every
-`StructureDefinition` into an install-wide store, and
-`GET /fhir/R4/StructureDefinition/{id}` answers with the specification's own.
+This build embeds the FHIR R4 specification's own definition and value set
+bundles — 4.0.1, as published, gzipped and otherwise unmodified, with their
+digests recorded in `packages/conformance/definitions/SOURCE.md`. Startup seeds
+every `StructureDefinition`, `ValueSet` and `CodeSystem` into an install-wide
+store, so `GET /fhir/R4/ValueSet/observation-status` answers with the set a
+refused code was judged against.
 
 **Seeding is idempotent and cheap.** A digest of what the build embeds is
 compared with what the install last seeded; when they match, startup reads one
@@ -168,7 +172,8 @@ many times as there are tenants, and there is nothing tenant-specific about what
 an `Observation` is. A Project that writes its own `StructureDefinition` under
 one of those ids serves its own; the specification's is what is behind it.
 
-The definitions are also what a write is checked against; see below.
+The definitions and the value sets are also what a write is checked against; see
+below.
 
 The fallback is a decision rather than an inference. A canonical resource belongs
 to no Project, so there is no row for a compartment, a filter or a projection to
@@ -208,12 +213,26 @@ client learns theirs was not kept.
   belongs and the reverse; an `integer` that is not whole; a `positiveInt` below
   one.
 
+- **Required bindings.** An element bound to a value set holds a code from it.
+  `"status": "banana"` is refused, and the refusal names the set so a client has
+  somewhere to look. **Only required bindings are rules**: an extensible binding
+  says a code should come from the set and R4 permits another, and a preferred or
+  example one is a suggestion — refusing those would refuse resources the
+  specification allows.
+
 **What is still not checked.** No profiles: only the base definitions are read,
 and a `StructureDefinition` that constrains one is stored without being applied.
-No terminology: `"status": "banana"` passes, because a required binding is a
-ValueSet this build does not hold. No FHIRPath invariants, and no reference that
-actually resolves. Those are the gap between this and a validator somebody should
-certify against.
+No FHIRPath invariants, and no reference that actually resolves. Those are the
+gap between this and a validator somebody should certify against.
+
+**A value set this build cannot work out decides nothing.** 199 of R4's 203
+required value sets resolve from the bundled content, covering 319 of 332
+required bindings. The rest name terminologies published elsewhere — IANA media
+types, UCUM units, a LOINC answer list — and a code in one of those is unchecked
+rather than refused. A set is resolved only when every part of it is: an
+exclusion, a filter, a nested value set or a code system whose own definition is
+incomplete makes the whole set unresolved, because a set half worked out would
+refuse codes that are in it.
 
 An element that holds its own kind — a `Questionnaire` item inside an item, an
 `OperationDefinition` parameter's parts — is expanded six levels deep, because a

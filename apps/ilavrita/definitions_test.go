@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"net/http"
+	"strings"
 	"testing"
 
 	"github.com/Ilavrita/Ilavrita/packages/conformance"
@@ -220,4 +221,65 @@ func TestAConfinedCallerIsNotHandedTheDefinitions(t *testing.T) {
 	assertStatus(t, call{
 		method: http.MethodGet, path: resourcePath("StructureDefinition", "Observation"),
 	}.send(t, routes), http.StatusNotFound)
+}
+
+// TestTheTerminologyIsReadableToo. The value sets are what a code is judged
+// against, so a client refused for one has somewhere to look it up.
+func TestTheTerminologyIsReadableToo(t *testing.T) {
+	routes := definedServer(t)
+
+	for _, held := range []struct {
+		resourceType string
+		id           string
+	}{
+		{"ValueSet", "observation-status"},
+		{"CodeSystem", "observation-status"},
+		{"ValueSet", "administrative-gender"},
+	} {
+		answer := call{
+			method: http.MethodGet, path: resourcePath(held.resourceType, held.id),
+		}.send(t, routes)
+
+		if answer.Code != http.StatusOK {
+			t.Errorf("%s/%s answered %d", held.resourceType, held.id, answer.Code)
+
+			continue
+		}
+
+		var read struct {
+			ResourceType string `json:"resourceType"`
+			URL          string `json:"url"`
+		}
+
+		if err := json.Unmarshal(answer.Body.Bytes(), &read); err != nil {
+			t.Fatalf("decode %s: %v", held.id, err)
+		}
+
+		if read.ResourceType != held.resourceType || read.URL == "" {
+			t.Errorf("it reads as %s at %q", read.ResourceType, read.URL)
+		}
+	}
+}
+
+// TestARefusedCodeNamesASetTheClientCanRead, which is what makes the refusal
+// actionable rather than a dead end.
+func TestARefusedCodeNamesASetTheClientCanRead(t *testing.T) {
+	routes := definedServer(t)
+
+	answer := call{
+		method: http.MethodPost, path: fhir.BasePath + "/Observation",
+		body: `{"resourceType":"Observation","status":"banana","code":{"text":"a reading"},` +
+			`"subject":{"reference":"Patient/` + string(conformancePatient) + `"}}`,
+	}.send(t, routes)
+
+	assertStatus(t, answer, http.StatusBadRequest)
+
+	if !strings.Contains(answer.Body.String(), "observation-status") {
+		t.Fatalf("the refusal names no set: %s", answer.Body)
+	}
+
+	// And that set is one this server serves.
+	assertStatus(t, call{
+		method: http.MethodGet, path: resourcePath("ValueSet", "observation-status"),
+	}.send(t, routes), http.StatusOK)
 }

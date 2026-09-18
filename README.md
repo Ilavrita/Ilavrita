@@ -31,12 +31,12 @@
 > **Do not put patient data in this build yet.** Not because the boundaries are
 > absent — they are enforced and tested — but because:
 >
-> - **Nothing checks a resource against a profile or a terminology.** The R4
->   base definitions are embedded and seeded, and every write is checked against
->   the one for its type — undeclared elements, missing required ones,
->   cardinality, choice types and primitive syntax are all refused. What is not
->   checked is a binding: `"status": "banana"` passes, so this server will still
->   keep a clinically nonsensical record.
+> - **Nothing checks a resource against a profile.** The R4 base definitions and
+>   value sets are embedded and seeded, and every write is checked against the
+>   ones for its type — undeclared elements, missing required ones, cardinality,
+>   choice types, primitive syntax and required bindings are all refused. What is
+>   not checked is a profile that constrains the base, nor a FHIRPath invariant,
+>   nor whether a reference resolves.
 > - **There is no migration story** beyond the schema this build applies to its
 >   own database at startup. Backup and restore exist; upgrading between
 >   releases is what does not.
@@ -88,7 +88,7 @@ and an architecture that does not have to be rewritten to reach a clustered one.
 | Authentication | Working — password, sessions, TOTP second factor with an administrator recovery path, per-install throttle |
 | Binary payloads | Working — bytes stored outside the database |
 | Subscriptions | Working — `rest-hook`, and `websocket` within one process; queues are claimed, so replicas do not notify twice |
-| Resource validation, `$validate` | Against the R4 base definitions — no profiles, no terminology bindings |
+| Resource validation, `$validate` | Against the R4 base definitions and required bindings — no profiles |
 | Bundle batch and transaction | Not implemented |
 | Conditional create, update and delete | Not implemented |
 | Backup and restore | Working — `ilavrita backup`, `verify-backup`, `restore` |
