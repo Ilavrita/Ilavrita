@@ -143,3 +143,48 @@ func TestAKeyOfTheWrongLengthIsRefused(t *testing.T) {
 		}
 	}
 }
+
+// TestADerivedKeyIsIndependentOfEveryOther. One configured secret serves
+// everything that needs key material, so what keeps those uses independent is
+// the purpose they are separated by — and a derivation that ignored it would
+// make one leaked key every key.
+func TestADerivedKeyIsIndependentOfEveryOther(t *testing.T) {
+	first, second := mustKey(t), mustKey(t)
+
+	seen := map[string]string{}
+
+	for described, key := range map[string][]byte{
+		"one secret, one purpose":      first.Derive("attempt-key"),
+		"one secret, another purpose":  first.Derive("something-else"),
+		"another secret, same purpose": second.Derive("attempt-key"),
+	} {
+		held := string(key)
+
+		if len(key) != 32 {
+			t.Errorf("%s derived %d bytes", described, len(key))
+		}
+
+		if already, repeated := seen[held]; repeated {
+			t.Errorf("%s and %s derive the same key", described, already)
+		}
+
+		seen[held] = described
+	}
+}
+
+// TestNoSecretDerivesNoKey. HKDF of nothing is a fixed value anybody can
+// compute and one that would pass for a key on inspection, so a deployment that
+// configured nothing gets something that cannot be mistaken for protection.
+func TestNoSecretDerivesNoKey(t *testing.T) {
+	derived := project.SealingKey{}.Derive("attempt-key")
+
+	if len(derived) != 32 {
+		t.Fatalf("derived %d bytes", len(derived))
+	}
+
+	for _, b := range derived {
+		if b != 0 {
+			t.Fatalf("a key nobody configured derived %x", derived)
+		}
+	}
+}

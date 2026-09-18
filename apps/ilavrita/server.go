@@ -195,7 +195,7 @@ func newBackend(db *sql.DB, dataDir string) *backend {
 		payloads:      files.NewDisk(filepath.Join(dataDir, payloadDirectory)),
 		notifications: sqlite.NewSubscriptionStore(db),
 		sockets:       newHub(),
-		attempts:      newAttemptLimiter(sqlite.NewAttemptStore(db), nil),
+		attempts:      newAttemptLimiter(sqlite.NewAttemptStore(db), attemptKeys(), nil),
 		resolvers: authz.Resolvers{
 			Memberships: sqlite.NewMembershipResolver(db),
 			Projects:    sqlite.NewProjectResolver(db),

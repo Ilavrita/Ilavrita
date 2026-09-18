@@ -3,7 +3,9 @@ package project
 import (
 	"crypto/aes"
 	"crypto/cipher"
+	"crypto/hkdf"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/base64"
 	"errors"
 	"fmt"
@@ -40,6 +42,11 @@ const sealingKeyBytes = 32
 // hardware module does.
 type SealingKey struct {
 	block cipher.AEAD
+
+	// material is what the key was configured as, kept so something needing a
+	// key of its own can derive one rather than asking an operator for a second
+	// secret to lose.
+	material []byte
 }
 
 // ParseSealingKey reads the configured key.
@@ -67,7 +74,34 @@ func ParseSealingKey(encoded string) (SealingKey, error) {
 		return SealingKey{}, fmt.Errorf("%w: %w", ErrMalformedSealingKey, err)
 	}
 
-	return SealingKey{block: sealed}, nil
+	return SealingKey{block: sealed, material: raw}, nil
+}
+
+// Derive answers a key for one other purpose, separated by name.
+//
+// One configured secret serves everything that needs key material, because a
+// deployment asked for a second one is a deployment with a second one to lose.
+// Separating by purpose is what keeps them independent: a key derived for one
+// use says nothing about the key derived for another, and neither says anything
+// about the secret both came from.
+//
+// A key nobody configured derives all zeroes, which is a key an attacker has
+// too. That is deliberate and it is the caller's to understand: whatever this
+// protects is unprotected on a deployment that configured nothing.
+func (k SealingKey) Derive(purpose string) []byte {
+	// Not HKDF of nothing: that is a fixed value anybody can compute, and one
+	// that would pass for a key on inspection. Zeroes cannot.
+	if k.IsZero() {
+		return make([]byte, sha256.Size)
+	}
+
+	derived, err := hkdf.Key(sha256.New, k.material, nil, "ilavrita/"+purpose, sha256.Size)
+	if err != nil {
+		// hkdf.Key fails only on a length no caller here asks for.
+		return make([]byte, sha256.Size)
+	}
+
+	return derived
 }
 
 // IsZero reports whether this is a key nobody configured.

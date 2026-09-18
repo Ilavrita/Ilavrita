@@ -126,8 +126,8 @@ func logIn(request *core.RequestEvent) error {
 
 	// Asked before the password is proved: argon2id is expensive by design, and
 	// answering a guess is the work an attacker wants this server to do.
-	identity := project.IdentityAttemptKey(body.Project, body.Email)
-	address := project.AddressAttemptKey(request.RemoteIP())
+	identity := serving.attempts.identity(body.Project, body.Email)
+	address := serving.attempts.address(request.RemoteIP())
 
 	if err := serving.attempts.permits(request.Request.Context(), identity, address); err != nil {
 		reason := audit.ReasonThrottled

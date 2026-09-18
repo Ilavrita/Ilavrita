@@ -37,3 +37,20 @@ var sealingKey = sync.OnceValue(func() project.SealingKey {
 
 	return key
 })
+
+// attemptKeys derives what the login throttle names attempts under, from the
+// same configured secret rather than from a second one for an operator to lose.
+//
+// A deployment that configured none names attempts under a key of zeroes. The
+// throttle still works; what stops working is the claim that its table hides
+// anything, because an email address and an IPv4 address are both small enough
+// to walk a digest back to.
+var attemptKeys = sync.OnceValue(func() project.AttemptKeys {
+	names := project.NewAttemptKeys(sealingKey())
+	if !names.Keyed() {
+		log.Printf("WARNING: %s is unset, so failed logins name their addresses recoverably",
+			sealingKeyVariable)
+	}
+
+	return names
+})

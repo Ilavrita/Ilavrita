@@ -44,17 +44,30 @@ type attemptStore interface {
 // digests, so nothing here is worth stealing.
 type attemptLimiter struct {
 	attempts attemptStore
+	names    project.AttemptKeys
 	now      func() time.Time
 }
 
 // newAttemptLimiter builds one. A nil clock falls back to the real one, so weak
 // wiring cannot substitute a clock that never advances.
-func newAttemptLimiter(attempts attemptStore, now func() time.Time) *attemptLimiter {
+func newAttemptLimiter(
+	attempts attemptStore, names project.AttemptKeys, now func() time.Time,
+) *attemptLimiter {
 	if now == nil {
 		now = time.Now
 	}
 
-	return &attemptLimiter{attempts: attempts, now: now}
+	return &attemptLimiter{attempts: attempts, names: names, now: now}
+}
+
+// identity names one identity in one Project, and address one client host.
+// They are the limiter's own so no route holds the key that names them.
+func (l *attemptLimiter) identity(slug, email string) project.AttemptKey {
+	return l.names.Identity(slug, email)
+}
+
+func (l *attemptLimiter) address(host string) project.AttemptKey {
+	return l.names.Address(host)
 }
 
 // permits reports whether this attempt may proceed. It is asked before the

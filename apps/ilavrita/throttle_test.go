@@ -1,8 +1,10 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
+	"encoding/base64"
 	"errors"
 	"net/http"
 	"strings"
@@ -23,12 +25,28 @@ func (h *heldClock) now() time.Time { return h.at }
 
 func (h *heldClock) advance(by time.Duration) { h.at = h.at.Add(by) }
 
+// testKeys is a keyer with a key, so these tests count against names a
+// deployment would actually write rather than against unkeyed ones.
+var testKeys = project.NewAttemptKeys(testSealingKey())
+
+// testSealingKey is one fixed key, so the names these tests compute are stable
+// across a run without being the zero key a deployment is warned about.
+func testSealingKey() project.SealingKey {
+	key, err := project.ParseSealingKey(base64.StdEncoding.EncodeToString(
+		bytes.Repeat([]byte("throttle-key-32-bytes-exactly!!!"), 1)))
+	if err != nil {
+		panic("the fixed test sealing key is not one: " + err.Error())
+	}
+
+	return key
+}
+
 // The two keys every case below counts against.
 var (
-	oneNurse    = project.IdentityAttemptKey("clinic-a", "nurse@example.test")
-	otherNurse  = project.IdentityAttemptKey("clinic-a", "other@example.test")
-	oneHost     = project.AddressAttemptKey("10.0.0.1")
-	anotherHost = project.AddressAttemptKey("10.0.0.2")
+	oneNurse    = testKeys.Identity("clinic-a", "nurse@example.test")
+	otherNurse  = testKeys.Identity("clinic-a", "other@example.test")
+	oneHost     = testKeys.Address("10.0.0.1")
+	anotherHost = testKeys.Address("10.0.0.2")
 )
 
 // stoppedLimiter builds a limiter over a real database with a clock the test
@@ -40,7 +58,7 @@ func stoppedLimiter(t *testing.T) (*attemptLimiter, *heldClock, *sql.DB) {
 	db := preparedDatabase(t)
 	clock := &heldClock{at: time.Date(2026, time.March, 1, 9, 0, 0, 0, time.UTC)}
 
-	return newAttemptLimiter(sqlite.NewAttemptStore(db), clock.now), clock, db
+	return newAttemptLimiter(sqlite.NewAttemptStore(db), testKeys, clock.now), clock, db
 }
 
 func permitted(t *testing.T, limiter *attemptLimiter, identity, address project.AttemptKey) bool {
@@ -128,12 +146,12 @@ func TestOneHostIsLimitedAcrossIdentities(t *testing.T) {
 	limiter, _, _ := stoppedLimiter(t)
 
 	for attempt := range attemptsPerAddress {
-		identity := project.IdentityAttemptKey("clinic-a",
+		identity := testKeys.Identity("clinic-a",
 			string(rune('a'+attempt%26))+"@example.test")
 		limiter.failed(context.Background(), identity, oneHost)
 	}
 
-	fresh := project.IdentityAttemptKey("clinic-a", "fresh@example.test")
+	fresh := testKeys.Identity("clinic-a", "fresh@example.test")
 
 	if permitted(t, limiter, fresh, oneHost) {
 		t.Error("a host past its limit was permitted a fresh identity")
@@ -152,8 +170,8 @@ func TestTheLimitIsSharedAcrossProcesses(t *testing.T) {
 	clock := &heldClock{at: time.Date(2026, time.March, 1, 9, 0, 0, 0, time.UTC)}
 
 	// Two limiters, as two processes serving one install are.
-	first := newAttemptLimiter(sqlite.NewAttemptStore(db), clock.now)
-	second := newAttemptLimiter(sqlite.NewAttemptStore(db), clock.now)
+	first := newAttemptLimiter(sqlite.NewAttemptStore(db), testKeys, clock.now)
+	second := newAttemptLimiter(sqlite.NewAttemptStore(db), testKeys, clock.now)
 
 	for range attemptsPerIdentity {
 		first.failed(context.Background(), oneNurse, oneHost)
@@ -285,7 +303,7 @@ func TestAThrottleThatCannotBeConsultedRefuses(t *testing.T) {
 		"the count cannot be read":        {err: broken, onFailures: true},
 		"what aged out cannot be dropped": {err: broken, onSweep: true},
 	} {
-		limiter := newAttemptLimiter(counter, nil)
+		limiter := newAttemptLimiter(counter, testKeys, nil)
 
 		err := limiter.permits(context.Background(), oneNurse, oneHost)
 		if !errors.Is(err, errThrottleUnavailable) {
@@ -310,7 +328,7 @@ func TestCapitalisationBuysNoFreshAttempts(t *testing.T) {
 	for _, spelling := range []string{
 		"NURSE@EXAMPLE.TEST", "Nurse@Example.Test", "  nurse@example.test  ",
 	} {
-		same := project.IdentityAttemptKey("clinic-a", spelling)
+		same := testKeys.Identity("clinic-a", spelling)
 
 		if permitted(t, limiter, same, anotherHost) {
 			t.Errorf("%q was counted as a different identity", spelling)
@@ -333,7 +351,7 @@ func TestTheProjectIsPartOfTheIdentity(t *testing.T) {
 		limiter.failed(context.Background(), oneNurse, oneHost)
 	}
 
-	elsewhere := project.IdentityAttemptKey("clinic-b", "nurse@example.test")
+	elsewhere := testKeys.Identity("clinic-b", "nurse@example.test")
 
 	if !permitted(t, limiter, elsewhere, anotherHost) {
 		t.Error("one Project's failures locked the same address out of another")

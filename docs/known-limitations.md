@@ -189,6 +189,13 @@ lives in the database rather than in process memory, so several instances share 
 counted against is a digest, never the address itself: a table of who tried to log in and failed
 is a list of this install's users and where they were.
 
+That digest is keyed, under a key derived from `ILAVRITA_SEALING_KEY`. An unkeyed one would hide
+nothing — an email address and an IPv4 address are both drawn from a space small enough to walk —
+so anybody holding the table could hash their way back to every entry in it. Rotating the key
+costs at most the counts inside one fifteen-minute window. **A deployment that configured no
+sealing key names attempts under a key of zeroes**: the throttle still works, and the table hides
+nothing. The server says so at startup.
+
 An identity may enrol a TOTP second factor. It is pending until a code proves it, and replacing
 one that is in force needs a code from the one it replaces — moving to a new phone and switching
 the factor off are the same request, and the code is what tells them apart. The factor in force
