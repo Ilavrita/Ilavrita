@@ -174,9 +174,11 @@ paths:
         protects nobody, and asking for one would strand whoever's first
         attempt went wrong.
 
-        There is no way back from a lost phone while a factor is in force. That
-        is deliberate — a self-service bypass would be the hole this rule
-        closes — and an administrator path does not exist yet.
+        There is no self-service way back from a lost phone while a factor is
+        in force. That is deliberate — a self-service bypass would be the hole
+        this rule closes. Somebody else with standing to administer the Project
+        takes the factor off instead, through the control plane, which this
+        description does not cover.
 
         `501` is the answer from a deployment that configured no sealing key.
         Storing the secret in the clear instead would make the database a list
