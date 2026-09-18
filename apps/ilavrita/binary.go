@@ -161,7 +161,7 @@ type carried struct {
 // other type passes through untouched.
 func splitPayload(key storage.ResourceKey, content json.RawMessage) (json.RawMessage, carried, error) {
 	if key.Type != binaryType {
-		return content, carried{}, nil
+		return content, carried{}, refuseInlineAttachment(key, content)
 	}
 
 	fields := map[string]json.RawMessage{}

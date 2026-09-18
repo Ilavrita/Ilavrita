@@ -89,6 +89,10 @@ var (
 	payloadMissing = refusal{http.StatusInternalServerError, fhir.CodeException,
 		"This resource exists and the payload it describes could not be read."}
 
+	inlineAttachment = refusal{http.StatusBadRequest, fhir.CodeInvalid,
+		"A document's bytes are stored as a Binary and referenced by " +
+			"content.attachment.url, never carried in content.attachment.data."}
+
 	factorUnavailable = refusal{http.StatusNotImplemented, fhir.CodeNotSupported,
 		"This deployment is not configured to hold second factors."}
 
@@ -170,6 +174,8 @@ func translate(err error) refusal {
 		return unreadableSubscription
 	case errors.Is(err, errMissingContentType), errors.Is(err, errUnreadablePayload):
 		return unreadablePayload
+	case errors.Is(err, errInlineAttachment):
+		return inlineAttachment
 	case errors.Is(err, files.ErrTooLarge):
 		return oversizedBody
 	case errors.Is(err, errPayloadMissing):

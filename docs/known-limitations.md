@@ -70,6 +70,7 @@ Every other `/fhir/R4` route answers `501 Not Implemented` as an
 | Authentication | Working: password, sessions, TOTP second factor, per-install throttle; see below |
 | Audit trail | Working: every interaction and login, in the transaction that did it |
 | Binary payloads | Working: bytes kept outside the database, placed by `securityContext` |
+| DocumentReference | Working: the document is a `Binary` its attachment names; inlined bytes are refused |
 | Subscriptions | Working: `rest-hook`, and `websocket` within one process; see below |
 | Reindexing | Not implemented; the index is rebuilt once when an install first gains it |
 | Backup, restore | Not implemented |
@@ -123,6 +124,20 @@ missed.
 Fan-out costs one search per subscription per write, done by a worker outside the
 request. It is fine at a handful of subscriptions and is the first thing to
 revisit if that number grows.
+
+## A document is a Binary, and a DocumentReference names it
+
+`DocumentReference.content.attachment.data` is refused with `400`. The bytes are
+posted as a `Binary` — where this server keeps them outside the row — and the
+attachment's `url` names it. R4 gives the attachment that url for exactly this,
+and accepting the data member would put in a row the megabytes the Binary route
+exists to keep out of one.
+
+Every other type's attachments are still stored in the row: a `Media.content`, a
+`DiagnosticReport.presentedForm`, a `Communication.payload`. Nothing bounds them
+but the 4 MiB one request body may be. That is a limitation rather than a
+decision — what makes `DocumentReference` different is only that R4 gave it a url,
+so there is somewhere to send a client instead of refusing with no alternative.
 
 ## A payload and its row are two stores
 
