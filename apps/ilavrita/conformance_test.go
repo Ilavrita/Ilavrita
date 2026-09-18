@@ -186,7 +186,7 @@ func serveUnder(t *testing.T, db *sql.DB, proj project.ID, policy authz.AccessPo
 		resources: sqlite.NewResourceStore(db),
 		users:     sqlite.NewUserStore(db),
 		audits:    sqlite.NewAuditStore(db),
-		attempts:  newAttemptLimiter(nil),
+		attempts:  newAttemptLimiter(sqlite.NewAttemptStore(db), nil),
 		resolvers: authz.Resolvers{
 			Memberships: fixedMembership{conformanceMembership(t, proj)},
 			Projects:    activeProject{},

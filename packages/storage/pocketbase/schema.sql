@@ -1245,3 +1245,28 @@ CREATE INDEX IF NOT EXISTS ix_fhir_search_index_span
 -- What a rewrite clears before it projects again.
 CREATE INDEX IF NOT EXISTS ix_fhir_search_index_resource
   ON fhir_search_index (project_id, res_type, res_id);
+
+-- ===========================================================================
+-- Login throttle. Counted across the install rather than within one process,
+-- because a deployment running three replicas would otherwise allow three
+-- times the guesses the limit states.
+-- ===========================================================================
+
+-- These rows sit outside every Project. A login names a Project by slug, and a
+-- slug resolving to nothing is still an attempt worth counting, so there is no
+-- tenant column to put it under; the key carries the Project it was derived
+-- from.
+
+-- key is a digest, never the identity or the address behind it. A table of who
+-- tried to log in and failed is a list of this install's users and where they
+-- were, kept somewhere nobody thinks to look.
+CREATE TABLE IF NOT EXISTS login_attempts (
+  key TEXT NOT NULL,
+  at  BIGINT NOT NULL,
+
+  -- A SHA-256 digest in hex, which is the only thing that reaches this column.
+  CHECK (length(key) = 64)
+);
+
+-- The count one attempt asks for: one key's failures inside the window.
+CREATE INDEX IF NOT EXISTS ix_login_attempts_key ON login_attempts (key, at);

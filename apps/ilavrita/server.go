@@ -115,7 +115,7 @@ func newBackend(db *sql.DB) *backend {
 		memberships:  sqlite.NewMembershipStore(db),
 		applications: sqlite.NewClientApplicationStore(db),
 		audits:       sqlite.NewAuditStore(db),
-		attempts:     newAttemptLimiter(nil),
+		attempts:     newAttemptLimiter(sqlite.NewAttemptStore(db), nil),
 		resolvers: authz.Resolvers{
 			Memberships: sqlite.NewMembershipResolver(db),
 			Projects:    sqlite.NewProjectResolver(db),

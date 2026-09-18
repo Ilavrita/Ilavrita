@@ -113,13 +113,18 @@ func logIn(request *core.RequestEvent) error {
 
 	// Asked before the password is proved: argon2id is expensive by design, and
 	// answering a guess is the work an attacker wants this server to do.
-	identity := body.Project + "|" + strings.ToLower(strings.TrimSpace(body.Email))
-	address := request.RemoteIP()
+	identity := project.IdentityAttemptKey(body.Project, body.Email)
+	address := project.AddressAttemptKey(request.RemoteIP())
 
-	if !serving.attempts.permits(identity, address) {
-		serving.refusedLogin(request.Request.Context(), audit.OutcomeRefused, audit.ReasonThrottled)
+	if err := serving.attempts.permits(request.Request.Context(), identity, address); err != nil {
+		reason := audit.ReasonThrottled
+		if !errors.Is(err, errTooManyAttempts) {
+			reason = audit.ReasonUnavailable
+		}
 
-		return refuse(request, errTooManyAttempts)
+		serving.refusedLogin(request.Request.Context(), audit.OutcomeRefused, reason)
+
+		return refuse(request, err)
 	}
 
 	var (
@@ -148,7 +153,7 @@ func logIn(request *core.RequestEvent) error {
 		if errors.Is(err, errCredentialsRefused) {
 			outcome, reason = audit.OutcomeRefused, audit.ReasonNotAuthorized
 
-			serving.attempts.failed(identity, address)
+			serving.attempts.failed(request.Request.Context(), identity, address)
 		}
 
 		// Recorded outside the transaction that failed, so it survives the
@@ -158,7 +163,7 @@ func logIn(request *core.RequestEvent) error {
 		return refuse(request, err)
 	}
 
-	serving.attempts.succeeded(identity)
+	serving.attempts.succeeded(request.Request.Context(), identity)
 
 	return request.JSON(http.StatusOK, loginResponse{
 		Token:      token.Reveal(),
