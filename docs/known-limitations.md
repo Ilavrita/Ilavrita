@@ -121,6 +121,26 @@ as never delivered rather than retried — retrying would not move it to the
 instance holding the socket. Use `rest-hook` where a notification must not be
 missed.
 
+## Several replicas share one notification queue
+
+Each replica runs a worker, and both queues — the writes waiting to be fanned out
+and the notifications waiting to be sent — are claimed before they are worked
+through. A claim is a worker and a lease together, taken in the same statement
+that reads the rows, so two replicas reaching the same row do not both come away
+with it. A replica that dies gives its rows back when the lease runs out rather
+than holding them for good.
+
+Fan-out is idempotent besides: a delivery's identifier is derived from the write
+and the subscription it is owed to, so a write fanned out again — by a worker
+that died before settling it — finds its deliveries already enqueued rather than
+owing every subscriber twice.
+
+**Delivery is still at-least-once.** A worker that dies between posting a
+notification and recording that it posted it leaves that notification to be made
+again, and no claim can close that window. Every `rest-hook` request carries
+`X-Delivery`, which is stable across attempts: a subscriber that must act once
+per write acts once per identifier.
+
 Fan-out costs one search per subscription per write, done by a worker outside the
 request. It is fine at a handful of subscriptions and is the first thing to
 revisit if that number grows.

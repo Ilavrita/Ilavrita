@@ -52,7 +52,7 @@ func TestANotificationNeverReachesThisHostsOwnNetwork(t *testing.T) {
 	}))
 	defer server.Close()
 
-	err := newRestHook().Deliver(context.Background(), hooked(t, server.URL, ""), anObservation())
+	err := newRestHook().Deliver(context.Background(), aDelivery(), hooked(t, server.URL, ""), anObservation())
 	if err == nil {
 		t.Fatal("a notification reached a loopback address")
 	}
@@ -111,7 +111,7 @@ func TestADeploymentMayOptIntoItsOwnNetwork(t *testing.T) {
 
 	t.Setenv(allowPrivateHooksVariable, "true")
 
-	if err := newRestHook().Deliver(context.Background(),
+	if err := newRestHook().Deliver(context.Background(), aDelivery(),
 		hooked(t, server.URL, ""), anObservation()); err != nil {
 		t.Fatalf("an opted-in deployment could not deliver: %v", err)
 	}
@@ -128,6 +128,12 @@ func TestADeploymentMayOptIntoItsOwnNetwork(t *testing.T) {
 
 		if sent.Header.Get(resourceField) != "Observation/obs-1" {
 			t.Errorf("it does not say what about: %q", sent.Header.Get(resourceField))
+		}
+
+		// Delivery is at-least-once, so a subscriber that must act once per
+		// write needs to be able to tell a repeat from a second write.
+		if sent.Header.Get(deliveryField) != "dlv_one" {
+			t.Errorf("it does not name itself: %q", sent.Header.Get(deliveryField))
 		}
 	default:
 		t.Fatal("nothing arrived")
@@ -152,7 +158,7 @@ func TestANotificationCarriesNoBodyUnlessItWasAskedFor(t *testing.T) {
 
 	hook := newRestHook()
 
-	if err := hook.Deliver(context.Background(), hooked(t, server.URL, ""), anObservation()); err != nil {
+	if err := hook.Deliver(context.Background(), aDelivery(), hooked(t, server.URL, ""), anObservation()); err != nil {
 		t.Fatalf("deliver: %v", err)
 	}
 
@@ -160,7 +166,7 @@ func TestANotificationCarriesNoBodyUnlessItWasAskedFor(t *testing.T) {
 		t.Errorf("a subscription that asked for no payload was sent %q", body)
 	}
 
-	if err := hook.Deliver(context.Background(),
+	if err := hook.Deliver(context.Background(), aDelivery(),
 		hooked(t, server.URL, "application/fhir+json"), anObservation()); err != nil {
 		t.Fatalf("deliver with a payload: %v", err)
 	}
@@ -180,7 +186,7 @@ func TestASubscriberThatRefusesIsAFailedDelivery(t *testing.T) {
 
 	t.Setenv(allowPrivateHooksVariable, "true")
 
-	if err := newRestHook().Deliver(context.Background(),
+	if err := newRestHook().Deliver(context.Background(), aDelivery(),
 		hooked(t, server.URL, ""), anObservation()); err == nil {
 		t.Error("a subscriber answering 500 was counted as told")
 	}
@@ -205,7 +211,7 @@ func TestARedirectIsNotFollowed(t *testing.T) {
 
 	t.Setenv(allowPrivateHooksVariable, "true")
 
-	err := newRestHook().Deliver(context.Background(), hooked(t, redirecting.URL, ""), anObservation())
+	err := newRestHook().Deliver(context.Background(), aDelivery(), hooked(t, redirecting.URL, ""), anObservation())
 	if err == nil {
 		t.Error("a redirect was followed and counted as delivered")
 	}
@@ -214,5 +220,13 @@ func TestARedirectIsNotFollowed(t *testing.T) {
 	case <-elsewhere:
 		t.Error("the notification was delivered to an address nobody registered")
 	default:
+	}
+}
+
+// aDelivery is what a notification names itself, so a subscriber can recognise
+// the same one arriving twice.
+func aDelivery() subscription.Delivery {
+	return subscription.Delivery{
+		Project: homeProject, ID: "dlv_one", Subscription: "sub-1",
 	}
 }

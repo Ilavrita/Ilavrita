@@ -119,7 +119,10 @@ func reachesOwnNetwork(address net.IP) bool {
 // signal and the resource behind it is something the subscriber reads for
 // themselves — under their own authorization, at their own time.
 func (h *restHook) Deliver(
-	ctx context.Context, held subscription.Subscription, record storage.ResourceRecord,
+	ctx context.Context,
+	delivery subscription.Delivery,
+	held subscription.Subscription,
+	record storage.ResourceRecord,
 ) error {
 	body, media := notificationBody(held, record)
 
@@ -135,6 +138,12 @@ func (h *restHook) Deliver(
 	// What the notification is about, for a subscriber that asked for no body.
 	sent.Header.Set(subscriptionField, string(held.ID()))
 	sent.Header.Set(resourceField, string(record.Key.Type)+"/"+string(record.Key.ID))
+
+	// And which notification it is. Delivery is at-least-once: a worker that
+	// died between posting this and recording that it had posted it leaves the
+	// delivery to be made again. A subscriber that must act once per write acts
+	// once per identifier.
+	sent.Header.Set(deliveryField, string(delivery.ID))
 
 	answer, err := h.client.Do(sent)
 	if err != nil {
@@ -159,6 +168,7 @@ func (h *restHook) Deliver(
 const (
 	subscriptionField = "X-Subscription"
 	resourceField     = "X-Resource"
+	deliveryField     = "X-Delivery"
 )
 
 // notificationBody is what the subscription asked to be sent.

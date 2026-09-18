@@ -1365,10 +1365,21 @@ CREATE TABLE IF NOT EXISTS subscription_backlog (
   version_id TEXT NOT NULL,
   at         BIGINT NOT NULL,
 
+  -- Which worker is working through this row, and until when. Several replicas
+  -- read the same backlog, so without a claim each one would fan the same write
+  -- out again. The lease is what makes a worker that died give its rows back.
+  claimed_by    TEXT,
+  claimed_until BIGINT,
+
   PRIMARY KEY (project_id, id),
 
   CHECK (substr(id, 1, 4) = 'wrt_'),
-  CHECK (res_type <> '' AND res_id <> '' AND version_id <> '')
+  CHECK (res_type <> '' AND res_id <> '' AND version_id <> ''),
+
+  -- A claim is a worker and a lease together. Half of one names a holder that
+  -- never expires, or an expiry belonging to nobody.
+  CHECK ((claimed_by IS NULL AND claimed_until IS NULL)
+      OR (claimed_by IS NOT NULL AND claimed_until IS NOT NULL AND claimed_by <> ''))
 );
 
 -- The order a backlog is worked through: oldest first, so a subscriber is told
@@ -1396,9 +1407,16 @@ CREATE TABLE IF NOT EXISTS subscription_deliveries (
   created_at      BIGINT NOT NULL,
   settled_at      BIGINT,
 
+  -- Which worker is making this delivery, and until when. See the backlog: the
+  -- consequence here is a subscriber posted to twice for one write.
+  claimed_by      TEXT,
+  claimed_until   BIGINT,
+
   PRIMARY KEY (project_id, id),
 
   CHECK (substr(id, 1, 4) = 'dlv_'),
+  CHECK ((claimed_by IS NULL AND claimed_until IS NULL)
+      OR (claimed_by IS NOT NULL AND claimed_until IS NOT NULL AND claimed_by <> '')),
   CHECK (res_type <> '' AND res_id <> '' AND version_id <> ''),
   CHECK (attempts >= 0),
 

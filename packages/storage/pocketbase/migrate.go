@@ -23,6 +23,13 @@ var (
 	ErrFactorReplacementMissing = errors.New(
 		"pocketbase: user_second_factors cannot hold a replacement awaiting proof")
 
+	// ErrQueueClaimsMissing reports a notification queue with nowhere to record
+	// which worker is working through it. Without that, two replicas fan out
+	// the same write and post the same notification twice, so a database
+	// without it is refused rather than served by one process and hoped about.
+	ErrQueueClaimsMissing = errors.New(
+		"pocketbase: a notification queue cannot record which worker claimed a row")
+
 	// ErrRuleRestrictionColumnsMissing reports an access_policy_rules table with
 	// nowhere to state a filter or a projection. A rule that cannot record its
 	// restriction compiles to a Grant narrowed by nothing, which reaches further
@@ -92,6 +99,11 @@ func PrepareSchema(ctx context.Context, db *sql.DB) error {
 		return err
 	}
 
+	// The file is applied before anything is rebuilt, so every statement in it
+	// has to be one an older database can run. An index over a column a rebuild
+	// is about to add would fail here, before the rebuild that adds it — which
+	// is why a new column's index keeps the name and shape the old one had, or
+	// is left to the rebuild's own replay below.
 	if err := ApplySchema(ctx, db); err != nil {
 		return err
 	}
@@ -117,10 +129,15 @@ func PrepareSchema(ctx context.Context, db *sql.DB) error {
 		return err
 	}
 
+	claims, err := rebuildQueueClaims(ctx, db)
+	if err != nil {
+		return err
+	}
+
 	// A rebuild drops its table, and that table's indexes and triggers go with
 	// it. The file is the only definition of them, so it is replayed rather than
 	// a second hand-written list kept in step with it.
-	if memberships || restrictions || factors {
+	if memberships || restrictions || factors || claims {
 		if err := ApplySchema(ctx, db); err != nil {
 			return err
 		}
@@ -135,6 +152,10 @@ func PrepareSchema(ctx context.Context, db *sql.DB) error {
 	}
 
 	if err := AssertFactorReplacement(ctx, db); err != nil {
+		return err
+	}
+
+	if err := AssertQueueClaims(ctx, db); err != nil {
 		return err
 	}
 
@@ -373,6 +394,69 @@ func AssertFactorReplacement(ctx context.Context, db *sql.DB) error {
 
 	if !present {
 		return fmt.Errorf("%w: %s.pending_secret", ErrFactorReplacementMissing, factorTable)
+	}
+
+	return nil
+}
+
+// queueTables are the two a worker claims rows from, each carrying the same pair
+// of claim columns.
+var queueTables = []string{"subscription_backlog", "subscription_deliveries"}
+
+// rebuildQueueClaims adopts the claim columns onto queues that predate them.
+//
+// A row that predates them is unclaimed, which is what a NULL claim means, so
+// the copy has nothing the new checks reject.
+func rebuildQueueClaims(ctx context.Context, db *sql.DB) (bool, error) {
+	rebuilt := false
+
+	for _, table := range queueTables {
+		present, err := hasColumn(ctx, db, table, "claimed_by")
+		if err != nil {
+			return rebuilt, err
+		}
+
+		// A table that is not there yet is created by the schema with the
+		// columns already in it, and has nothing to carry across.
+		declared, err := hasTable(ctx, db, table)
+		if err != nil {
+			return rebuilt, err
+		}
+
+		if present || !declared {
+			continue
+		}
+
+		plan, err := planRebuild(ctx, db, table)
+		if err != nil {
+			return rebuilt, err
+		}
+
+		if err := performRebuild(ctx, db, plan); err != nil {
+			return rebuilt, err
+		}
+
+		rebuilt = true
+	}
+
+	return rebuilt, nil
+}
+
+// AssertQueueClaims refuses a database whose queues cannot record who is working
+// through them. Without a claim, two replicas fan out the same write and post
+// the same notification twice.
+func AssertQueueClaims(ctx context.Context, db *sql.DB) error {
+	for _, table := range queueTables {
+		for _, column := range []string{"claimed_by", "claimed_until"} {
+			present, err := hasColumn(ctx, db, table, column)
+			if err != nil {
+				return err
+			}
+
+			if !present {
+				return fmt.Errorf("%w: %s.%s", ErrQueueClaimsMissing, table, column)
+			}
+		}
 	}
 
 	return nil

@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"crypto/rand"
 	"database/sql"
 	"path/filepath"
 	"time"
@@ -163,8 +164,20 @@ func startServing(app core.App) error {
 }
 
 // notifier builds the worker that turns writes into notifications.
+//
+// Its identity is drawn per process. Two replicas working through one queue
+// have to be able to tell each other's claims apart, and what a claim has to be
+// is distinct — nothing depends on which worker it was.
 func (b *backend) notifier() *notifier {
+	worker, err := subscription.MintWorkerID(rand.Reader)
+	if err != nil {
+		// A process that cannot draw one would claim rows as the empty worker,
+		// which every other process would answer to as well.
+		report(err)
+	}
+
 	return &notifier{
+		worker:   worker,
 		queue:    b.notifications,
 		searches: b.resources,
 		channels: map[subscription.Channel]deliverer{

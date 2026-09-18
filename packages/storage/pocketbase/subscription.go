@@ -42,12 +42,26 @@ func (s *SubscriptionStore) Record(ctx context.Context, written subscription.Wri
 	return nil
 }
 
-// Backlog returns the writes nobody has fanned out yet, oldest first.
-func (s *SubscriptionStore) Backlog(ctx context.Context, limit int) ([]subscription.Written, error) {
-	const query = "SELECT project_id, id, res_type, res_id, version_id, at" +
-		" FROM subscription_backlog ORDER BY at, id LIMIT ?"
+// Backlog claims the writes nobody is fanning out, oldest first.
+//
+// The claim and the read are one statement, so two workers reaching the same
+// rows at the same moment do not both come away with them: SQLite serialises
+// the write, and the second one finds them already claimed.
+func (s *SubscriptionStore) Backlog(
+	ctx context.Context, claim subscription.Claim,
+) ([]subscription.Written, error) {
+	const query = "UPDATE subscription_backlog SET claimed_by = ?, claimed_until = ?" +
+		" WHERE rowid IN (SELECT rowid FROM subscription_backlog" +
+		" WHERE claimed_until IS NULL OR claimed_until <= ?" +
+		" ORDER BY at, id LIMIT ?)" +
+		" RETURNING project_id, id, res_type, res_id, version_id, at"
 
-	rows, err := s.db.QueryContext(ctx, query, limit)
+	if err := claimable(claim); err != nil {
+		return nil, err
+	}
+
+	rows, err := s.db.QueryContext(ctx, query, string(claim.Worker),
+		claim.Until.UnixMilli(), claim.At.UnixMilli(), claim.Limit)
 	if err != nil {
 		return nil, fmt.Errorf("pocketbase: read the subscription backlog: %w", err)
 	}
@@ -148,11 +162,16 @@ func (s *SubscriptionStore) Owner(
 	}, true, nil
 }
 
-// Owe enqueues one delivery.
+// Owe enqueues one delivery, and does nothing for one already enqueued.
+//
+// The identifier is derived from the write and the subscription, so a write
+// fanned out again — by a worker that died before settling it — finds its
+// deliveries already there rather than owing every subscriber twice.
 func (s *SubscriptionStore) Owe(ctx context.Context, delivery subscription.Delivery) error {
 	const insert = "INSERT INTO subscription_deliveries" +
 		" (project_id, id, subscription_id, res_type, res_id, version_id," +
-		" state, attempts, due_at, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?, ?)"
+		" state, attempts, due_at, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?, ?)" +
+		" ON CONFLICT (project_id, id) DO NOTHING"
 
 	now := time.Now().UTC().UnixMilli()
 
@@ -166,15 +185,27 @@ func (s *SubscriptionStore) Owe(ctx context.Context, delivery subscription.Deliv
 	return nil
 }
 
-// Due returns the pending deliveries ready to be tried, oldest first.
+// Due claims the pending deliveries ready to be tried, oldest first.
+//
+// Claimed for the same reason the backlog is, with a sharper consequence: two
+// workers reaching one delivery is one subscriber posted to twice for one write.
 func (s *SubscriptionStore) Due(
-	ctx context.Context, at time.Time, limit int,
+	ctx context.Context, claim subscription.Claim,
 ) ([]subscription.Delivery, error) {
-	const query = "SELECT project_id, id, subscription_id, res_type, res_id, version_id," +
-		" attempts, due_at FROM subscription_deliveries" +
-		" WHERE state = ? AND due_at <= ? ORDER BY due_at, id LIMIT ?"
+	const query = "UPDATE subscription_deliveries SET claimed_by = ?, claimed_until = ?" +
+		" WHERE rowid IN (SELECT rowid FROM subscription_deliveries" +
+		" WHERE state = ? AND due_at <= ?" +
+		" AND (claimed_until IS NULL OR claimed_until <= ?)" +
+		" ORDER BY due_at, id LIMIT ?)" +
+		" RETURNING project_id, id, subscription_id, res_type, res_id, version_id," +
+		" attempts, due_at"
 
-	rows, err := s.db.QueryContext(ctx, query, string(subscription.Pending), at.UnixMilli(), limit)
+	if err := claimable(claim); err != nil {
+		return nil, err
+	}
+
+	rows, err := s.db.QueryContext(ctx, query, string(claim.Worker), claim.Until.UnixMilli(),
+		string(subscription.Pending), claim.At.UnixMilli(), claim.At.UnixMilli(), claim.Limit)
 	if err != nil {
 		return nil, fmt.Errorf("pocketbase: read the deliveries that are due: %w", err)
 	}
@@ -224,8 +255,11 @@ func (s *SubscriptionStore) Due(
 func (s *SubscriptionStore) Attempted(
 	ctx context.Context, delivery subscription.Delivery, state subscription.DeliveryState, at time.Time,
 ) error {
+	// The claim is released with the outcome. A delivery due again is due for
+	// whichever worker reaches it, not for the one that happened to fail it.
 	const update = "UPDATE subscription_deliveries" +
-		" SET state = ?, attempts = ?, due_at = ?, settled_at = ?" +
+		" SET state = ?, attempts = ?, due_at = ?, settled_at = ?," +
+		" claimed_by = NULL, claimed_until = NULL" +
 		" WHERE project_id = ? AND id = ?"
 
 	var settled any
@@ -278,4 +312,16 @@ func (s *SubscriptionStore) Watching(
 	}
 
 	return held, nil
+}
+
+// claimable refuses a claim that names nobody or takes nothing. It is asked
+// before the statement rather than left to the table's own check, because what
+// the check would report is a constraint and what happened is a worker built
+// without an identity.
+func claimable(claim subscription.Claim) error {
+	if claim.Worker == "" || claim.Limit <= 0 || claim.Until.Before(claim.At) {
+		return fmt.Errorf("pocketbase: %w", subscription.ErrUnclaimable)
+	}
+
+	return nil
 }

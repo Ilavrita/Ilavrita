@@ -142,7 +142,10 @@ func (h *hub) listeners(key boundKey) []*listener {
 // a signal, and the resource behind it is something the subscriber reads for
 // itself, under its own authorization, at its own time.
 func (h *hub) Deliver(
-	ctx context.Context, held subscription.Subscription, record storage.ResourceRecord,
+	ctx context.Context,
+	_ subscription.Delivery,
+	held subscription.Subscription,
+	record storage.ResourceRecord,
 ) error {
 	bound := h.listeners(boundKey{project: record.Key.Project, held: held.ID()})
 	if len(bound) == 0 {

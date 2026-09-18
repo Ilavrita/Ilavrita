@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"crypto/rand"
 	"errors"
 	"fmt"
 	"net/url"
@@ -20,6 +19,16 @@ import (
 const (
 	backlogBatch  = 50
 	deliveryBatch = 50
+
+	// How long a claimed batch is held for. A worker that died leaves its rows
+	// claimed until the lease runs out, so this is the longest one pass can
+	// honestly take rather than a number chosen for comfort: every delivery in a
+	// batch may wait out the hook timeout before the next one starts.
+	//
+	// Fanning out reaches no network — it is a search per subscription — so its
+	// lease is shorter.
+	backlogLease  = 2 * time.Minute
+	deliveryLease = deliveryBatch*hookTimeout + time.Minute
 )
 
 // notifier turns writes into the notifications they owe.
@@ -36,6 +45,10 @@ type notifier struct {
 	// channels is how each kind of subscriber is reached. One per channel, so
 	// a subscription can never be delivered by a channel it did not ask for.
 	channels map[subscription.Channel]deliverer
+
+	// worker is who this process claims rows as. Every replica draws its own, so
+	// two of them never mistake each other's claims for their own.
+	worker subscription.WorkerID
 }
 
 // deliverer is what actually reaches a subscriber. It is an interface so the
@@ -44,7 +57,17 @@ type notifier struct {
 type deliverer interface {
 	// Deliver tells one subscriber about one resource. A nil error is a
 	// delivery the subscriber accepted; anything else is tried again.
-	Deliver(ctx context.Context, held subscription.Subscription, record storage.ResourceRecord) error
+	//
+	// The delivery is carried, not just what it is about: a notification may be
+	// made twice — a worker that died between posting and recording the outcome
+	// leaves its delivery to be made again — and the delivery's identity is how
+	// a subscriber tells the second one from a second write.
+	Deliver(
+		ctx context.Context,
+		delivery subscription.Delivery,
+		held subscription.Subscription,
+		record storage.ResourceRecord,
+	) error
 }
 
 // clock is the time the notifier reads, falling back to the real one.
@@ -64,7 +87,11 @@ func (n *notifier) clock() time.Time {
 // question rather than two that could disagree: a subscription cannot be told
 // about something its owner could not have read by asking.
 func (n *notifier) fanOut(ctx context.Context) error {
-	backlog, err := n.queue.Backlog(ctx, backlogBatch)
+	at := n.clock()
+
+	backlog, err := n.queue.Backlog(ctx, subscription.Claim{
+		Worker: n.worker, At: at, Until: at.Add(backlogLease), Limit: backlogBatch,
+	})
 	if err != nil {
 		return err
 	}
@@ -113,7 +140,7 @@ func (n *notifier) owed(ctx context.Context, written subscription.Written) error
 			continue
 		}
 
-		if err := n.owe(ctx, written.Project, held, record); err != nil {
+		if err := n.owe(ctx, written, held, record); err != nil {
 			return err
 		}
 	}
@@ -206,18 +233,17 @@ func cutCriteria(stated string) (string, string, bool) {
 // owe enqueues one delivery.
 func (n *notifier) owe(
 	ctx context.Context,
-	owner storage.ProjectID,
+	written subscription.Written,
 	held subscription.Subscription,
 	record storage.ResourceRecord,
 ) error {
-	id, err := subscription.MintDeliveryID(rand.Reader)
-	if err != nil {
-		return err
-	}
-
 	return n.queue.Owe(ctx, subscription.Delivery{
-		Project: owner, ID: id, Subscription: held.ID(),
-		Key: record.Key, Version: record.Version, DueAt: n.clock(),
+		Project:      written.Project,
+		ID:           subscription.DeliveryIDFor(written.Project, written.ID, held.ID()),
+		Subscription: held.ID(),
+		Key:          record.Key,
+		Version:      record.Version,
+		DueAt:        n.clock(),
 	})
 }
 
@@ -228,7 +254,11 @@ func (n *notifier) owe(
 // does not have. A queue that carried the body would deliver what the
 // subscriber could no longer read.
 func (n *notifier) send(ctx context.Context) error {
-	due, err := n.queue.Due(ctx, n.clock(), deliveryBatch)
+	at := n.clock()
+
+	due, err := n.queue.Due(ctx, subscription.Claim{
+		Worker: n.worker, At: at, Until: at.Add(deliveryLease), Limit: deliveryBatch,
+	})
 	if err != nil {
 		return err
 	}
@@ -269,7 +299,7 @@ func (n *notifier) attempt(ctx context.Context, delivery subscription.Delivery) 
 		return n.queue.Attempted(ctx, delivery, subscription.Abandoned, at)
 	}
 
-	err = channel.Deliver(ctx, held, record)
+	err = channel.Deliver(ctx, delivery, held, record)
 	if err == nil {
 		return n.queue.Attempted(ctx, delivery, subscription.Delivered, at)
 	}
