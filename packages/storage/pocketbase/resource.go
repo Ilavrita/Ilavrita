@@ -550,16 +550,15 @@ func (s *ResourceStore) Create(ctx context.Context, scope storage.Scope, record 
 	}
 
 	// The insert carries no Scope predicate of its own, so a Grant confined to a
-	// compartment could otherwise write outside it. The record states which
-	// compartments it lands in, so a confined Grant authorizes a create that
-	// lands wholly inside its own and nothing else.
-	writes := authorizedGrants(scope, record.Key, storage.ActionWrite)
-	if !covers(writes, record.Key, record.Compartments) {
-		return storage.ErrDenied
+	// compartment could otherwise write outside it.
+	if err := authorizePlacement(scope, record); err != nil {
+		return err
 	}
 
 	// A caller must be able to read what it just created, or a create would be a
-	// write into somewhere it cannot see.
+	// write into somewhere it cannot see. An update needs no equivalent: the row
+	// is already there, so the read-back that renders it answers exactly rather
+	// than predicting.
 	reads := authorizedGrants(scope, record.Key, storage.ActionRead)
 	if !covers(reads, record.Key, record.Compartments) {
 		return storage.ErrDenied
@@ -579,6 +578,22 @@ func (s *ResourceStore) Create(ctx context.Context, scope storage.Scope, record 
 
 		return err
 	})
+}
+
+// authorizePlacement refuses a write whose resource would land outside the
+// compartments the caller may write into. A create and an update ask it alike:
+// a confined caller may no more move a resource to another patient than create
+// it there.
+//
+// The record states where the resource lands, so this reads the content the
+// caller submitted and never the projection a previous version left behind.
+func authorizePlacement(scope storage.Scope, record storage.ResourceRecord) error {
+	writes := authorizedGrants(scope, record.Key, storage.ActionWrite)
+	if !covers(writes, record.Key, record.Compartments) {
+		return storage.ErrDenied
+	}
+
+	return nil
 }
 
 func (s *ResourceStore) create(ctx context.Context, scope storage.Scope, record storage.ResourceRecord) error {
@@ -691,16 +706,21 @@ func (s *ResourceStore) Update(
 		return err
 	}
 
+	if err := authorizePlacement(scope, record); err != nil {
+		return err
+	}
+
 	stamp := time.Now().UTC()
 
 	return s.WithinTransaction(ctx, func(ctx context.Context) error {
 		return s.mutate(ctx, scope, record.Key, mutation{
-			action:  storage.ActionWrite,
-			prefix:  updateClauses.forExpectation(expect),
-			stamp:   stamp,
-			leading: []any{stamp.UnixMilli(), string(record.Content)},
-			expect:  expect,
-			content: record.Content,
+			action:       storage.ActionWrite,
+			prefix:       updateClauses.forExpectation(expect),
+			stamp:        stamp,
+			leading:      []any{stamp.UnixMilli(), string(record.Content)},
+			expect:       expect,
+			content:      record.Content,
+			compartments: record.Compartments,
 		})
 	})
 }
@@ -735,12 +755,13 @@ func (s *ResourceStore) Delete(
 // their SET clause and the body the new version carries. One stamp serves the
 // row and its version, so the two can never disagree about when it was written.
 type mutation struct {
-	action  storage.Action
-	prefix  string
-	stamp   time.Time
-	leading []any
-	expect  storage.VersionID
-	content []byte
+	action       storage.Action
+	prefix       string
+	stamp        time.Time
+	leading      []any
+	expect       storage.VersionID
+	content      []byte
+	compartments []storage.Compartment
 }
 
 func (s *ResourceStore) mutate(
@@ -774,6 +795,16 @@ func (s *ResourceStore) mutate(
 		return s.explainMiss(ctx, scope, key, change.action)
 	case err != nil:
 		return fmt.Errorf("pocketbase: mutate resource: %w", err)
+	}
+
+	// A write states where the resource now lands, so the projection is replaced
+	// before the version is appended and the history copy records where this
+	// version landed. A delete states nothing: its tombstone keeps the placement
+	// it had, so the row stays attributable to whoever could reach it.
+	if change.action == storage.ActionWrite {
+		if err := s.writeCompartments(ctx, key, change.compartments); err != nil {
+			return err
+		}
 	}
 
 	return s.writeVersion(ctx, key, seq, epoch, change.stamp, change.content)

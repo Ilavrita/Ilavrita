@@ -465,12 +465,15 @@ func TestCompartmentGrantReadsNothingOutsideItsCompartment(t *testing.T) {
 }
 
 func TestHistoryChecksTheCompartmentOfEachVersion(t *testing.T) {
-	store, db := newStore(t)
+	store, _ := newStore(t)
 	key := seed(t, store, "prj_a", "chart")
 
-	attachCompartment(t, db, key, storage.Compartment{Type: "Patient", ID: "pat-1"})
+	// Version 1 landed in no compartment; version 2 states one, so the two
+	// versions differ in exactly the fact a history read is checked against.
+	amended := patientRecord(key, `{"v":2}`)
+	amended.Compartments = []storage.Compartment{{Type: "Patient", ID: "pat-1"}}
 
-	if err := store.Update(t.Context(), fullScope("prj_a", "Patient"), patientRecord(key, `{"v":2}`), "1"); err != nil {
+	if err := store.Update(t.Context(), fullScope("prj_a", "Patient"), amended, "1"); err != nil {
 		t.Fatalf("update: %v", err)
 	}
 
@@ -975,5 +978,124 @@ func TestDroppingTheProjectPredicateCrossesProjects(t *testing.T) {
 
 	if got := countRows(t, db, leaky, args[1:]); got != 2 {
 		t.Fatalf("dropping the project predicate matched %d rows, want 2; the predicate is not what isolates projects", got)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// A resource's placement follows its content
+// ---------------------------------------------------------------------------
+
+// placementOf reads the projection the compartment predicate matches against.
+func placementOf(t *testing.T, db *sql.DB, key storage.ResourceKey) []storage.Compartment {
+	t.Helper()
+
+	rows, err := db.QueryContext(t.Context(),
+		"SELECT comp_type, comp_id FROM fhir_resource_compartment"+
+			" WHERE project_id = ? AND res_type = ? AND res_id = ? ORDER BY comp_type, comp_id",
+		string(key.Project), string(key.Type), string(key.ID))
+	if err != nil {
+		t.Fatalf("read placement: %v", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	var placed []storage.Compartment
+
+	for rows.Next() {
+		var compartment storage.Compartment
+		if err := rows.Scan(&compartment.Type, &compartment.ID); err != nil {
+			t.Fatalf("scan placement: %v", err)
+		}
+
+		placed = append(placed, compartment)
+	}
+
+	return placed
+}
+
+// TestAnUpdateReplacesTheResourcesPlacement. A projection left behind by the
+// previous version answers for content that no longer says it: the patient a
+// resource has moved away from would go on reading it, and the patient it moved
+// to could not. The content the caller submitted is the only thing that decides
+// where a resource is.
+func TestAnUpdateReplacesTheResourcesPlacement(t *testing.T) {
+	store, db := newStore(t)
+	key := seed(t, store, "prj_a", "chart")
+
+	scope := fullScope("prj_a", "Patient")
+
+	moved := patientRecord(key, `{"resourceType":"Patient","v":2}`)
+	moved.Compartments = []storage.Compartment{{Type: "Patient", ID: "pat-2"}}
+
+	if err := store.Update(t.Context(), scope, moved, ""); err != nil {
+		t.Fatalf("update: %v", err)
+	}
+
+	placed := placementOf(t, db, key)
+	if len(placed) != 1 || placed[0] != (storage.Compartment{Type: "Patient", ID: "pat-2"}) {
+		t.Fatalf("after the update the resource is placed at %v, want only the compartment it now states", placed)
+	}
+
+	// The same fact read the way an authorization check reads it.
+	previous := storage.NewScope(compartmentGrant("prj_a", "Patient", storage.ActionRead,
+		storage.Compartment{Type: "Patient", ID: "pat-1"}))
+	if _, err := store.Read(t.Context(), previous, key); !errors.Is(err, storage.ErrNotFound) {
+		t.Errorf("a compartment the resource has left still reads it: err = %v", err)
+	}
+
+	current := storage.NewScope(compartmentGrant("prj_a", "Patient", storage.ActionRead,
+		storage.Compartment{Type: "Patient", ID: "pat-2"}))
+	if _, err := store.Read(t.Context(), current, key); err != nil {
+		t.Errorf("the compartment the resource now states cannot read it: %v", err)
+	}
+}
+
+// TestAConfinedCallerCannotMoveAResourceOutOfItsCompartment. Writing a resource
+// into a compartment nobody granted is the same act whether the row is new or
+// already there, so an update is refused for the reason a create is.
+func TestAConfinedCallerCannotMoveAResourceOutOfItsCompartment(t *testing.T) {
+	store, db := newStore(t)
+	key := seed(t, store, "prj_a", "chart")
+
+	mine := storage.Compartment{Type: "Patient", ID: "pat-1"}
+	attachCompartment(t, db, key, mine)
+
+	scope := storage.NewScope(
+		compartmentGrant("prj_a", "Patient", storage.ActionRead, mine),
+		compartmentGrant("prj_a", "Patient", storage.ActionWrite, mine),
+	)
+
+	moved := patientRecord(key, `{"resourceType":"Patient","v":2}`)
+	moved.Compartments = []storage.Compartment{{Type: "Patient", ID: "pat-2"}}
+
+	if err := store.Update(t.Context(), scope, moved, ""); !errors.Is(err, storage.ErrDenied) {
+		t.Errorf("a confined caller moved a resource to another patient: err = %v", err)
+	}
+
+	// The refusal is the move, not the update: the same write staying put works.
+	stays := patientRecord(key, `{"resourceType":"Patient","v":2}`)
+	stays.Compartments = []storage.Compartment{mine}
+
+	if err := store.Update(t.Context(), scope, stays, ""); err != nil {
+		t.Errorf("a confined caller could not update inside its own compartment: %v", err)
+	}
+}
+
+// TestADeleteKeepsThePlacementItHad, so a tombstone stays attributable to
+// whoever could reach the resource. A delete states no new content and so
+// states no new placement.
+func TestADeleteKeepsThePlacementItHad(t *testing.T) {
+	store, db := newStore(t)
+	key := seed(t, store, "prj_a", "chart")
+
+	mine := storage.Compartment{Type: "Patient", ID: "pat-1"}
+	attachCompartment(t, db, key, mine)
+
+	if err := store.Delete(t.Context(), fullScope("prj_a", "Patient"), key, ""); err != nil {
+		t.Fatalf("delete: %v", err)
+	}
+
+	placed := placementOf(t, db, key)
+	if len(placed) != 1 || placed[0] != mine {
+		t.Errorf("the tombstone is placed at %v, want the placement it had", placed)
 	}
 }
