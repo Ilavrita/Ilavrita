@@ -37,8 +37,8 @@ Every other `/fhir/R4` route answers `501 Not Implemented` as an
 | Conditional read (`If-None-Match`, `If-Modified-Since`) | Not implemented |
 | Patch | Not implemented |
 | Validation and `$validate` | Not implemented |
-| Clinical resource types | Not reachable: an unrestricted policy rule may not cover a type that carries patient data, and a create needs one |
-| Authentication | Not implemented; see below |
+| Clinical resource types | Not served: no route authenticates anyone, and an unrestricted policy rule may not cover a type that carries patient data |
+| Authentication | A store, not a route; see below |
 | Audit trail | Not implemented |
 | Binary and DocumentReference payloads | Not implemented |
 | Reindexing | Not implemented |
@@ -85,6 +85,14 @@ number does disclose that the id was used before, and how often.
 
 Nothing turns a request into a principal. By default every FHIR interaction
 answers `401`, and only the CapabilityStatement is reachable.
+
+The credential half exists and is tested: `project.HashPassword` derives an
+argon2id hash, `PasswordHash.Matches` verifies one in constant time,
+`UserStore.AcceptInvitation` sets a credential in the same write that activates
+an identity, and `UserStore.Authenticate` resolves a login — refusing a disabled
+identity, never crossing a realm, and answering a wrong password and an unknown
+address identically. **No HTTP handler calls any of it.** Until one does, the
+environment variable below is the only way a request names anyone.
 
 `ILAVRITA_DEV_PRINCIPAL=<project>:<kind>:<principal>` names one fixed identity
 that every request is then served as, with **no credential checked anywhere**.

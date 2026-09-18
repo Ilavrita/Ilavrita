@@ -12,16 +12,19 @@ most expensive mistake on this project so far.
 | --- | --- |
 | `GET /healthz`, `GET /version` | Working |
 | `GET /fhir/R4/metadata` | Working, R4-valid, generated from the routes actually served |
-| create, read, vread, update, delete, history-instance | Working, for six resource types |
+| create, read, vread, update, delete, history-instance | Working, for 38 resource types |
 | Everything else under `/fhir/R4` | `501` |
 
-**Six resource types are served**: Endpoint, HealthcareService, Location, Organization,
-Practitioner, PractitionerRole. Patient, Observation and the rest of the PRD's initial
-coverage return `404`. That was a deliberate choice — see §6.
+**38 resource types are served**: every type `authz.CarriesClinicalData` classifies as holding
+no patient data — directory, terminology, conformance and definitional content. Patient,
+Observation and every other clinical type return `404`, held by
+`TestEveryServedTypeCarriesNoClinicalData`. That is the test to delete, deliberately and in its
+own commit, on the day a login route lands — see §6.
 
-Authentication does not exist. Every FHIR route answers `401` unless
-`ILAVRITA_DEV_PRINCIPAL` is set, which prints an unmissable warning at startup. Do not
-deploy this anywhere near patient data.
+**Authentication exists as a store and not as a route.** `UserStore.Authenticate` verifies an
+argon2id password and `AcceptInvitation` sets one, but nothing HTTP calls either: every FHIR
+route still answers `401` unless `ILAVRITA_DEV_PRINCIPAL` is set, which prints an unmissable
+warning at startup. Do not deploy this anywhere near patient data.
 
 A `client_application` or `bot` development principal now also needs a registered, active row in
 its Project, and an id carrying the `cli_` or `bot_` prefix. An id outside the namespace stops the
@@ -137,14 +140,20 @@ None of these are visible from reading the code.
 
 - **No search.** The largest remaining piece and the PRD's own top risk (R-001).
   `packages/search` is a doc comment. `storage` has no `Search` method.
-- **No authentication.** Development principal only.
-- **Eleven of the PRD's initial resource types are not served** — including Patient and
-  Observation. They were withheld because serving PHI-bearing types on a build with no
-  authentication is worse than serving none. Revisit when auth lands.
+- **No login route.** The password path is built and tested — derive, verify, accept an
+  invitation, refuse a disabled identity, never cross a realm — but no HTTP handler calls it,
+  so `ILAVRITA_DEV_PRINCIPAL` is still the only way a request names anyone. This is the single
+  remaining blocker for clinical resource types.
+- **No control-plane HTTP surface.** Projects, memberships, policy bindings, client
+  applications and links are all writable through stores and reachable through no route.
+- **Clinical resource types are not served** — Patient, Observation and everything else
+  `CarriesClinicalData` reports true for. Withheld because serving PHI-bearing types on a build
+  whose only principal comes from an environment variable is worse than serving none.
 - **`AccessPolicy` can only express compartment restrictions.** "Share only `status=final`
   Observations" is not representable. Written up in `docs/design/authz-spec.md`.
-- **No `LinkResolver` implementation.** `noProjectLinks` returns nothing, which can only
-  narrow. A real one is owed before cross-project search.
+- **Linked Projects resolve but nothing names a grantor.** `LinkStore` reads them and
+  `BuildScope` compiles their Grants; a by-key route names no grantor, so the reach is exercised
+  by tests and not yet by any request. The search route is what will name one.
 - **Bots are identity only.** The table, the domain type and the foreign key exist so the
   membership column is constrained; what a bot *runs* is Phase 3 and nothing executes one.
 - **The release pipeline has never run.** Signing, SBOM and provenance are configured and
@@ -164,9 +173,13 @@ its registry. Both are now constrained, in the database and in the resolver. Cre
 rotate and revoke; **nothing authenticates anyone**, which is step 2 and is drawn as a physical
 line: no projection in `packages/storage/pocketbase` selects `secret_hash` (CAP-22).
 
-**2. Real user authentication.** Replaces `ILAVRITA_DEV_PRINCIPAL`, which exists only so
-the wiring could be proved end to end. A request must resolve to a principal through a
-credential, and the dev principal must stop being a supported path once this lands.
+**2. Real user authentication. Half done.** The credential half landed: argon2id derivation
+and verification, invitation acceptance that cannot be replayed, a login that refuses a disabled
+identity and never crosses a realm, and exactly one statement in the whole storage package that
+reads a stored hash. **What is missing is the route**: a handler that takes an address and a
+password, calls `UserStore.Authenticate`, and carries the resulting principal onto the request.
+Session or token issuance comes with it, and `ILAVRITA_DEV_PRINCIPAL` must stop being a
+supported path once it does.
 
 **3. Tenant isolation proven at all three levels.** The mechanisms exist; what is missing is
 an authenticated end-to-end test at each level:
