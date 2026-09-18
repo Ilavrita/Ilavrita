@@ -214,6 +214,7 @@ func serveUnder(t *testing.T, db *sql.DB, proj project.ID, policy authz.AccessPo
 		audits:        sqlite.NewAuditStore(db),
 		payloads:      files.NewDisk(t.TempDir()),
 		notifications: sqlite.NewSubscriptionStore(db),
+		sockets:       newHub(),
 		attempts:      newAttemptLimiter(sqlite.NewAttemptStore(db), nil),
 		resolvers: authz.Resolvers{
 			Memberships: fixedMembership{conformanceMembership(t, proj)},
@@ -340,6 +341,11 @@ func fhirRoutes(t *testing.T) http.Handler {
 	return mux
 }
 
+// conformanceTokenValue is the session token the suite presents. The stub
+// resolver accepts any it can parse, so what it says is only that a request
+// carried one.
+const conformanceTokenValue = "conformance-token"
+
 // testHost is the Host httptest sends. A published URL is only ever built from
 // a host this deployment recognises, so the suite has to name the one it uses.
 const testHost = "example.com"
@@ -417,7 +423,7 @@ func (c call) send(t *testing.T, routes http.Handler) *httptest.ResponseRecorder
 	case c.bearer != "":
 		sent.Header.Set(authorizationField, bearerPrefix+c.bearer)
 	default:
-		sent.Header.Set(authorizationField, bearerPrefix+"conformance-token")
+		sent.Header.Set(authorizationField, bearerPrefix+conformanceTokenValue)
 	}
 
 	recorder := httptest.NewRecorder()

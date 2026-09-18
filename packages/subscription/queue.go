@@ -22,10 +22,21 @@ const (
 	identifierBytes = 16
 )
 
-// ErrMissingOwner reports a Subscription with nobody to deliver as. It fires
-// nothing: a notification delivered as nobody would be one authorized by
-// nothing.
-var ErrMissingOwner = errors.New("subscription: no standing owns this subscription")
+var (
+	// ErrMissingOwner reports a Subscription with nobody to deliver as. It fires
+	// nothing: a notification delivered as nobody would be one authorized by
+	// nothing.
+	ErrMissingOwner = errors.New("subscription: no standing owns this subscription")
+
+	// ErrNobodyListening reports a notification with nobody there to take it.
+	//
+	// It is not a failure to retry. R4's websocket channel tells whoever is
+	// connected now: a socket is not a queue, and holding a notification for a
+	// subscriber who may simply be offline would retry at them for half an hour
+	// and still not reach them. It is recorded as never delivered rather than
+	// as delivered, because that is what happened.
+	ErrNobodyListening = errors.New("subscription: nobody is listening for this notification")
+)
 
 // Written is one resource write, recorded before anybody has worked out who
 // should hear about it.

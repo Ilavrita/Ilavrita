@@ -33,6 +33,11 @@ type backend struct {
 	applications *sqlite.ClientApplicationStore
 	resolvers    authz.Resolvers
 
+	// sockets holds the subscribers connected to this process. A deployment
+	// running several replicas has each subscriber on one of them, which is
+	// what makes this channel best-effort and rest-hook the durable one.
+	sockets *hub
+
 	// notifications is what a write owes whoever is watching. It is the
 	// interface rather than the store, so a backend wired without one holds a
 	// nil the write path can actually test for: a concrete nil handed to an
@@ -157,8 +162,11 @@ func (b *backend) notifier() *notifier {
 	return &notifier{
 		queue:    b.notifications,
 		searches: b.resources,
-		deliver:  newRestHook(),
-		resolve:  b.resolvers,
+		channels: map[subscription.Channel]deliverer{
+			subscription.ChannelRestHook:  newRestHook(),
+			subscription.ChannelWebSocket: b.sockets,
+		},
+		resolve: b.resolvers,
 	}
 }
 
@@ -181,6 +189,7 @@ func newBackend(db *sql.DB, dataDir string) *backend {
 		factors:       sqlite.NewFactorStore(db, sealingKey()),
 		payloads:      files.NewDisk(filepath.Join(dataDir, payloadDirectory)),
 		notifications: sqlite.NewSubscriptionStore(db),
+		sockets:       newHub(),
 		attempts:      newAttemptLimiter(sqlite.NewAttemptStore(db), nil),
 		resolvers: authz.Resolvers{
 			Memberships: sqlite.NewMembershipResolver(db),

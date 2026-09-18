@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"crypto/rand"
+	"errors"
 	"fmt"
 	"net/url"
 	"time"
@@ -29,9 +30,12 @@ const (
 type notifier struct {
 	queue    subscription.Queue
 	searches search.Repository
-	deliver  deliverer
 	resolve  authz.Resolvers
 	now      func() time.Time
+
+	// channels is how each kind of subscriber is reached. One per channel, so
+	// a subscription can never be delivered by a channel it did not ask for.
+	channels map[subscription.Channel]deliverer
 }
 
 // deliverer is what actually reaches a subscriber. It is an interface so the
@@ -255,12 +259,30 @@ func (n *notifier) attempt(ctx context.Context, delivery subscription.Delivery) 
 		return n.queue.Attempted(ctx, delivery, subscription.Abandoned, at)
 	}
 
-	if err := n.deliver.Deliver(ctx, held, record); err == nil {
-		return n.queue.Attempted(ctx, delivery, subscription.Delivered, at)
-	} else {
-		report(fmt.Errorf("delivery %s to subscription %s failed: %w",
-			delivery.ID, delivery.Subscription, err))
+	channel, deliverable := n.channels[held.Channel()]
+	if !deliverable {
+		// A channel nothing delivers on. The Subscription was refused one when
+		// it was written, so this is a build that dropped a channel underneath
+		// a subscription that already names it.
+		report(fmt.Errorf("nothing delivers subscription %s on %s", held.ID(), held.Channel()))
+
+		return n.queue.Attempted(ctx, delivery, subscription.Abandoned, at)
 	}
+
+	err = channel.Deliver(ctx, held, record)
+	if err == nil {
+		return n.queue.Attempted(ctx, delivery, subscription.Delivered, at)
+	}
+
+	// Nobody there to tell is not a failure to retry: a socket is not a queue,
+	// and the subscriber may simply be offline. It is recorded as never
+	// delivered, because that is what happened.
+	if errors.Is(err, subscription.ErrNobodyListening) {
+		return n.queue.Attempted(ctx, delivery, subscription.Abandoned, at)
+	}
+
+	report(fmt.Errorf("delivery %s to subscription %s failed: %w",
+		delivery.ID, delivery.Subscription, err))
 
 	next, again := subscription.NextAttempt(delivery.Attempts, at)
 	if !again {

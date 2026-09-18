@@ -107,6 +107,17 @@ func registerFHIRRoutes(routes *router.Router[*core.RequestEvent]) {
 	for _, method := range methodsOn(typePath) {
 		base.Route(method, systemHistoryPath, rejectUnimplemented)
 		base.Route(method, systemSearchPath, rejectUnimplemented)
+
+		// Where a subscriber connects. It is a reserved segment for the same
+		// reason the others are: without this it would be read as a resource
+		// type nobody declared.
+		if method == http.MethodGet {
+			base.Route(method, websocketPath, subscribeOverWebSocket)
+
+			continue
+		}
+
+		base.Route(method, websocketPath, rejectUnimplemented)
 	}
 
 	base.Any(everythingElse, rejectUnimplemented)

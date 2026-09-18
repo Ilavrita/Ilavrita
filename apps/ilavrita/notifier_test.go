@@ -61,8 +61,8 @@ func watchingServer(t *testing.T) (http.Handler, *sql.DB, *told, *notifier) {
 	return fhirRoutes(t), db, deliveries, &notifier{
 		queue:    sqlite.NewSubscriptionStore(db),
 		searches: sqlite.NewResourceStore(db),
-		deliver:  deliveries,
 		resolve:  serving.resolvers,
+		channels: map[subscription.Channel]deliverer{subscription.ChannelRestHook: deliveries},
 	}
 }
 
@@ -183,7 +183,8 @@ func TestASubscriptionIsToldNothingItsOwnerCouldNotRead(t *testing.T) {
 	deliveries := &told{}
 	worker := &notifier{
 		queue: queue, searches: sqlite.NewResourceStore(db),
-		deliver: deliveries, resolve: serving.resolvers,
+		resolve:  serving.resolvers,
+		channels: map[subscription.Channel]deliverer{subscription.ChannelRestHook: deliveries},
 	}
 
 	worker.pass(context.Background())

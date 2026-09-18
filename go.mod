@@ -3,6 +3,7 @@ module github.com/Ilavrita/Ilavrita
 go 1.27
 
 require (
+	github.com/coder/websocket v1.8.15
 	github.com/pocketbase/dbx v1.12.0
 	// Ilavrita builds exclusively against the Ilavrita PocketBase fork, vendored as
 	// a pinned git submodule at third_party/pocketbase.
