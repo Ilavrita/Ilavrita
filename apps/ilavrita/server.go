@@ -5,7 +5,6 @@ import (
 	"database/sql"
 
 	"github.com/Ilavrita/Ilavrita/packages/authz"
-	"github.com/Ilavrita/Ilavrita/packages/project"
 	"github.com/Ilavrita/Ilavrita/packages/storage"
 	sqlite "github.com/Ilavrita/Ilavrita/packages/storage/pocketbase"
 	"github.com/pocketbase/pocketbase/core"
@@ -91,20 +90,12 @@ func newBackend(db *sql.DB, developmentPrincipal *caller) *backend {
 			Memberships: sqlite.NewMembershipResolver(db),
 			Projects:    sqlite.NewProjectResolver(db),
 			Policies:    sqlite.NewPolicyResolver(db),
-			Links:       noProjectLinks{},
+			Links:       sqlite.NewLinkStore(db),
 		},
 		developmentPrincipal: developmentPrincipal,
 	}
 }
 
-// noProjectLinks reaches no other Project. A by-key interaction carries no way
-// to name a grantor Project, so a link could only widen a Scope here; the real
-// resolver belongs to the search route that can name one.
-type noProjectLinks struct{}
-
-var _ project.LinkResolver = noProjectLinks{}
-
-// Inbound answers with no link at all.
-func (noProjectLinks) Inbound(context.Context, project.ID) ([]project.Link, error) {
-	return nil, nil
-}
+// A by-key interaction still reaches no other Project: authorizationRequest
+// names no grantor, and BuildScope consults no link nobody opted into. The real
+// resolver is wired here so the capability exists for the routes that will.

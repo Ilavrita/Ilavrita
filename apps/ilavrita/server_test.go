@@ -5,6 +5,8 @@ import (
 	"database/sql"
 	"path/filepath"
 	"testing"
+
+	"github.com/Ilavrita/Ilavrita/packages/project"
 )
 
 func preparedDatabase(t *testing.T) *sql.DB {
@@ -84,4 +86,16 @@ func TestByKeyRoutesReachNoLinkedProject(t *testing.T) {
 	if len(links) != 0 {
 		t.Fatalf("resolved %d links, want none reachable by key", len(links))
 	}
+}
+
+// noProjectLinks is the stub these tests decide against. The server wires the
+// real resolver; a by-key interaction names no grantor either way, so what is
+// exercised here is the decision and not the link lookup.
+type noProjectLinks struct{}
+
+var _ project.LinkResolver = noProjectLinks{}
+
+// Inbound answers with no link at all.
+func (noProjectLinks) Inbound(context.Context, project.ID) ([]project.Link, error) {
+	return nil, nil
 }

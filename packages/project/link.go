@@ -396,6 +396,33 @@ func (l Link) TransitionTo(next LinkStatus, at time.Time) (Link, error) {
 	return l, nil
 }
 
+// RestoreStatus rebuilds a persisted link at the status its row records, rather
+// than replaying the transitions that reached it: a suspended link was proposed
+// once, and a store should not have to walk a lifecycle to read a row. Active is
+// still refused without both approvals, because that is an invariant of the row
+// and not a step in a sequence.
+func (l Link) RestoreStatus(status LinkStatus, activatedAt time.Time) (Link, error) {
+	if !status.Valid() {
+		return Link{}, fmt.Errorf("%w: %q", ErrUnknownState, string(status))
+	}
+
+	if status == LinkActive && !l.approvals.Complete() {
+		return Link{}, fmt.Errorf("%w: %s", ErrApprovalIncomplete, l.id)
+	}
+
+	l.status = status
+
+	if !activatedAt.IsZero() {
+		l.activatedAt = activatedAt
+
+		if l.historyFrom.IsZero() {
+			l.historyFrom = activatedAt
+		}
+	}
+
+	return l, nil
+}
+
 // WithExpiry sets when the link stops authorizing. An expired link authorizes
 // nothing without any status change, so nobody has to remember to revoke it.
 func (l Link) WithExpiry(at time.Time) Link {
