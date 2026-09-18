@@ -202,6 +202,55 @@ func authorizedGrants(scope storage.Scope, key storage.ResourceKey, action stora
 	return kept
 }
 
+// covers reports whether these Grants authorize a resource landing in exactly
+// these compartments. An unconfined Grant covers anything.
+//
+// A confined one is read against the compartments the resource reaches into,
+// which is every one it declares except the compartment it is itself. An
+// Encounter for a patient reaches that patient and is trivially its own
+// Encounter compartment; requiring a Grant for the second would refuse a write
+// that reaches nobody new.
+//
+// A resource that reaches into nothing — one that is only its own compartment,
+// such as a Patient — is authorized only by a Grant already naming it, so a
+// confined caller cannot mint compartments it could never read. A resource
+// declaring none at all is covered by no confined Grant, which is what makes an
+// underived compartment fail closed.
+func covers(grants []storage.Grant, key storage.ResourceKey, compartments []storage.Compartment) bool {
+	if reachesEveryCompartment(grants) {
+		return true
+	}
+
+	self := storage.Compartment{Type: key.Type, ID: key.ID}
+
+	var reached []storage.Compartment
+
+	for _, compartment := range compartments {
+		if compartment != self {
+			reached = append(reached, compartment)
+		}
+	}
+
+	if len(reached) == 0 {
+		return slices.Contains(compartments, self) && named(grants, self)
+	}
+
+	for _, compartment := range reached {
+		if !named(grants, compartment) {
+			return false
+		}
+	}
+
+	return true
+}
+
+// named reports whether any Grant is confined to this exact compartment.
+func named(grants []storage.Grant, compartment storage.Compartment) bool {
+	return slices.ContainsFunc(grants, func(grant storage.Grant) bool {
+		return grant.Compartment != nil && *grant.Compartment == compartment
+	})
+}
+
 // reachesEveryCompartment reports whether any Grant here is unconfined. No Grant
 // at all is confinement to nothing, which is why the empty set answers false.
 func reachesEveryCompartment(grants []storage.Grant) bool {
@@ -432,20 +481,34 @@ func (s *ResourceStore) Create(ctx context.Context, scope storage.Scope, record 
 	}
 
 	// The insert carries no Scope predicate of its own, so a Grant confined to a
-	// compartment could otherwise write outside it.
-	if !reachesEveryCompartment(authorizedGrants(scope, record.Key, storage.ActionWrite)) {
+	// compartment could otherwise write outside it. The record states which
+	// compartments it lands in, so a confined Grant authorizes a create that
+	// lands wholly inside its own and nothing else.
+	writes := authorizedGrants(scope, record.Key, storage.ActionWrite)
+	if !covers(writes, record.Key, record.Compartments) {
 		return storage.ErrDenied
 	}
 
-	// A caller who cannot read the type must not learn from a create whether an
-	// id is taken, and storage projects no compartment for a row that does not
-	// exist yet, so the read this create is answered under must be unconfined.
-	if !reachesEveryCompartment(authorizedGrants(scope, record.Key, storage.ActionRead)) {
+	// A caller must be able to read what it just created, or a create would be a
+	// write into somewhere it cannot see.
+	reads := authorizedGrants(scope, record.Key, storage.ActionRead)
+	if !covers(reads, record.Key, record.Compartments) {
 		return storage.ErrDenied
 	}
+
+	confined := !reachesEveryCompartment(reads)
 
 	return s.WithinTransaction(ctx, func(ctx context.Context) error {
-		return s.create(ctx, scope, record)
+		err := s.create(ctx, scope, record)
+
+		// An id taken by a resource in another compartment is one this caller
+		// cannot see, and a create that named it must not say so: a confined
+		// caller cannot tell a taken id from one it was never allowed to name.
+		if confined && errors.Is(err, storage.ErrAlreadyExists) {
+			return storage.ErrDenied
+		}
+
+		return err
 	})
 }
 
@@ -468,12 +531,46 @@ func (s *ResourceStore) create(ctx context.Context, scope storage.Scope, record 
 
 	switch {
 	case err == nil:
+		if err := s.writeCompartments(ctx, key, record.Compartments); err != nil {
+			return err
+		}
+
 		return s.writeVersion(ctx, key, seq, epoch, stamp, record.Content)
 	case errors.Is(err, sql.ErrNoRows):
 		return s.recreate(ctx, scope, record, stamp)
 	default:
 		return fmt.Errorf("pocketbase: create resource: %w", err)
 	}
+}
+
+// writeCompartments replaces the row's compartment projection with the one its
+// current content states. It runs before the version is written, so the history
+// projection copies the compartments that version actually landed in.
+func (s *ResourceStore) writeCompartments(
+	ctx context.Context, key storage.ResourceKey, compartments []storage.Compartment,
+) error {
+	const clear = "DELETE FROM fhir_resource_compartment" +
+		" WHERE project_id = ? AND res_type = ? AND res_id = ?"
+
+	if _, err := s.conn(ctx).ExecContext(ctx, clear,
+		string(key.Project), string(key.Type), string(key.ID)); err != nil {
+		return fmt.Errorf("pocketbase: clear compartments: %w", err)
+	}
+
+	const insert = "INSERT INTO fhir_resource_compartment" +
+		" (project_id, comp_type, comp_id, res_type, res_id) VALUES (?, ?, ?, ?, ?)" +
+		" ON CONFLICT DO NOTHING"
+
+	for _, compartment := range compartments {
+		if _, err := s.conn(ctx).ExecContext(ctx, insert,
+			string(key.Project), string(compartment.Type), string(compartment.ID),
+			string(key.Type), string(key.ID)); err != nil {
+			return fmt.Errorf("pocketbase: project compartment %s/%s: %w",
+				compartment.Type, compartment.ID, err)
+		}
+	}
+
+	return nil
 }
 
 // recreate takes over a logical id whose current row is a tombstone the caller
@@ -501,11 +598,8 @@ func (s *ResourceStore) recreate(
 
 	// The previous owner's compartment projection must not describe the new
 	// resource; the history rows it produced stay behind the old epoch.
-	const clear = "DELETE FROM fhir_resource_compartment WHERE project_id = ? AND res_type = ? AND res_id = ?"
-
-	if _, err := s.conn(ctx).ExecContext(ctx, clear,
-		string(key.Project), string(key.Type), string(key.ID)); err != nil {
-		return fmt.Errorf("pocketbase: clear compartments: %w", err)
+	if err := s.writeCompartments(ctx, key, record.Compartments); err != nil {
+		return err
 	}
 
 	return s.writeVersion(ctx, key, seq, epoch, stamp, record.Content)

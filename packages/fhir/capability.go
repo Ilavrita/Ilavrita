@@ -25,12 +25,13 @@ const (
 // accepts any type name, so this list alone decides which names are endpoints:
 // it gates every route and fills the statement, so the two cannot disagree.
 //
-// Every entry is a type authz classifies as carrying no patient data — directory,
-// terminology, conformance and definitional content. A clinical type is withheld
-// not for want of authentication, which now exists, but because no policy can
-// authorize creating one: ResourceStore.Create requires an unconfined write and
-// read, and an unconfined rule over a clinical type is refused. Advertising one
-// would publish a create nobody can perform.
+// The directory, terminology, conformance and definitional types are here
+// alongside the clinical ones. A clinical type reaches patient data, so an
+// unrestricted rule may not cover it: a Project authorizes one through a
+// compartment-restricted grant, and a create is checked against the compartments
+// the submitted resource itself declares. Every clinical entry below is a type
+// Compartments can place, because one it cannot place would be a create no
+// confined grant could ever authorize.
 var servedResourceTypes = []string{
 	"ActivityDefinition",
 	"CapabilityStatement",
@@ -70,6 +71,36 @@ var servedResourceTypes = []string{
 	"Substance",
 	"TerminologyCapabilities",
 	"ValueSet",
+
+	// Clinical types, reachable only through a compartment-restricted grant.
+	"AllergyIntolerance",
+	"CarePlan",
+	"CareTeam",
+	"Claim",
+	"Communication",
+	"Composition",
+	"Condition",
+	"Consent",
+	"Coverage",
+	"Device",
+	"DiagnosticReport",
+	"DocumentReference",
+	"Encounter",
+	"Flag",
+	"Goal",
+	"Immunization",
+	"MedicationAdministration",
+	"MedicationDispense",
+	"MedicationRequest",
+	"MedicationStatement",
+	"Observation",
+	"Patient",
+	"Procedure",
+	"QuestionnaireResponse",
+	"RelatedPerson",
+	"ServiceRequest",
+	"Specimen",
+	"Task",
 }
 
 // ServesResourceType reports whether this build declares a type. An undeclared

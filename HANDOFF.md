@@ -12,16 +12,17 @@ most expensive mistake on this project so far.
 | --- | --- |
 | `GET /healthz`, `GET /version` | Working |
 | `GET /fhir/R4/metadata` | Working, R4-valid, generated from the routes actually served |
-| create, read, vread, update, delete, history-instance | Working, for 38 resource types |
+| create, read, vread, update, delete, history-instance | Working, for 68 resource types including clinical ones |
 | Everything else under `/fhir/R4` | `501` |
 | `POST /auth/login`, `POST /auth/logout`, `GET /auth/session` | Working |
 | `/admin/projects` and the surface beneath it | Working, for a Super Admin or the Project's own admin |
 
-**38 resource types are served**: every type `authz.CarriesClinicalData` classifies as holding
-no patient data — directory, terminology, conformance and definitional content. Patient,
-Observation and every other clinical type return `404`, held by
-`TestEveryServedTypeCarriesNoClinicalData`. That is the test to delete, deliberately and in its
-own commit, on the day a login route lands — see §6.
+**68 resource types are served**, clinical ones included. The two families are reached
+differently and that difference is the safety property: a non-clinical type may be granted
+outright, and a clinical one only through a compartment. A create is checked against the
+compartments the submitted resource itself declares, derived from its own references
+(`fhir.Compartments`), so a confined grant authorizes a write that reaches nobody new and refuses
+one that reaches into someone else.
 
 **Authentication works.** `POST /auth/login` proves an argon2id password and issues a session;
 `Authorization: Bearer <token>` names the caller on every later request. A FHIR route answers
@@ -145,14 +146,13 @@ None of these are visible from reading the code.
 
 - **No search.** The largest remaining piece and the PRD's own top risk (R-001).
   `packages/search` is a doc comment. `storage` has no `Search` method.
-- **No policy can authorize creating a clinical resource.** This, and not authentication, is what
-  withholds Patient and Observation. `ResourceStore.Create` requires an *unconfined* write and an
-  unconfined read, because storage projects no compartment for a row that does not exist yet
-  (`resource.go`); `NewUnrestrictedRule` refuses an unconfined rule over a clinical type (LNK-5).
-  The two together make a clinical create unauthorizable by construction, so advertising one would
-  publish an interaction nobody can perform. Closing it means determining a new resource's
-  compartment from its submitted body — FHIR compartment definitions — and letting a
-  compartment-restricted grant authorize a create that lands inside it.
+- **Compartment derivation reads top-level elements only.** `Appointment` and `Provenance` link
+  through a nested path (`participant.actor`, `target`), so this build cannot place one, so neither
+  is served: a clinical resource landing in no compartment is reachable by no confined grant.
+  `TestEveryPlaceableTypeIsOneThisBuildServes` keeps the two lists honest.
+- **A compartment subject is created by naming it.** A `POST /Patient` mints an id no confined
+  grant can name in advance, so it is refused; `PUT /Patient/{id}` under a grant naming that
+  patient is how one is provisioned. Correct, and surprising the first time.
 - **No audit trail, MFA or login rate limit.** A password can be guessed as fast as argon2id
   answers, and nothing records that anyone authenticated.
 - **The control plane is a working subset, not the whole surface.** It creates Projects,
@@ -198,9 +198,11 @@ means, and a backend wired with no session port identifies nobody rather than pa
 conformance suite carries a bearer token and is served as a user principal, because a session is
 what a password login issues and a password belongs to a person.
 
-**2b. Compartment determination at create.** This is what actually gates step 4, and it was
-mistaken for an authentication problem. Until a create can be authorized by a compartment-restricted
-grant, no clinical type can be advertised without publishing an interaction nobody can perform.
+**2b. Compartment determination at create. Done.** `fhir.Compartments` derives which subjects a
+submitted resource belongs to; `ResourceRecord` carries them; `ResourceStore.Create` authorizes a
+confined write against them and projects them into `fhir_resource_compartment`, which nothing had
+ever written before. A confined caller that collides with an id in another compartment is answered
+`403` rather than `409`, so a create cannot be used to probe which ids exist.
 
 **3. Tenant isolation proven at all three levels.** The mechanisms exist; what is missing is
 an authenticated end-to-end test at each level:
@@ -212,9 +214,8 @@ an authenticated end-to-end test at each level:
    - **Super Admin** — authority held only through an active membership in the
      `kind='super'` Project, audited, and never implying clinical data access.
 
-**4. Expose the clinical resource types.** 38 non-clinical types are served. Patient, Observation
-and the rest are withheld. **This step depends on step 2b, not on step 2**, which is a correction:
-authentication was necessary and is done, and it turned out not to be sufficient.
+**4. Expose the clinical resource types. Done.** Patient, Observation, Encounter, Condition and
+24 others are served, reachable only through a compartment a Project names.
 
 Search is not in this sequence and remains the largest unstarted piece (§6).
 

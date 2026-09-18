@@ -8,44 +8,61 @@ import (
 	"github.com/Ilavrita/Ilavrita/packages/storage"
 )
 
-// TestEveryServedTypeCarriesNoClinicalData is the line between what this build
-// serves and what it is ready to serve. Authentication exists as a store and not
-// yet as a route, so nothing here turns a request into a principal: a type
-// carrying patient data would be reachable only through the development
-// principal, which checks no credential at all.
-//
-// This is the test to delete, deliberately and in its own commit, on the day a
-// login route lands.
-func TestEveryServedTypeCarriesNoClinicalData(t *testing.T) {
+// TestNoUnrestrictedRuleReachesPatientData is what replaced the gate that
+// withheld clinical types altogether. They are served now, and this is the line
+// that makes that safe: a Project authorizes one through a compartment it names,
+// and an unrestricted rule over one is refused however it is authored.
+func TestNoUnrestrictedRuleReachesPatientData(t *testing.T) {
+	var clinical int
+
 	for _, name := range fhir.ServedResourceTypes() {
-		if authz.CarriesClinicalData(storage.ResourceType(name)) {
-			t.Errorf("%s carries patient data and is served on a build with no login route", name)
+		resourceType := storage.ResourceType(name)
+
+		if !authz.CarriesClinicalData(resourceType) {
+			continue
 		}
+
+		clinical++
+
+		_, err := authz.NewUnrestrictedRule(storage.KindFHIR, resourceType, storage.ActionRead)
+		if err == nil {
+			t.Errorf("an unrestricted rule may cover %s, which reaches patient data", name)
+		}
+	}
+
+	if clinical == 0 {
+		t.Error("no clinical type is served, so this proves nothing")
 	}
 }
 
-// TestTheClinicalTypesAreDeliberatelyWithheld names what is missing, so the gap
-// reads as a decision rather than an oversight.
-func TestTheClinicalTypesAreDeliberatelyWithheld(t *testing.T) {
-	for _, name := range []string{"Patient", "Observation", "Encounter", "Condition", "Binary"} {
-		if fhir.ServesResourceType(name) {
-			t.Errorf("%s is served though no route authenticates anyone", name)
-		}
-
-		if !authz.CarriesClinicalData(storage.ResourceType(name)) {
-			t.Errorf("%s is classified as carrying no patient data, which this gate relies on", name)
-		}
-	}
-}
-
-// TestAServedTypeMayCarryAnUnrestrictedPolicy ties the two lists together: a type
-// this build serves must be one an unrestricted rule may cover, or a Project
-// could not author a policy reaching it at all.
-func TestAServedTypeMayCarryAnUnrestrictedPolicy(t *testing.T) {
+// TestEveryNonClinicalTypeStaysUnrestrictable. The directory and terminology
+// types carry no patient data, so a Project may grant them outright — losing that
+// would make an ordinary read unauthorizable.
+func TestEveryNonClinicalTypeStaysUnrestrictable(t *testing.T) {
 	for _, name := range fhir.ServedResourceTypes() {
-		_, err := authz.NewUnrestrictedRule(storage.KindFHIR, storage.ResourceType(name), storage.ActionRead)
-		if err != nil {
+		resourceType := storage.ResourceType(name)
+
+		if authz.CarriesClinicalData(resourceType) {
+			continue
+		}
+
+		if _, err := authz.NewUnrestrictedRule(
+			storage.KindFHIR, resourceType, storage.ActionRead); err != nil {
 			t.Errorf("no unrestricted rule may cover %s, so nothing could reach it: %v", name, err)
+		}
+	}
+}
+
+// TestAServedTypeIsOneOrTheOther. Every advertised type is reachable by exactly
+// one of the two routes — an unrestricted grant, or a compartment it declares —
+// so none is advertised that no policy could ever authorize.
+func TestAServedTypeIsOneOrTheOther(t *testing.T) {
+	for _, name := range fhir.ServedResourceTypes() {
+		unrestrictable := !authz.CarriesClinicalData(storage.ResourceType(name))
+		placeable := fhir.DerivesCompartments(name)
+
+		if !unrestrictable && !placeable {
+			t.Errorf("%s is advertised but no grant could reach it", name)
 		}
 	}
 }

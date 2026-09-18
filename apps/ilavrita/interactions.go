@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net/http"
 
+	"github.com/Ilavrita/Ilavrita/packages/fhir"
 	"github.com/Ilavrita/Ilavrita/packages/storage"
 	"github.com/pocketbase/pocketbase/core"
 )
@@ -191,8 +192,15 @@ func replaceResource(
 	content json.RawMessage,
 	expect storage.VersionID,
 ) error {
+	compartments, err := fhir.Compartments(string(key.Type), key.ID, content)
+	if err != nil {
+		return refuse(request, err)
+	}
+
 	record, err := held.written(request.Request.Context(), key, func(ctx context.Context) error {
-		return held.resources.Update(ctx, held.scope, storage.ResourceRecord{Key: key, Content: content}, expect)
+		return held.resources.Update(ctx, held.scope, storage.ResourceRecord{
+			Key: key, Content: content, Compartments: compartments,
+		}, expect)
 	})
 	if err != nil {
 		return refuse(request, err)
@@ -209,8 +217,15 @@ func createResourceAt(
 	key storage.ResourceKey,
 	content json.RawMessage,
 ) error {
+	compartments, err := fhir.Compartments(string(key.Type), key.ID, content)
+	if err != nil {
+		return refuse(request, err)
+	}
+
 	record, err := held.written(request.Request.Context(), key, func(ctx context.Context) error {
-		return held.resources.Create(ctx, held.scope, storage.ResourceRecord{Key: key, Content: content})
+		return held.resources.Create(ctx, held.scope, storage.ResourceRecord{
+			Key: key, Content: content, Compartments: compartments,
+		})
 	})
 	if err != nil {
 		return refuse(request, err)

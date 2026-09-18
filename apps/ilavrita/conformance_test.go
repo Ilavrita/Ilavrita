@@ -123,12 +123,7 @@ func conformancePolicy(t *testing.T, proj project.ID, actions []storage.Action) 
 
 	for _, name := range fhir.ServedResourceTypes() {
 		for _, action := range actions {
-			rule, err := authz.NewUnrestrictedRule(storage.KindFHIR, storage.ResourceType(name), action)
-			if err != nil {
-				t.Fatalf("author a %s %s rule: %v", name, action, err)
-			}
-
-			rules = append(rules, rule)
+			rules = append(rules, widestRule(t, storage.ResourceType(name), action))
 		}
 	}
 
@@ -236,17 +231,45 @@ func confinedRule(
 ) authz.Rule {
 	t.Helper()
 
-	author := func() (authz.Rule, error) {
-		if action == storage.ActionRead {
-			return authz.NewRule(storage.KindFHIR, resourceType, action, subject)
+	if action == storage.ActionRead {
+		rule, err := authz.NewRule(storage.KindFHIR, resourceType, action, subject)
+		if err != nil {
+			t.Fatalf("author a %s %s rule: %v", resourceType, action, err)
 		}
 
-		return authz.NewUnrestrictedRule(storage.KindFHIR, resourceType, action)
+		return rule
 	}
 
-	rule, err := author()
+	return widestRule(t, resourceType, action)
+}
+
+// conformancePatient is the compartment every clinical fixture lands in. A
+// clinical type is reachable only through one, so the suite has to name it.
+const conformancePatient = storage.LogicalID("pat-conformance")
+
+// widestRule authors the widest rule a type legally admits: unrestricted where
+// that is allowed, and confined to the conformance patient where it is not. A
+// clinical type has no unrestricted form, which is the whole point of the split.
+func widestRule(t *testing.T, resourceType storage.ResourceType, action storage.Action) authz.Rule {
+	t.Helper()
+
+	if !authz.CarriesClinicalData(resourceType) {
+		rule, err := authz.NewUnrestrictedRule(storage.KindFHIR, resourceType, action)
+		if err != nil {
+			t.Fatalf("author a %s %s rule: %v", resourceType, action, err)
+		}
+
+		return rule
+	}
+
+	subject, err := authz.LiteralSubject("Patient", conformancePatient)
 	if err != nil {
-		t.Fatalf("author a %s %s rule: %v", resourceType, action, err)
+		t.Fatalf("author the conformance compartment: %v", err)
+	}
+
+	rule, err := authz.NewRule(storage.KindFHIR, resourceType, action, subject)
+	if err != nil {
+		t.Fatalf("author a confined %s %s rule: %v", resourceType, action, err)
 	}
 
 	return rule
@@ -458,6 +481,35 @@ func resourcePath(resourceType, id string) string {
 	return fhir.BasePath + "/" + resourceType + "/" + id
 }
 
+// submission is the smallest body this server accepts for a type. A clinical one
+// names the subject that places it in a compartment, because a resource landing
+// in none is reachable by no confined grant.
 func submission(resourceType string) string {
-	return `{"resourceType":"` + resourceType + `"}`
+	body := `{"resourceType":"` + resourceType + `"`
+
+	if path, placed := compartmentPath(resourceType); placed {
+		body += `,"` + path + `":{"reference":"Patient/` + string(conformancePatient) + `"}`
+	}
+
+	return body + `}`
+}
+
+// compartmentPath names the element this suite places a clinical resource by. It
+// mirrors what fhir.Compartments reads, so a fixture cannot drift from the
+// derivation the server actually performs.
+func compartmentPath(resourceType string) (string, bool) {
+	switch resourceType {
+	case "AllergyIntolerance", "Claim", "Consent", "Immunization", "RelatedPerson":
+		return "patient", true
+	case "Coverage":
+		return "beneficiary", true
+	case "Task":
+		return "for", true
+	default:
+		if authz.CarriesClinicalData(storage.ResourceType(resourceType)) {
+			return "subject", true
+		}
+
+		return "", false
+	}
 }

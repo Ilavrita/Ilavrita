@@ -20,6 +20,13 @@ import (
 // type is not advertised until this suite covers it.
 func TestInteractionLifecycle(t *testing.T) {
 	for _, resourceType := range fhir.ServedResourceTypes() {
+		if mintsItsOwnCompartment(t, resourceType) {
+			// A create mints this type's compartment, and no confined grant can
+			// name one that does not exist yet. TestACompartmentSubjectIsCreatedByNamingIt
+			// covers the path such a type is actually created through.
+			continue
+		}
+
 		t.Run(resourceType, func(t *testing.T) {
 			routes := servingFHIR(t, everyAction)
 
@@ -520,8 +527,62 @@ func everyInteraction(resourceType, id string) []call {
 	return calls
 }
 
+// mintsItsOwnCompartment reports a type whose create reaches into nothing: its
+// only compartment is the one it is. It is derived rather than listed, so a
+// fixture cannot drift from what the server actually computes.
+func mintsItsOwnCompartment(t *testing.T, resourceType string) bool {
+	t.Helper()
+
+	const probe = storage.LogicalID("probe")
+
+	derived, err := fhir.Compartments(resourceType, probe, json.RawMessage(submission(resourceType)))
+	if err != nil {
+		t.Fatalf("derive %s compartments: %v", resourceType, err)
+	}
+
+	self := storage.Compartment{Type: storage.ResourceType(resourceType), ID: probe}
+
+	return len(derived) == 1 && derived[0] == self
+}
+
+// TestACompartmentSubjectIsCreatedByNamingIt. A Patient is its own compartment,
+// so a confined grant authorizes creating one only when it already names that
+// patient — which means a client-named id, never a minted one. That is the whole
+// difference between provisioning a compartment and writing into someone else's.
+func TestACompartmentSubjectIsCreatedByNamingIt(t *testing.T) {
+	routes := servingFHIR(t, everyAction)
+
+	named := resourcePath("Patient", string(conformancePatient))
+	body := `{"resourceType":"Patient","id":"` + string(conformancePatient) + `"}`
+
+	answer := call{method: http.MethodPut, path: named, body: body}.send(t, routes)
+	assertStatus(t, answer, http.StatusCreated)
+
+	// And it is readable afterwards, which is what the compartment projection is
+	// for: without the row the confined read would find nothing it just wrote.
+	assertStatus(t, call{method: http.MethodGet, path: named}.send(t, routes), http.StatusOK)
+
+	// Any other patient is refused: the grant names one compartment, not the type.
+	other := resourcePath("Patient", "someone-else")
+	refused := call{
+		method: http.MethodPut, path: other,
+		body: `{"resourceType":"Patient","id":"someone-else"}`,
+	}.send(t, routes)
+	assertIssue(t, refused, http.StatusForbidden, fhir.CodeForbidden)
+}
+
+// replacement is a body naming the id it replaces. Like submission it places a
+// clinical resource in a compartment: a replacement that dropped the subject
+// would move the resource out of every confined grant's reach, which storage
+// refuses rather than silently orphaning it.
 func replacement(resourceType, id string) string {
-	return `{"resourceType":"` + resourceType + `","id":"` + id + `"}`
+	body := `{"resourceType":"` + resourceType + `","id":"` + id + `"`
+
+	if path, placed := compartmentPath(resourceType); placed {
+		body += `,"` + path + `":{"reference":"Patient/` + string(conformancePatient) + `"}`
+	}
+
+	return body + `}`
 }
 
 func decodeBundle(t *testing.T, answer *httptest.ResponseRecorder) fhir.Bundle {

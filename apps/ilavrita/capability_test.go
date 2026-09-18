@@ -191,14 +191,27 @@ func TestTheAdvertisedTypesAreExactlyTheEndpoints(t *testing.T) {
 	}
 }
 
-// A type carrying patient data would advertise a create nobody can perform: an
-// unrestricted rule is refused for one, and a compartment-restricted rule cannot
-// determine a new resource's compartment. Only non-clinical types are listed.
-func TestNoAdvertisedTypeCarriesPatientData(t *testing.T) {
+// A type carrying patient data is reachable only through a compartment-restricted
+// grant, and a create is checked against the compartments the submitted resource
+// declares. A clinical type this build cannot place in one would advertise a
+// create nobody can perform, so the two lists have to agree.
+func TestEveryAdvertisedClinicalTypeCanBePlaced(t *testing.T) {
+	var clinical int
+
 	for _, resource := range advertised(t) {
-		if authz.CarriesClinicalData(storage.ResourceType(resource.Type)) {
-			t.Errorf("%s is advertised, but no policy can authorize creating one", resource.Type)
+		if !authz.CarriesClinicalData(storage.ResourceType(resource.Type)) {
+			continue
 		}
+
+		clinical++
+
+		if !fhir.DerivesCompartments(resource.Type) {
+			t.Errorf("%s is advertised, but no confined grant could ever reach one", resource.Type)
+		}
+	}
+
+	if clinical == 0 {
+		t.Error("no clinical type is advertised, so this proves nothing")
 	}
 }
 

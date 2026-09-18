@@ -129,9 +129,31 @@ func assertAdvertised(t *testing.T, resource ResourceCapability, want []Interact
 // Nothing may be advertised that the route guard would then refuse, and nothing
 // reachable may go unadvertised: one list decides both.
 func TestAnUndeclaredTypeIsNotServed(t *testing.T) {
-	for _, name := range []string{"", "Patient", "patient", "NoSuchType", "Organization "} {
+	for _, name := range []string{"", "patient", "NoSuchType", "Organization ", "Appointment", "Provenance"} {
 		if ServesResourceType(name) {
 			t.Errorf("%q is reported as served but is not declared", name)
+		}
+	}
+}
+
+// TestEveryServedClinicalTypeCanBePlacedInACompartment. A clinical type this
+// build cannot place is one no confined grant could ever reach, so advertising it
+// would publish a create nobody can perform. Appointment and Provenance are
+// withheld for exactly that reason: their links are nested.
+func TestEveryServedClinicalTypeCanBePlacedInACompartment(t *testing.T) {
+	for _, name := range []string{"Patient", "Observation", "Condition", "Encounter"} {
+		if !ServesResourceType(name) {
+			t.Errorf("%s is not served", name)
+		}
+
+		if !DerivesCompartments(name) {
+			t.Errorf("%s is served but cannot be placed in a compartment", name)
+		}
+	}
+
+	for _, name := range []string{"Appointment", "Provenance"} {
+		if ServesResourceType(name) {
+			t.Errorf("%s is served though its compartment link is nested and underived", name)
 		}
 	}
 }

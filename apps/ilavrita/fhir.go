@@ -220,22 +220,12 @@ func permit(request *core.RequestEvent, resourceType storage.ResourceType, actio
 
 	held.scope = storage.NewScope(grants...)
 
-	if slices.Contains(actions, storage.ActionWrite) && !held.mayReadBack() {
-		return granted{}, notAuthorized
-	}
-
+	// Whether a caller can read back what it is about to write is decided in
+	// storage, against the compartments the submitted resource declares. This
+	// once refused every confined write here, because a new row had no
+	// compartment to check; it has one now, and the only place that knows it is
+	// the one holding the record.
 	return held, nil
-}
-
-// mayReadBack reports whether this Scope can see a row that does not exist yet.
-// Storage projects no compartment for one, so a compartment-restricted read
-// Grant never can, and a caller that writes one is answered as if it had not.
-func (g granted) mayReadBack() bool {
-	return slices.ContainsFunc(g.scope.Grants(), func(grant storage.Grant) bool {
-		return grant.Project == g.project && grant.Kind == storage.KindFHIR &&
-			grant.Type == g.resourceType && grant.Action == storage.ActionRead &&
-			grant.Compartment == nil
-	})
 }
 
 // addressed names the resource the URL points at, inside the Project the Scope
