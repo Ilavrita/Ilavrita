@@ -417,6 +417,25 @@ func (m Membership) Policies() []PolicyBinding {
 	return slices.Clone(m.policies)
 }
 
+// StoredAdmin returns the admin column's value rather than effective standing.
+// A store persists what the row holds; IsAdmin is what an authorization decision
+// reads, and the two differ for an invited, suspended or link-minted membership.
+func (m Membership) StoredAdmin() bool {
+	return m.admin
+}
+
+// StoredSuperAdmin returns the super_admin column's value, for the same reason.
+func (m Membership) StoredSuperAdmin() bool {
+	return m.superAdmin
+}
+
+// StoredPolicies returns every binding the row holds, including those a
+// membership holding no standing resolves to nothing. Policies is what a
+// decision reads; this is what a store writes.
+func (m Membership) StoredPolicies() []PolicyBinding {
+	return slices.Clone(m.policies)
+}
+
 // TransitionTo returns the membership in its next state.
 func (m Membership) TransitionTo(next MembershipState) (Membership, error) {
 	state, err := m.state.TransitionTo(next)

@@ -22,6 +22,10 @@ func ValidateID(id ID) error {
 	return nil
 }
 
+// systemScope is the literal platform_resource stores for a system-scoped row.
+// No Project may claim it as an id and collide with system scope.
+const systemScope ID = "system"
+
 // OrgUnit labels where a Project sits in an operator's organisation. It holds a
 // name and not an ID, so no code can walk it into another Project's data; reach
 // between Projects comes only from a Link.

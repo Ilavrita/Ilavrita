@@ -74,6 +74,10 @@ var (
 	// ErrApprovalIncomplete reports activation attempted before both sides agreed.
 	ErrApprovalIncomplete = errors.New("project: a link activates only after both sides approve")
 
+	// ErrClinicalDataInSuperProject reports the Project that administers the
+	// install being asked to hold patient data. It governs; it never treats.
+	ErrClinicalDataInSuperProject = errors.New("project: the super project holds no clinical data")
+
 	// ErrMissingProjectName reports a Project described without a slug or a name.
 	ErrMissingProjectName = errors.New("project: a project needs a slug and a name")
 

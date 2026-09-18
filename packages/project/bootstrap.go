@@ -193,6 +193,13 @@ func (i Instance) TokenExpiresAt() (time.Time, bool) {
 	return i.expiresAt, true
 }
 
+// TokenDigest returns the material the insert binds. It is the hash and never
+// the token, mirroring Credential.StoredHash: a store must persist it, and
+// nothing else has any use for it.
+func (i Instance) TokenDigest() string {
+	return i.tokenHash
+}
+
 // matches reports whether this is the token on file, compared in constant time
 // so a wrong guess cannot be narrowed by how long the answer took.
 func (i Instance) matches(token ClaimToken) bool {
