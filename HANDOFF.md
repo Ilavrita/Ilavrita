@@ -12,17 +12,18 @@ most expensive mistake on this project so far.
 | --- | --- |
 | `GET /healthz`, `GET /version` | Working |
 | `GET /fhir/R4/metadata` | Working, R4-valid, generated from the routes actually served |
-| create, read, vread, update, delete, history-instance | Working, for 68 resource types including clinical ones |
+| create, read, vread, update, delete, history-instance | Working, for 66 resource types: 38 non-clinical, 28 clinical |
 | Everything else under `/fhir/R4` | `501` |
 | `POST /auth/login`, `POST /auth/logout`, `GET /auth/session` | Working |
 | `/admin/projects` and the surface beneath it | Working, for a Super Admin or the Project's own admin |
 
-**68 resource types are served**, clinical ones included. The two families are reached
+**66 resource types are served** — 38 non-clinical and 28 clinical, out of R4's ~145. The two families are reached
 differently and that difference is the safety property: a non-clinical type may be granted
 outright, and a clinical one only through a compartment. A create is checked against the
 compartments the submitted resource itself declares, derived from its own references
-(`fhir.Compartments`), so a confined grant authorizes a write that reaches nobody new and refuses
-one that reaches into someone else.
+(`fhir.Compartments`). Confinement is read one dimension at a time: a grant naming `Patient/x`
+governs every Patient compartment the resource lands in and says nothing about the Practitioner or
+Encounter it also names, because refusing those would refuse nearly every real observation.
 
 **Authentication works.** `POST /auth/login` proves an argon2id password and issues a session;
 `Authorization: Bearer <token>` names the caller on every later request. A FHIR route answers
@@ -150,6 +151,10 @@ None of these are visible from reading the code.
   through a nested path (`participant.actor`, `target`), so this build cannot place one, so neither
   is served: a clinical resource landing in no compartment is reachable by no confined grant.
   `TestEveryPlaceableTypeIsOneThisBuildServes` keeps the two lists honest.
+- **AccessPolicy expresses compartments and nothing else.** "Share only `status=final`
+  Observations" is still not representable, and that is now the sharpest limit on the model: a
+  grant is a resource type, an action and at most one compartment. Written up in
+  `docs/design/authz-spec.md`.
 - **A compartment subject is created by naming it.** A `POST /Patient` mints an id no confined
   grant can name in advance, so it is refused; `PUT /Patient/{id}` under a grant naming that
   patient is how one is provisioned. Correct, and surprising the first time.

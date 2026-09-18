@@ -205,17 +205,16 @@ func authorizedGrants(scope storage.Scope, key storage.ResourceKey, action stora
 // covers reports whether these Grants authorize a resource landing in exactly
 // these compartments. An unconfined Grant covers anything.
 //
-// A confined one is read against the compartments the resource reaches into,
-// which is every one it declares except the compartment it is itself. An
-// Encounter for a patient reaches that patient and is trivially its own
-// Encounter compartment; requiring a Grant for the second would refuse a write
-// that reaches nobody new.
+// A confined one is read one dimension at a time. A Grant confined to Patient/x
+// speaks to the Patient dimension and to nothing else: every Patient compartment
+// the resource lands in must be x, and a Practitioner or Encounter it also names
+// is incidental. Without that, a clinician holding one patient could not record
+// an Observation that named the encounter it happened in — which is nearly all
+// clinical data.
 //
-// A resource that reaches into nothing — one that is only its own compartment,
-// such as a Patient — is authorized only by a Grant already naming it, so a
-// confined caller cannot mint compartments it could never read. A resource
-// declaring none at all is covered by no confined Grant, which is what makes an
-// underived compartment fail closed.
+// The resource must still land somewhere the Grants name, or it is not theirs
+// to write: a subject-less resource reaches no compartment its author could read
+// back, and a confined caller must not be able to write one.
 func covers(grants []storage.Grant, key storage.ResourceKey, compartments []storage.Compartment) bool {
 	if reachesEveryCompartment(grants) {
 		return true
@@ -223,25 +222,29 @@ func covers(grants []storage.Grant, key storage.ResourceKey, compartments []stor
 
 	self := storage.Compartment{Type: key.Type, ID: key.ID}
 
-	var reached []storage.Compartment
-
 	for _, compartment := range compartments {
-		if compartment != self {
-			reached = append(reached, compartment)
+		// The compartment a resource is itself is one it creates rather than
+		// reaches into, so a Grant is not required to already name it.
+		if compartment == self {
+			continue
 		}
-	}
 
-	if len(reached) == 0 {
-		return slices.Contains(compartments, self) && named(grants, self)
-	}
-
-	for _, compartment := range reached {
-		if !named(grants, compartment) {
+		if speaksTo(grants, compartment.Type) && !named(grants, compartment) {
 			return false
 		}
 	}
 
-	return true
+	return slices.ContainsFunc(compartments, func(compartment storage.Compartment) bool {
+		return named(grants, compartment)
+	})
+}
+
+// speaksTo reports whether any Grant is confined to a compartment of this type.
+// A type no Grant names is one the caller's confinement says nothing about.
+func speaksTo(grants []storage.Grant, subject storage.ResourceType) bool {
+	return slices.ContainsFunc(grants, func(grant storage.Grant) bool {
+		return grant.Compartment != nil && grant.Compartment.Type == subject
+	})
 }
 
 // named reports whether any Grant is confined to this exact compartment.
