@@ -151,10 +151,11 @@ None of these are visible from reading the code.
   through a nested path (`participant.actor`, `target`), so this build cannot place one, so neither
   is served: a clinical resource landing in no compartment is reachable by no confined grant.
   `TestEveryPlaceableTypeIsOneThisBuildServes` keeps the two lists honest.
-- **AccessPolicy expresses compartments and nothing else.** "Share only `status=final`
-  Observations" is still not representable, and that is now the sharpest limit on the model: a
-  grant is a resource type, an action and at most one compartment. Written up in
-  `docs/design/authz-spec.md`.
+- **AccessPolicy carries no filter and no field restriction.** "Share only `status=final`
+  Observations" and "share an Observation without its note" are both unrepresentable. A set of
+  compartments *is* expressible — `Compile` emits one Grant per rule — but at one rule per
+  compartment, so a clinic-wide role's roster is its row count. `docs/design/policy-audit-search-plan.md`
+  specifies all three, and why they land before search.
 - **A compartment subject is created by naming it.** A `POST /Patient` mints an id no confined
   grant can name in advance, so it is refused; `PUT /Patient/{id}` under a grant naming that
   patient is how one is provisioned. Correct, and surprising the first time.
@@ -211,22 +212,20 @@ confined write against them and projects them into `fhir_resource_compartment`, 
 ever written before. A confined caller that collides with an id in another compartment is answered
 `403` rather than `409`, so a create cannot be used to probe which ids exist.
 
-**3. Tenant isolation proven at all three levels.** The mechanisms exist; what is missing is
-an authenticated end-to-end test at each level:
-   - **Project** — a caller in Project A reaches nothing in Project B.
-   - **Linked Projects** — what this document and the code call links is what has been
-     discussed as "child projects". There is no inheritance: a link grants only what it
-     names, only while active, unexpired and approved by both sides. An organisational
-     parent attribute may exist for display and confers nothing.
-   - **Super Admin** — authority held only through an active membership in the
-     `kind='super'` Project, audited, and never implying clinical data access.
+**3. Access policies, audit, then search.** In that order, and the order is the point:
+search returns sets, so a policy model that cannot say "only `status=final`" becomes a bulk
+disclosure surface the moment the first real query runs. Audit lands beside policies because
+every route worth auditing already exists. The whole design is
+`docs/design/policy-audit-search-plan.md`, including the seven findings from this work that a
+reimplementation should not have to rediscover.
 
-**4. Expose the clinical resource types. Done.** Patient, Observation, Encounter, Condition and
-24 others are served, reachable only through a compartment a Project names.
-
-Search is not in this sequence and remains the largest unstarted piece (§6).
+**4. Then the rest.** Binary and DocumentReference payloads over storage, subscriptions on the
+runtime's WebSockets, and the resource types that are on neither the non-clinical allowlist nor
+the compartment table — each needs classifying before it can be advertised, because a type no
+policy can authorize would publish an interaction nobody can perform.
 
 ## 8. Conventions
+
 
 One-line Conventional Commits, small and atomic. Comments explain the code in at most
 three lines and never narrate a roadmap. Plans go in `ROADMAP.md`, design reasoning in
