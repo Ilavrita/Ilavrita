@@ -22,6 +22,8 @@ type backend struct {
 	users                *sqlite.UserStore
 	projects             *sqlite.ProjectStore
 	sessions             *sqlite.SessionStore
+	memberships          *sqlite.MembershipStore
+	applications         *sqlite.ClientApplicationStore
 	resolvers            authz.Resolvers
 	developmentPrincipal *caller
 }
@@ -86,10 +88,12 @@ func startServing(app core.App) error {
 // per request would open a second pool on every call.
 func newBackend(db *sql.DB, developmentPrincipal *caller) *backend {
 	return &backend{
-		resources: sqlite.NewResourceStore(db),
-		users:     sqlite.NewUserStore(db),
-		projects:  sqlite.NewProjectStore(db),
-		sessions:  sqlite.NewSessionStore(db),
+		resources:    sqlite.NewResourceStore(db),
+		users:        sqlite.NewUserStore(db),
+		projects:     sqlite.NewProjectStore(db),
+		sessions:     sqlite.NewSessionStore(db),
+		memberships:  sqlite.NewMembershipStore(db),
+		applications: sqlite.NewClientApplicationStore(db),
 		resolvers: authz.Resolvers{
 			Memberships: sqlite.NewMembershipResolver(db),
 			Projects:    sqlite.NewProjectResolver(db),

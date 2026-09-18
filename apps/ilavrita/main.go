@@ -35,6 +35,7 @@ func main() {
 		registerRuntimeBoundary(serve.Router)
 		registerOperationalRoutes(serve.Router)
 		registerAuthRoutes(serve.Router)
+		registerControlRoutes(serve.Router)
 		registerFHIRRoutes(serve.Router)
 
 		return serve.Next()

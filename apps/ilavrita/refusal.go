@@ -117,8 +117,12 @@ func translate(err error) refusal {
 		return refused
 	case errors.Is(err, errNoPrincipal), errors.Is(err, errCredentialsRefused):
 		return unauthenticated
-	case errors.Is(err, errMalformedLogin):
+	case errors.Is(err, errMalformedLogin), errors.Is(err, errMalformedControlRequest):
 		return unreadableLogin
+	case errors.Is(err, errNotAdmin), errors.Is(err, errNotSuperAdmin):
+		return notAuthorized
+	case errors.Is(err, errUnknownProject):
+		return unknownResource
 	case errors.Is(err, storage.ErrDenied):
 		return notAuthorized
 	case errors.Is(err, storage.ErrNotFound):
