@@ -231,16 +231,35 @@ moved away from went on reading it. Both are fixed and both have named regressio
 `docs/design/policy-audit-search-plan.md` carries the numbered rules, the deviations, and the
 findings a reimplementation should not have to rediscover.
 
-**3a. Audit, then search.** In that order. Audit lands beside policies because every route worth
-auditing already exists, and search comes last because it returns sets: it is the interaction
-that turns any remaining coarseness in the policy model into a bulk disclosure surface. The
-projection work is what search will inherit — `SRC-5`'s typed indexes are the same
-derive-on-write, read-through-a-predicate shape the compartment table now has.
+**3a. Audit. Done.** Every FHIR interaction and every login is recorded, in the transaction that
+performed it, by one decorator rather than by each handler — and the answer is held back until
+that record commits, so nothing this server told a client is something it cannot account for. An
+interaction that writes and then refuses rolls back and is recorded afterwards, because a refusal
+that vanished with the rollback would leave only successes in the log. A refused login names
+nobody and no Project: recording the user it found would say which of the four checks got that
+far, turning the trail into the address oracle the uniform answer exists to prevent.
+
+**3b. Search. Done.** `GET /{type}?...` and `POST /{type}/_search` are the same interaction and
+resolve identically. A query is parsed against a registry of what this build actually implements;
+anything else is refused with `400` rather than ignored, because a search that silently drops a
+criterion returns more than it was asked for and the caller cannot tell. Values are projected
+into `fhir_search_index` on write, in the transaction that writes the resource, exactly as
+compartments are — and an install that predates the index is backfilled once, or it would come up
+answering "no matches" for data that is plainly there. Results are a `searchset` Bundle: `next`
+only when a page follows, `total` only when `_total=accurate` asked for one.
+
+Search is its own action. A Scope may let a clinician read any chart they are handed the id of
+and search only their own patients, so the read Grant is never compiled into a search.
 
 **4. Then the rest.** Binary and DocumentReference payloads over storage, subscriptions on the
 runtime's WebSockets, and the resource types that are on neither the non-clinical allowlist nor
 the compartment table — each needs classifying before it can be advertised, because a type no
 policy can authorize would publish an interaction nobody can perform.
+
+Still open from earlier: **MFA**, and a login throttle that is per process rather than per
+install. Search parameters are deliberately a short list — `packages/search/registry.go` is the
+whole of what this build answers, and adding one means adding a projection a write maintains and
+a predicate a read compiles.
 
 ## 8. Conventions
 
