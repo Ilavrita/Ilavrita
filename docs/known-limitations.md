@@ -4,10 +4,11 @@ This page is the authoritative statement of what Ilavrita does not do, and it is
 kept accurate on purpose: a healthcare server that overstates its capabilities is
 worse than one that does little.
 
-The largest thing it does not do is **validate a resource**. A body that is JSON
-and names the type the URL does is stored as sent, so this server will faithfully
-keep a clinically nonsensical record. That, more than anything else here, is why
-patient data does not belong in this build yet.
+The largest thing it does not do is **validate a resource against its own
+definition**. It checks the rules that hold for every R4 resource — see below —
+and nothing that depends on knowing what an `Observation` is, so this server will
+faithfully keep a well-formed but clinically nonsensical record. That, more than
+anything else here, is why patient data does not belong in this build yet.
 
 ## What works
 
@@ -65,7 +66,7 @@ Every other `/fhir/R4` route answers `501 Not Implemented` as an
 | Conditional create, update, delete | Not implemented |
 | Conditional read (`If-None-Match`, `If-Modified-Since`) | Not implemented |
 | Patch | Not implemented |
-| Validation and `$validate` | Not implemented |
+| Validation and `$validate` | Structural only; `$validate` is served on every declared type; see below |
 | Clinical resource types | Served, reachable only through a compartment a policy names |
 | Authentication | Working: password, sessions, TOTP second factor with an administrator recovery path, per-install throttle; see below |
 | Audit trail | Working: every interaction and login, in the transaction that did it |
@@ -144,6 +145,31 @@ per write acts once per identifier.
 Fan-out costs one search per subscription per write, done by a worker outside the
 request. It is fine at a handful of subscriptions and is the first thing to
 revisit if that number grows.
+
+## Validation is structural, and says so
+
+`POST /fhir/R4/{type}/$validate` answers an `OperationOutcome` naming each issue
+and the element it is about. It answers `200` whichever way it went, as R4 says:
+the operation was performed, and the issues are the result. The same rules gate
+`POST` and `PUT`, which refuse with `400` carrying the same issues.
+
+**What is checked.** The rules that hold for every R4 resource whatever its
+definition says, because those need no definition to check: no `null`, no empty
+string, no empty array anywhere; an `id` that is the `id` datatype; a relative
+reference that names an R4 resource type and an id. Beside those, the syntax of
+the elements this build already asserts something about by indexing them for
+search — a date parameter over `effectiveDateTime` is this build's own claim that
+the element holds a date, so a resource whose date is not one is refused rather
+than stored and then quietly missing from every search for it. A `meta.versionId`
+or `meta.lastUpdated` a client sends is a warning: the write path stamps its own,
+and the warning is how the client learns theirs was not kept.
+
+**What is not.** This build ships no `StructureDefinition`s. It therefore cannot
+tell an element R4 defines from one nobody has ever heard of, and it checks no
+cardinality, no required element, no choice-type rule, no profile, no
+terminology binding, no FHIRPath invariant and no reference that actually
+resolves. An `Observation` with `"status": "banana"` passes. Closing that gap
+means shipping the R4 definitions and walking them, which this build does not do.
 
 ## A document is a Binary, and a DocumentReference names it
 

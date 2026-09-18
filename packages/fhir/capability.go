@@ -164,6 +164,50 @@ var servedResourceTypes = []string{
 	"VisionPrescription",
 }
 
+// resourceTypes is every type R4 defines, which is not the same list as the one
+// this build serves. A reference names a resource that may live on another
+// server running the whole of R4, so what makes one well formed is that it
+// names a type R4 has, not that this build would store it.
+var resourceTypes = []string{
+	"Account", "ActivityDefinition", "AdverseEvent", "AllergyIntolerance", "Appointment",
+	"AppointmentResponse", "AuditEvent", "Basic", "Binary", "BiologicallyDerivedProduct",
+	"BodyStructure", "Bundle", "CapabilityStatement", "CarePlan", "CareTeam", "CatalogEntry",
+	"ChargeItem", "ChargeItemDefinition", "Claim", "ClaimResponse", "ClinicalImpression",
+	"CodeSystem", "Communication", "CommunicationRequest", "CompartmentDefinition", "Composition",
+	"ConceptMap", "Condition", "Consent", "Contract", "Coverage", "CoverageEligibilityRequest",
+	"CoverageEligibilityResponse", "DetectedIssue", "Device", "DeviceDefinition", "DeviceMetric",
+	"DeviceRequest", "DeviceUseStatement", "DiagnosticReport", "DocumentManifest",
+	"DocumentReference", "EffectEvidenceSynthesis", "Encounter", "Endpoint", "EnrollmentRequest",
+	"EnrollmentResponse", "EpisodeOfCare", "EventDefinition", "Evidence", "EvidenceVariable",
+	"ExampleScenario", "ExplanationOfBenefit", "FamilyMemberHistory", "Flag", "Goal",
+	"GraphDefinition", "Group", "GuidanceResponse", "HealthcareService", "ImagingStudy",
+	"Immunization", "ImmunizationEvaluation", "ImmunizationRecommendation", "ImplementationGuide",
+	"InsurancePlan", "Invoice", "Library", "Linkage", "List", "Location", "Measure",
+	"MeasureReport", "Media", "Medication", "MedicationAdministration", "MedicationDispense",
+	"MedicationKnowledge", "MedicationRequest", "MedicationStatement", "MedicinalProduct",
+	"MedicinalProductAuthorization", "MedicinalProductContraindication",
+	"MedicinalProductIndication", "MedicinalProductIngredient", "MedicinalProductInteraction",
+	"MedicinalProductManufactured", "MedicinalProductPackaged", "MedicinalProductPharmaceutical",
+	"MedicinalProductUndesirableEffect", "MessageDefinition", "MessageHeader",
+	"MolecularSequence", "NamingSystem", "NutritionOrder", "Observation", "ObservationDefinition",
+	"OperationDefinition", "OperationOutcome", "Organization", "OrganizationAffiliation",
+	"Parameters", "Patient", "PaymentNotice", "PaymentReconciliation", "Person", "PlanDefinition",
+	"Practitioner", "PractitionerRole", "Procedure", "Provenance", "Questionnaire",
+	"QuestionnaireResponse", "RelatedPerson", "RequestGroup", "ResearchDefinition",
+	"ResearchElementDefinition", "ResearchStudy", "ResearchSubject", "RiskAssessment",
+	"RiskEvidenceSynthesis", "Schedule", "SearchParameter", "ServiceRequest", "Slot", "Specimen",
+	"SpecimenDefinition", "StructureDefinition", "StructureMap", "Subscription", "Substance",
+	"SubstanceNucleicAcid", "SubstancePolymer", "SubstanceProtein",
+	"SubstanceReferenceInformation", "SubstanceSourceMaterial", "SubstanceSpecification",
+	"SupplyDelivery", "SupplyRequest", "Task", "TerminologyCapabilities", "TestReport",
+	"TestScript", "ValueSet", "VerificationResult", "VisionPrescription",
+}
+
+// IsResourceType reports whether a name is one R4 defines.
+func IsResourceType(name string) bool {
+	return slices.Contains(resourceTypes, name)
+}
+
 // ServesResourceType reports whether this build declares a type. An undeclared
 // name is not an endpoint, whatever storage would accept.
 func ServesResourceType(name string) bool {
@@ -188,8 +232,18 @@ type ResourceCapability struct {
 	Type         string                  `json:"type"`
 	Interaction  []ResourceInteraction   `json:"interaction,omitempty"`
 	SearchParam  []SearchParamCapability `json:"searchParam,omitempty"`
+	Operation    []OperationCapability   `json:"operation,omitempty"`
 	Versioning   string                  `json:"versioning"`
 	UpdateCreate bool                    `json:"updateCreate"`
+}
+
+// OperationCapability declares one operation a type answers. R4 models an
+// operation as a name and the OperationDefinition it follows, which is not an
+// interaction: a statement that listed one among the interactions would be
+// declaring something the interaction vocabulary has no code for.
+type OperationCapability struct {
+	Name       string `json:"name"`
+	Definition string `json:"definition"`
 }
 
 // SearchParamCapability declares one search parameter a type answers. A
@@ -242,6 +296,11 @@ type CapabilityConfig struct {
 	Published       time.Time
 	BaseURL         string
 	Interactions    []Interaction
+
+	// Operations are the named operations every declared type answers. They are
+	// separate from the interactions for the same reason R4 keeps them separate:
+	// an operation is a route with its own definition, not one of the six.
+	Operations []OperationCapability
 
 	// SearchParameters answers what one type may be searched by. It is supplied
 	// rather than known here, because the registry of parameters and the routes
@@ -299,6 +358,8 @@ func servedResources(config CapabilityConfig) []ResourceCapability {
 		if searchable && config.SearchParameters != nil {
 			held.SearchParam = config.SearchParameters(name)
 		}
+
+		held.Operation = slices.Clone(config.Operations)
 
 		resources = append(resources, held)
 	}

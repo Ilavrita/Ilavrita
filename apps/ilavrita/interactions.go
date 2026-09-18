@@ -238,6 +238,10 @@ func replaceResource(
 		return refuse(request, err)
 	}
 
+	if err := checkSubmission(key, content); err != nil {
+		return refuse(request, err)
+	}
+
 	if err := checkSubscription(key, content); err != nil {
 		return refuse(request, err)
 	}
@@ -269,6 +273,10 @@ func createResourceAt(
 ) error {
 	compartments, err := fhir.Compartments(string(key.Type), key.ID, content)
 	if err != nil {
+		return refuse(request, err)
+	}
+
+	if err := checkSubmission(key, content); err != nil {
 		return refuse(request, err)
 	}
 

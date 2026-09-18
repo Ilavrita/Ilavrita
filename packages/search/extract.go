@@ -237,3 +237,19 @@ func literal(held any) (string, bool) {
 		return "", false
 	}
 }
+
+// ValuesAt returns the values one resource holds at one indexed path.
+//
+// It is the walk above, exported, so something that needs to look at the same
+// element this package indexes reads it the same way — crossing arrays where
+// this crosses them. A second traversal written elsewhere would eventually
+// disagree with this one about where a value is, and then a resource would
+// index one thing and be judged on another.
+func ValuesAt(content []byte, path []string) []any {
+	var resource any
+	if err := json.Unmarshal(content, &resource); err != nil {
+		return nil
+	}
+
+	return walk([]any{resource}, path)
+}

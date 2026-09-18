@@ -93,15 +93,14 @@ func TestADocumentIsRefusedWhicheverEntryCarriesTheBytes(t *testing.T) {
 }
 
 // TestADocumentWithNoAttachmentBytesIsUntouched. The check is about inlined
-// bytes and nothing else: an attachment stating what it is, a null data member,
-// and a content list that is not there at all are all ordinary resources.
+// bytes and nothing else: an attachment stating what it is, and a content list
+// that is not there at all, are ordinary resources.
 func TestADocumentWithNoAttachmentBytesIsUntouched(t *testing.T) {
 	routes := servingFHIR(t, everyAction)
 
 	for name, body := range map[string]string{
 		"a url":            aDocument(`"contentType":"text/plain","url":"Binary/held"`),
 		"nothing but type": aDocument(`"contentType":"text/plain"`),
-		"a null data":      aDocument(`"contentType":"text/plain","data":null`),
 		"no content":       `{"resourceType":"DocumentReference","status":"current","subject":{"reference":"Patient/` + string(conformancePatient) + `"}}`,
 	} {
 		answer := call{

@@ -163,3 +163,41 @@ func TestTheStatementIsMarkedExperimental(t *testing.T) {
 		t.Error("a server implementing no interaction must not present itself as production")
 	}
 }
+
+// TestEveryServedTypeIsOneR4Defines. The served list is hand-written, so a typo
+// in it would advertise a route for a type nobody can name and would leave the
+// real type unserved.
+func TestEveryServedTypeIsOneR4Defines(t *testing.T) {
+	for _, name := range ServedResourceTypes() {
+		if !IsResourceType(name) {
+			t.Errorf("%q is served and is not a type R4 defines", name)
+		}
+	}
+}
+
+// TestTheR4ListIsTheWholeOfR4, by its own count. A list quietly short by one is
+// one that refuses a reference somebody legitimately wrote.
+func TestTheR4ListIsTheWholeOfR4(t *testing.T) {
+	const definedByR4 = 146
+
+	seen := map[string]bool{}
+
+	for _, name := range resourceTypes {
+		if seen[name] {
+			t.Errorf("%q is listed twice", name)
+		}
+
+		seen[name] = true
+	}
+
+	if len(resourceTypes) != definedByR4 {
+		t.Errorf("the list holds %d types and R4 defines %d", len(resourceTypes), definedByR4)
+	}
+
+	// A few that are easy to leave out, each of which a reference may name.
+	for _, name := range []string{"Bundle", "Provenance", "Person", "Group", "OperationOutcome"} {
+		if !IsResourceType(name) {
+			t.Errorf("%q is not in the list", name)
+		}
+	}
+}

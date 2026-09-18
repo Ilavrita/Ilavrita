@@ -72,6 +72,13 @@ var servedInteractions = []servedInteraction{
 	{fhir.InteractionSearchType, http.MethodPost, typeSearchPath, searchResourcesByPost},
 }
 
+// validateOperation is served beside the interactions rather than among them.
+// CapabilityStatement declares an operation under `operation`, not `interaction`,
+// so a row in the table above would advertise it as something it is not.
+var validateOperation = servedInteraction{
+	method: http.MethodPost, path: validatePath, handler: validateResource,
+}
+
 // The FHIR surface is owned by Ilavrita. PocketBase collections, admin routes
 // and error shapes must never appear beneath this base path (FR-007, FR-029).
 func registerFHIRRoutes(routes *router.Router[*core.RequestEvent]) {
@@ -98,6 +105,10 @@ func registerFHIRRoutes(routes *router.Router[*core.RequestEvent]) {
 	for _, served := range servedInteractions {
 		base.Route(served.method, served.path, audited(served.code, served.handler))
 	}
+
+	// Registered before the reserved segments below so $validate is not read as
+	// a logical id, and for the one method it answers.
+	base.Route(validateOperation.method, validateOperation.path, validateOperation.handler)
 
 	// Whole-system interactions. Each names an interaction rather than a
 	// resource type, so it answers "not supported" rather than "no such type" —
@@ -171,10 +182,21 @@ func describeCapabilities(request *core.RequestEvent) error {
 		Published:        startedAt,
 		BaseURL:          base,
 		Interactions:     advertisedInteractions(),
+		Operations:       advertisedOperations(),
 		SearchParameters: advertisedSearchParameters,
 	})
 
 	return respondFHIR(request, http.StatusOK, statement)
+}
+
+// advertisedOperations names the operations every declared type answers. Like
+// the interactions, it is read off what was registered rather than written out
+// again beside it.
+func advertisedOperations() []fhir.OperationCapability {
+	return []fhir.OperationCapability{{
+		Name:       validateOperationName,
+		Definition: "http://hl7.org/fhir/OperationDefinition/Resource-validate",
+	}}
 }
 
 // advertisedInteractions reads the codes off the table the routes were

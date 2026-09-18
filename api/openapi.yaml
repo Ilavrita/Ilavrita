@@ -387,6 +387,65 @@ paths:
         "500":
           $ref: "#/components/responses/InternalFailure"
 
+  /fhir/R4/{resourceType}/$validate:
+    parameters:
+      - $ref: "#/components/parameters/ResourceType"
+    post:
+      tags: [FHIR]
+      summary: Validate a resource without storing it
+      description: |
+        Answers what this server would make of a resource. Nothing is stored,
+        and `200` is the answer whichever way it went: the operation was
+        performed, and what it found is the `OperationOutcome`. A client reads
+        the issues rather than the status, which is what lets one response carry
+        a warning alongside a pass. Each issue names the element it is about in
+        `expression`.
+
+        This is structural validation and no more. This build ships no
+        `StructureDefinition`s, so it cannot tell an element R4 defines from one
+        nobody has ever heard of, and it checks no cardinality, no profile and no
+        terminology binding. What it does check are the rules that hold for every
+        R4 resource whatever its definition — no null, no empty string, no empty
+        array, an `id` that is the `id` datatype, a relative reference that names
+        an R4 type and an id — plus the syntax of the elements this build indexes
+        for search. A resource that passes is well formed. It may still be
+        clinically nonsensical.
+
+        The same rules gate `POST` and `PUT`: a resource this refuses is one
+        those routes refuse with `400`, carrying the same issues.
+
+        It is authorized as a write of that type. Nothing is stored, but
+        validating is what a client does before writing.
+      operationId: validateResource
+      requestBody:
+        required: true
+        content:
+          application/fhir+json:
+            schema:
+              $ref: "#/components/schemas/Resource"
+          application/json:
+            schema:
+              $ref: "#/components/schemas/Resource"
+      responses:
+        "200":
+          description: What validation found, as an `OperationOutcome`.
+          content:
+            application/fhir+json:
+              schema:
+                $ref: "#/components/schemas/OperationOutcome"
+        "400":
+          $ref: "#/components/responses/Invalid"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "413":
+          $ref: "#/components/responses/TooLarge"
+        "500":
+          $ref: "#/components/responses/InternalFailure"
+
   /fhir/R4/{resourceType}/_search:
     parameters:
       - $ref: "#/components/parameters/ResourceType"

@@ -46,6 +46,11 @@ const (
 	// later, which is exactly what a login limit is saying.
 	CodeThrottled IssueCode = "throttled"
 
+	// CodeInformational reports something that is not a problem. An
+	// OperationOutcome with no issue in it is not one, so a validation that
+	// found nothing says that rather than saying nothing.
+	CodeInformational IssueCode = "informational"
+
 	// CodeTooCostly reports a request this server refuses to spend resources on,
 	// such as a body larger than it accepts. It is distinct from CodeInvalid:
 	// the request is well formed, and only its size is refused.
@@ -64,6 +69,11 @@ type Issue struct {
 	Severity    IssueSeverity `json:"severity"`
 	Code        IssueCode     `json:"code"`
 	Diagnostics string        `json:"diagnostics,omitempty"`
+
+	// Expression names where the issue is, in FHIRPath's own notation. It is
+	// carried only by validation: an issue a client cannot locate is one they
+	// have to find by reading the whole body back.
+	Expression []string `json:"expression,omitempty"`
 }
 
 // NewOperationOutcome builds a single-issue outcome. Diagnostics must never carry

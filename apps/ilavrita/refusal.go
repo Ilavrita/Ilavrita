@@ -89,6 +89,12 @@ var (
 	payloadMissing = refusal{http.StatusInternalServerError, fhir.CodeException,
 		"This resource exists and the payload it describes could not be read."}
 
+	// invalidSubmission is the fallback for a refused submission whose outcome
+	// could not be rendered. refuse answers with the report itself, so nothing
+	// reaches this in the ordinary case.
+	invalidSubmission = refusal{http.StatusBadRequest, fhir.CodeInvalid,
+		"This resource is not one this server will store."}
+
 	inlineAttachment = refusal{http.StatusBadRequest, fhir.CodeInvalid,
 		"A document's bytes are stored as a Binary and referenced by " +
 			"content.attachment.url, never carried in content.attachment.data."}
@@ -140,6 +146,14 @@ var (
 // refuse answers one failed interaction. Every path out of a handler that is
 // not a resource goes through here, so no failure can answer in another shape.
 func refuse(request *core.RequestEvent, err error) error {
+	// A refused submission answers with what was wrong with it, element by
+	// element. Every other refusal is one issue, because every other refusal is
+	// one thing; a validation is a list, and flattening it into a sentence
+	// would make a client read the body back to find out where.
+	if outcome, invalid := invalidResource(err); invalid {
+		return respondFHIR(request, http.StatusBadRequest, outcome)
+	}
+
 	answer := translate(err)
 
 	if answer.status == http.StatusInternalServerError {
@@ -183,6 +197,8 @@ func translate(err error) refusal {
 		return unreadablePayload
 	case errors.Is(err, errInlineAttachment):
 		return inlineAttachment
+	case errors.As(err, &errInvalidResource{}):
+		return invalidSubmission
 	case errors.Is(err, files.ErrTooLarge):
 		return oversizedBody
 	case errors.Is(err, errPayloadMissing):
