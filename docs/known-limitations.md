@@ -38,7 +38,7 @@ Every other `/fhir/R4` route answers `501 Not Implemented` as an
 | Patch | Not implemented |
 | Validation and `$validate` | Not implemented |
 | Clinical resource types | Not served: no route authenticates anyone, and an unrestricted policy rule may not cover a type that carries patient data |
-| Authentication | A store, not a route; see below |
+| Authentication | Working: password login, sessions, logout; see below |
 | Audit trail | Not implemented |
 | Binary and DocumentReference payloads | Not implemented |
 | Reindexing | Not implemented |
@@ -83,27 +83,20 @@ number does disclose that the id was used before, and how often.
 
 ## Authentication
 
-Nothing turns a request into a principal. By default every FHIR interaction
-answers `401`, and only the CapabilityStatement is reachable.
+`POST /auth/login` takes a Project slug, an email address and a password, proves the password
+with argon2id, resolves the standing that identity holds in that Project, and issues a session
+token that pins both. A later request carrying `Authorization: Bearer <token>` is served as that
+principal. `POST /auth/logout` destroys the session's material; `GET /auth/session` describes the
+caller a token names.
 
-The credential half exists and is tested: `project.HashPassword` derives an
-argon2id hash, `PasswordHash.Matches` verifies one in constant time,
-`UserStore.AcceptInvitation` sets a credential in the same write that activates
-an identity, and `UserStore.Authenticate` resolves a login — refusing a disabled
-identity, never crossing a realm, and answering a wrong password and an unknown
-address identically. **No HTTP handler calls any of it.** Until one does, the
-environment variable below is the only way a request names anyone.
+A session lives eight hours and may not exceed twelve. An unknown address, a wrong password, a
+disabled identity and an identity holding no standing in the Project are the same answer, because
+telling them apart tells an attacker which addresses and Projects exist.
 
-`ILAVRITA_DEV_PRINCIPAL=<project>:<kind>:<principal>` names one fixed identity
-that every request is then served as, with **no credential checked anywhere**.
-It is for development only. A malformed value stops the process rather than
-degrading it, and a valid one is logged at startup as the warning it is.
-
-A `client_application` or `bot` principal resolves only while a row in the
-matching registry is registered and active in that Project, and its id must
-carry the registry's prefix — `cli_` or `bot_`. An id outside the namespace
-stops the process; an unregistered one answers `401` to everything, which is a
-membership that does not exist rather than a credential that was refused.
+**What is still missing:** there is no audit trail, no MFA, and no rate limit on the login route,
+so a password can be guessed as fast as argon2id answers. `ILAVRITA_DEV_PRINCIPAL` below still
+resolves a request when no session is presented, and clinical resource types are withheld until
+it is removed.
 
 ## Out of scope for v0.1
 

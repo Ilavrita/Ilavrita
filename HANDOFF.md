@@ -14,6 +14,8 @@ most expensive mistake on this project so far.
 | `GET /fhir/R4/metadata` | Working, R4-valid, generated from the routes actually served |
 | create, read, vread, update, delete, history-instance | Working, for 38 resource types |
 | Everything else under `/fhir/R4` | `501` |
+| `POST /auth/login`, `POST /auth/logout`, `GET /auth/session` | Working |
+| `/admin/projects` and the surface beneath it | Working, for a Super Admin or the Project's own admin |
 
 **38 resource types are served**: every type `authz.CarriesClinicalData` classifies as holding
 no patient data — directory, terminology, conformance and definitional content. Patient,
@@ -21,10 +23,13 @@ Observation and every other clinical type return `404`, held by
 `TestEveryServedTypeCarriesNoClinicalData`. That is the test to delete, deliberately and in its
 own commit, on the day a login route lands — see §6.
 
-**Authentication exists as a store and not as a route.** `UserStore.Authenticate` verifies an
-argon2id password and `AcceptInvitation` sets one, but nothing HTTP calls either: every FHIR
-route still answers `401` unless `ILAVRITA_DEV_PRINCIPAL` is set, which prints an unmissable
-warning at startup. Do not deploy this anywhere near patient data.
+**Authentication works.** `POST /auth/login` proves an argon2id password and issues a session;
+`Authorization: Bearer <token>` names the caller on every later request. A FHIR route answers
+`401` to anything else. `ILAVRITA_DEV_PRINCIPAL` still exists as a fallback when no session is
+presented, and is now the last thing standing between this build and clinical data — see §7.
+
+Do not deploy this anywhere near patient data yet: no audit trail, no MFA, no rate limit on the
+login route, and no search.
 
 A `client_application` or `bot` development principal now also needs a registered, active row in
 its Project, and an id carrying the `cli_` or `bot_` prefix. An id outside the namespace stops the
@@ -140,12 +145,14 @@ None of these are visible from reading the code.
 
 - **No search.** The largest remaining piece and the PRD's own top risk (R-001).
   `packages/search` is a doc comment. `storage` has no `Search` method.
-- **No login route.** The password path is built and tested — derive, verify, accept an
-  invitation, refuse a disabled identity, never cross a realm — but no HTTP handler calls it,
-  so `ILAVRITA_DEV_PRINCIPAL` is still the only way a request names anyone. This is the single
-  remaining blocker for clinical resource types.
-- **No control-plane HTTP surface.** Projects, memberships, policy bindings, client
-  applications and links are all writable through stores and reachable through no route.
+- **`ILAVRITA_DEV_PRINCIPAL` still resolves a request** when no session is presented. It
+  exists only because there was no login route; there is one now, so it is owed a deliberate
+  removal. Until then it is what stops clinical types being served.
+- **No audit trail, MFA or login rate limit.** A password can be guessed as fast as argon2id
+  answers, and nothing records that anyone authenticated.
+- **The control plane is a working subset, not the whole surface.** It creates Projects,
+  invites identities, grants standing and registers client applications. AccessPolicy authoring,
+  link management, credential rotation and every list endpoint are still store-only.
 - **Clinical resource types are not served** — Patient, Observation and everything else
   `CarriesClinicalData` reports true for. Withheld because serving PHI-bearing types on a build
   whose only principal comes from an environment variable is worse than serving none.
@@ -173,13 +180,16 @@ its registry. Both are now constrained, in the database and in the resolver. Cre
 rotate and revoke; **nothing authenticates anyone**, which is step 2 and is drawn as a physical
 line: no projection in `packages/storage/pocketbase` selects `secret_hash` (CAP-22).
 
-**2. Real user authentication. Half done.** The credential half landed: argon2id derivation
-and verification, invitation acceptance that cannot be replayed, a login that refuses a disabled
-identity and never crosses a realm, and exactly one statement in the whole storage package that
-reads a stored hash. **What is missing is the route**: a handler that takes an address and a
-password, calls `UserStore.Authenticate`, and carries the resulting principal onto the request.
-Session or token issuance comes with it, and `ILAVRITA_DEV_PRINCIPAL` must stop being a
-supported path once it does.
+**2. Real user authentication. Done.** `POST /auth/login` proves an argon2id password against
+the Project a slug names, resolves the standing that identity holds there, and issues a session
+that pins both. A later request carrying `Authorization: Bearer <token>` is served as that
+principal; `POST /auth/logout` destroys the material. A wrong password and an unknown address
+are the same answer. A revoked membership stops an existing token reaching without waiting for
+it to expire.
+
+**2a. Retire `ILAVRITA_DEV_PRINCIPAL`.** It is the one path left that proves nothing, and
+removing it is what makes step 4 safe. The conformance suite uses it, so this is a real change
+rather than a deletion.
 
 **3. Tenant isolation proven at all three levels.** The mechanisms exist; what is missing is
 an authenticated end-to-end test at each level:
