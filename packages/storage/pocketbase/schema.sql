@@ -893,6 +893,66 @@ CREATE INDEX IF NOT EXISTS ix_project_link_capabilities_holder
   ON project_link_capabilities (grantee_project, principal_membership_id, capability);
 
 -- ===========================================================================
+-- Sessions
+-- ===========================================================================
+
+-- A session is what turns a later request into a principal. It pins the Project
+-- and the membership at issuance, so a request never has to resolve which
+-- membership was meant: FR-048 requires that choice to be deterministic, and the
+-- only instant it can be made honestly is when the credential was presented.
+
+-- The token is 32 bytes this server minted, stored as a single SHA-256. Unlike a
+-- client credential, a session token names itself: it is the identifier, so the
+-- unique index below is keyed on the hash and carries no tenant column. That is
+-- the one place a caller-presented value selects a row on its own, and it is
+-- sound only because the row it selects is what states the Project.
+
+-- tenant: project_id
+-- tenant-exempt: ux_sessions_token, because the token is the lookup key and the
+-- row it finds is what names the Project every later query is bound by
+CREATE TABLE IF NOT EXISTS sessions (
+  project_id    TEXT NOT NULL,
+  id            TEXT NOT NULL,
+
+  -- NULL once revoked: a revoked session matches no token because it holds none.
+  token_hash    TEXT,
+
+  user_id       TEXT NOT NULL REFERENCES users (id) ON DELETE RESTRICT ON UPDATE RESTRICT,
+  membership_id TEXT NOT NULL,
+  state         TEXT NOT NULL CHECK (state IN ('active', 'revoked')),
+  created_at    BIGINT NOT NULL,
+  expires_at    BIGINT NOT NULL,
+  revoked_at    BIGINT,
+
+  PRIMARY KEY (project_id, id),
+
+  CHECK (substr(id, 1, 4) = 'ses_'),
+
+  -- A session that outlives the day it was issued on is one nobody re-proved a
+  -- credential for. NOT NULL alone permits the year 3000, so the ceiling is
+  -- stated: 12 hours.
+  CHECK (expires_at > created_at AND expires_at <= created_at + 43200000),
+
+  -- Revocation destroys the material rather than labelling it, and the mirror
+  -- makes a live session holding nothing unrepresentable too.
+  CHECK (state <> 'revoked' OR (token_hash IS NULL AND revoked_at IS NOT NULL)),
+  CHECK (state = 'revoked' OR (token_hash IS NOT NULL AND revoked_at IS NULL)),
+
+  -- The membership is pinned in the session's own Project, so a token issued for
+  -- one Project cannot name standing in another.
+  FOREIGN KEY (project_id, membership_id)
+    REFERENCES project_memberships (project_id, id) ON DELETE RESTRICT ON UPDATE RESTRICT
+);
+
+-- The token is the lookup key, so it is unique across the install. A revoked
+-- session holds no token and falls out of the index.
+CREATE UNIQUE INDEX IF NOT EXISTS ux_sessions_token
+  ON sessions (token_hash) WHERE token_hash IS NOT NULL;
+
+-- One identity's live sessions, for a "sign out everywhere" that names no token.
+CREATE INDEX IF NOT EXISTS ix_sessions_user ON sessions (project_id, user_id, state, expires_at);
+
+-- ===========================================================================
 -- Append-only history
 -- ===========================================================================
 

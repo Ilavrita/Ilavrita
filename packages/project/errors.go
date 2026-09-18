@@ -139,6 +139,11 @@ var (
 	// this server invokes, so admin on one is a control-plane write that code reaches.
 	ErrBotPrivilege = errors.New("project: a bot holds no administrative standing")
 
+	// ErrInvalidSession reports a session whose state, material or lifetime
+	// contradict each other, or a request presenting no token at all. Nothing is
+	// read as a session that merely happens to be shaped like one.
+	ErrInvalidSession = errors.New("project: invalid session")
+
 	// ErrMachinePrincipalProfile reports a profile on a client application or a
 	// bot. A machine principal's authority is its AccessPolicy, never a
 	// compartment it occupies.

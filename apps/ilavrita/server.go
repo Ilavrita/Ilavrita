@@ -20,6 +20,8 @@ var serving *backend
 type backend struct {
 	resources            *sqlite.ResourceStore
 	users                *sqlite.UserStore
+	projects             *sqlite.ProjectStore
+	sessions             *sqlite.SessionStore
 	resolvers            authz.Resolvers
 	developmentPrincipal *caller
 }
@@ -86,6 +88,8 @@ func newBackend(db *sql.DB, developmentPrincipal *caller) *backend {
 	return &backend{
 		resources: sqlite.NewResourceStore(db),
 		users:     sqlite.NewUserStore(db),
+		projects:  sqlite.NewProjectStore(db),
+		sessions:  sqlite.NewSessionStore(db),
 		resolvers: authz.Resolvers{
 			Memberships: sqlite.NewMembershipResolver(db),
 			Projects:    sqlite.NewProjectResolver(db),

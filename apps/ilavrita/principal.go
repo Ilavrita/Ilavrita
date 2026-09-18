@@ -127,10 +127,21 @@ func warnAboutDevelopmentPrincipal(developmentPrincipal *caller) {
 	}
 }
 
-// resolve answers who is asking. The scaffold reads nothing from the request:
-// deny by default, so without it nothing names a principal and the request is
-// refused before a Scope exists to widen.
-func (b *backend) resolve(_ *core.RequestEvent) (caller, error) {
+// resolve answers who is asking. A session token is read first, because it is the
+// only path that proves anything: the development principal proves nothing and
+// exists so the wiring could be exercised before a login route did. Without
+// either, nothing names a principal and the request is refused before a Scope
+// exists to widen.
+func (b *backend) resolve(request *core.RequestEvent) (caller, error) {
+	session, found, err := b.session(request)
+	if err != nil {
+		return caller{}, err
+	}
+
+	if found {
+		return caller{project: session.Project(), principal: session.Principal()}, nil
+	}
+
 	if b.developmentPrincipal == nil {
 		return caller{}, errNoPrincipal
 	}

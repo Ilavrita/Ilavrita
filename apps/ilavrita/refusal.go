@@ -67,6 +67,9 @@ var (
 	unauthenticated = refusal{http.StatusUnauthorized, fhir.CodeLogin,
 		"This request carries no authenticated principal."}
 
+	unreadableLogin = refusal{http.StatusBadRequest, fhir.CodeInvalid,
+		"A login names a project, an email address and a password."}
+
 	notAuthorized = refusal{http.StatusForbidden, fhir.CodeForbidden,
 		"This principal may not perform this interaction on this resource type."}
 
@@ -112,8 +115,10 @@ func translate(err error) refusal {
 	switch {
 	case errors.As(err, &refused):
 		return refused
-	case errors.Is(err, errNoPrincipal):
+	case errors.Is(err, errNoPrincipal), errors.Is(err, errCredentialsRefused):
 		return unauthenticated
+	case errors.Is(err, errMalformedLogin):
+		return unreadableLogin
 	case errors.Is(err, storage.ErrDenied):
 		return notAuthorized
 	case errors.Is(err, storage.ErrNotFound):
