@@ -9,8 +9,8 @@ starts from them rather than rediscovering them.
 Testable rules are numbered `POL-n`, `AUD-n` and `SRC-n`, following the
 `SCH-`/`CP-`/`LNK-`/`AUTH-`/`HIST-`/`IDN-`/`REST-`/`CAP-` convention.
 
-**Section 2 is implemented.** POL-1 through POL-9 are in the tree, with the
-deviations §2.4 records. Audit and search are not.
+**Sections 2 and 3 are implemented.** POL-1 through POL-9 and AUD-1 through
+AUD-5 are in the tree, with the deviations §2.4 and §3.1 record. Search is not.
 
 ## 1. Why policies come before search
 
@@ -119,8 +119,8 @@ This removes the row-per-patient roster without altering what is expressible.
 
 ## 3. Audit
 
-`packages/audit` is a doc comment. Nothing records that anyone authenticated, read
-a record, or changed a policy.
+`packages/audit` was a doc comment. It now holds the event domain, and
+`audit_events` holds the rows.
 
 **AUD-1.** An audit record is written in the same transaction as the thing it
 describes, or not at all. A separate write is one that can be lost exactly when it
@@ -144,6 +144,34 @@ uniformly, and the audit must not undo that by recording more than the answer.
 Schema: `audit_events(project_id, id, at, principal_kind, principal_id,
 membership_id, action, res_type, res_id, outcome, detail)`, tenant column first,
 append-only trigger, and an index on `(project_id, at, id)`.
+
+### 3.1 What the implementation settled that this document left open
+
+- **One decorator records every FHIR interaction, not each handler.** A handler
+  recording its own outcome is a rule every new interaction has to remember, and
+  the one that forgot would be the one an incident asks about. A test checks the
+  served table against the audited one, so adding an interaction without a
+  record fails the build.
+- **The answer decides the transaction, not the handler's return.** A handler
+  returns nil once it has rendered a refusal, so the status it wrote is what
+  says whether anything may commit. An interaction that writes and then refuses
+  — a read-back the caller's own Scope cannot satisfy — rolls back, and its
+  refusal is recorded afterwards so it survives that rollback.
+- **The answer is held back until the record commits.** A client told its write
+  succeeded, by a process that then failed to record the write, has been told
+  something this server cannot stand behind.
+- **`action` is the audit's own vocabulary, not the authorization one.**
+  Proving a credential is not an action any Grant permits, and it is the first
+  thing an incident asks about.
+- **`detail` is a closed vocabulary enforced by a CHECK**, not free text. A row
+  that quoted a request would hold the very content AUD-2 keeps out of it.
+- **A refused login names nobody and no Project.** Recording the user it found
+  would say which of the four checks got that far, turning the trail into the
+  address oracle the uniform answer exists to prevent. Refusals are still
+  counted, and a run of them is the signal — not which address each one guessed.
+- **A fault is not a wrong password.** An audit outage answers 500 and does not
+  count against the throttle, or an outage would lock out exactly the people
+  whose credentials are correct.
 
 ## 4. Search
 
@@ -208,6 +236,9 @@ boundary already enforces.
 - **A nested query inside an open cursor deadlocks this pool.** It holds one
   connection, so a per-row query issued while rows are still open waits for a
   connection only closing those rows can release. Collect first, then enrich.
+- **A CHECK passes on NULL.** `(a IS NULL AND b IS NULL) OR (a <> '' AND b <> '')`
+  admits a row with `a` set and `b` NULL, because the second arm evaluates to
+  NULL rather than false. Both halves need an explicit `IS NOT NULL`.
 - **`gh auth token --user` is not enough to push as that user.** git tries every
   configured credential helper in order and gh installs one bound to the active
   account, so the helper list has to be cleared in the same command that sets
