@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"net/http"
 	"testing"
 
@@ -8,15 +9,27 @@ import (
 )
 
 // observation builds one body naming whatever references a case is about.
+//
+// It goes through valid so what these cases are refused for is the compartment
+// the resource lands in, rather than an element R4 requires and the fixture left
+// out — which is a 400 before the placement is ever reached.
 func observation(extra string) string {
-	body := `{"resourceType":"Observation","subject":{"reference":"Patient/` +
-		string(conformancePatient) + `"}`
-
-	if extra != "" {
-		body += "," + extra
+	stating := map[string]string{
+		"subject": `{"reference":"Patient/` + string(conformancePatient) + `"}`,
 	}
 
-	return body + `}`
+	if extra != "" {
+		held := map[string]json.RawMessage{}
+		if err := json.Unmarshal([]byte("{"+extra+"}"), &held); err != nil {
+			panic("a fixture fragment that does not parse: " + err.Error())
+		}
+
+		for name, raw := range held {
+			stating[name] = string(raw)
+		}
+	}
+
+	return valid("Observation", stating)
 }
 
 // postObservation creates one against the confined conformance policy.
@@ -56,8 +69,9 @@ func TestAConfinedWriteReachesNoOtherPatient(t *testing.T) {
 	routes := servingFHIR(t, everyAction)
 
 	refused := map[string]string{
-		"another patient as subject": `{"resourceType":"Observation",` +
-			`"subject":{"reference":"Patient/someone-else"}}`,
+		"another patient as subject": valid("Observation", map[string]string{
+			"subject": `{"reference":"Patient/someone-else"}`,
+		}),
 		"another patient alongside its own": observation(
 			`"performer":[{"reference":"Patient/someone-else"}]`),
 	}
@@ -76,11 +90,13 @@ func TestAConfinedWriteLandingNowhereIsRefused(t *testing.T) {
 	routes := servingFHIR(t, everyAction)
 
 	refused := map[string]string{
-		"no subject at all": `{"resourceType":"Observation"}`,
-		"only an incidental reference": `{"resourceType":"Observation",` +
-			`"performer":[{"reference":"Practitioner/prac-1"}]}`,
-		"a subject that places nothing": `{"resourceType":"Observation",` +
-			`"subject":{"reference":"Group/grp-1"}}`,
+		"no subject at all": valid("Observation", map[string]string{"subject": ""}),
+		"only an incidental reference": valid("Observation", map[string]string{
+			"subject": "", "performer": `[{"reference":"Practitioner/prac-1"}]`,
+		}),
+		"a subject that places nothing": valid("Observation", map[string]string{
+			"subject": `{"reference":"Group/grp-1"}`,
+		}),
 	}
 
 	for name, body := range refused {

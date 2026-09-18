@@ -73,7 +73,9 @@ func seedOrganizations(t *testing.T, routes http.Handler, names ...string) []str
 	for _, name := range names {
 		answer := call{
 			method: http.MethodPost, path: fhir.BasePath + "/Organization",
-			body: `{"resourceType":"Organization","name":"` + name + `","active":true}`,
+			body: valid("Organization", map[string]string{
+				"name": `"` + name + `"`, "active": `true`,
+			}),
 		}.send(t, routes)
 
 		assertStatus(t, answer, http.StatusCreated)
@@ -238,8 +240,10 @@ func TestASearchIsBoundedByTheCallersScopeOverHTTP(t *testing.T) {
 
 	mine := call{
 		method: http.MethodPost, path: fhir.BasePath + "/Observation",
-		body: `{"resourceType":"Observation","status":"final","subject":{"reference":"Patient/` +
-			string(conformancePatient) + `"}}`,
+		body: valid("Observation", map[string]string{
+			"status":  `"final"`,
+			"subject": `{"reference":"Patient/` + string(conformancePatient) + `"}`,
+		}),
 	}.send(t, routes)
 
 	assertStatus(t, mine, http.StatusCreated)
@@ -248,7 +252,9 @@ func TestASearchIsBoundedByTheCallersScopeOverHTTP(t *testing.T) {
 	// is what makes the search below a search of what is reachable.
 	assertIssue(t, call{
 		method: http.MethodPost, path: fhir.BasePath + "/Observation",
-		body: `{"resourceType":"Observation","status":"final","subject":{"reference":"Patient/someone-else"}}`,
+		body: valid("Observation", map[string]string{
+			"status": `"final"`, "subject": `{"reference":"Patient/someone-else"}`,
+		}),
 	}.send(t, routes), http.StatusForbidden, fhir.CodeForbidden)
 
 	bundle := searchedBundle(t, routes, call{

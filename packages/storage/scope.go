@@ -130,6 +130,29 @@ func (s Scope) Admits(project ProjectID, kind Kind, resourceType ResourceType, a
 	})
 }
 
+// Withholds reports whether every Grant this Scope holds for one operation
+// narrows what comes back.
+//
+// It is what says a caller can only ever see part of a resource of this type,
+// and therefore cannot state the whole of one: a replace from such a caller
+// would delete whatever was withheld from them, silently and on their behalf.
+//
+// A Scope holding no Grant for the operation withholds nothing, because there is
+// nothing for it to withhold. Whether the caller may perform it at all is a
+// different question, and Allows is the one that answers it.
+func (s Scope) Withholds(project ProjectID, kind Kind, resourceType ResourceType, action Action) bool {
+	held := make([]*Projection, 0, len(s.grants))
+
+	for _, grant := range s.grants {
+		if grant.Project == project && grant.Kind == kind &&
+			grant.Type == resourceType && grant.Action == action {
+			held = append(held, grant.Projection)
+		}
+	}
+
+	return len(held) > 0 && WidestProjection(held) != nil
+}
+
 // Narrow returns the Grants matching one kind and action. It can only remove
 // Grants, never add them, which is what keeps a Scope from widening downstream.
 func (s Scope) Narrow(kind Kind, action Action) Scope {

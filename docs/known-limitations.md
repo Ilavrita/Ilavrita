@@ -4,11 +4,12 @@ This page is the authoritative statement of what Ilavrita does not do, and it is
 kept accurate on purpose: a healthcare server that overstates its capabilities is
 worse than one that does little.
 
-The largest thing it does not do is **validate a resource against its own
-definition**. It checks the rules that hold for every R4 resource — see below —
-and nothing that depends on knowing what an `Observation` is, so this server will
-faithfully keep a well-formed but clinically nonsensical record. That, more than
-anything else here, is why patient data does not belong in this build yet.
+The largest thing it does not do is **check a resource against a profile or a
+terminology**. It checks every resource against its own base definition — see
+below — so an element nobody declared, a missing required one or a malformed date
+is refused. What it cannot tell you is that `"status": "banana"` is not a status,
+because a required binding is a ValueSet this build does not hold. That, more
+than anything else here, is why patient data does not belong in this build yet.
 
 ## What works
 
@@ -66,7 +67,7 @@ Every other `/fhir/R4` route answers `501 Not Implemented` as an
 | Conditional create, update, delete | Not implemented |
 | Conditional read (`If-None-Match`, `If-Modified-Since`) | Not implemented |
 | Patch | Not implemented |
-| Validation and `$validate` | Structural only; `$validate` is served on every declared type; see below |
+| Validation and `$validate` | Against the base definitions; no profiles and no terminology; see below |
 | Clinical resource types | Served, reachable only through a compartment a policy names |
 | Authentication | Working: password, sessions, TOTP second factor with an administrator recovery path, per-install throttle; see below |
 | Audit trail | Working: every interaction and login, in the transaction that did it |
@@ -166,6 +167,8 @@ many times as there are tenants, and there is nothing tenant-specific about what
 an `Observation` is. A Project that writes its own `StructureDefinition` under
 one of those ids serves its own; the specification's is what is behind it.
 
+The definitions are also what a write is checked against; see below.
+
 The fallback is a decision rather than an inference. A canonical resource belongs
 to no Project, so there is no row for a compartment, a filter or a projection to
 be evaluated against, and it is answered only for a caller whose Grant narrows
@@ -175,30 +178,54 @@ id must not be probeable — so reading the fallback off that answer would be
 handing resources out on a guess that is wrong exactly when it matters. A
 confined caller gets the 404 they would have got anyway.
 
-## Validation is structural, and says so
+## Validation checks a resource against its own definition
 
 `POST /fhir/R4/{type}/$validate` answers an `OperationOutcome` naming each issue
 and the element it is about. It answers `200` whichever way it went, as R4 says:
 the operation was performed, and the issues are the result. The same rules gate
 `POST` and `PUT`, which refuse with `400` carrying the same issues.
 
-**What is checked.** The rules that hold for every R4 resource whatever its
-definition says, because those need no definition to check: no `null`, no empty
-string, no empty array anywhere; an `id` that is the `id` datatype; a relative
-reference that names an R4 resource type and an id. Beside those, the syntax of
-the elements this build already asserts something about by indexing them for
-search — a date parameter over `effectiveDateTime` is this build's own claim that
-the element holds a date, so a resource whose date is not one is refused rather
-than stored and then quietly missing from every search for it. A `meta.versionId`
-or `meta.lastUpdated` a client sends is a warning: the write path stamps its own,
-and the warning is how the client learns theirs was not kept.
+**What is checked without a definition**, because these hold for every R4
+resource whatever its own definition says: no `null`, no empty string, no empty
+array anywhere; an `id` that is the `id` datatype; a relative reference that names
+an R4 resource type and an id. A `meta.versionId` or `meta.lastUpdated` a client
+sends is a warning — the write path stamps its own, and the warning is how the
+client learns theirs was not kept.
 
-**What is not.** This build ships no `StructureDefinition`s. It therefore cannot
-tell an element R4 defines from one nobody has ever heard of, and it checks no
-cardinality, no required element, no choice-type rule, no profile, no
-terminology binding, no FHIRPath invariant and no reference that actually
-resolves. An `Observation` with `"status": "banana"` passes. Closing that gap
-means shipping the R4 definitions and walking them, which this build does not do.
+**What is checked against the definition**, from the snapshots this build seeds:
+
+- **Elements nobody declared.** An `Observation` carrying `activeIngredient` is
+  refused, and the refusal names what the type does declare.
+- **Cardinality.** A required element that is absent, and the difference between
+  an element written as an array and one written as a value — R4 writes a
+  repeating element as an array always, because that is what tells a reader
+  whether more may follow.
+- **Choice types.** `value[x]` is present as `valueQuantity` or `valueString`,
+  under a type the element actually permits, and never as two at once.
+- **Primitive syntax.** A `date`, `dateTime`, `instant`, `time`, `code`, `id`,
+  `oid`, `uuid` or `base64Binary` that is not one; a number where a string
+  belongs and the reverse; an `integer` that is not whole; a `positiveInt` below
+  one.
+
+**What is still not checked.** No profiles: only the base definitions are read,
+and a `StructureDefinition` that constrains one is stored without being applied.
+No terminology: `"status": "banana"` passes, because a required binding is a
+ValueSet this build does not hold. No FHIRPath invariants, and no reference that
+actually resolves. Those are the gap between this and a validator somebody should
+certify against.
+
+An element that holds its own kind — a `Questionnaire` item inside an item, an
+`OperationDefinition` parameter's parts — is expanded six levels deep, because a
+definition that nests into itself cannot be written out. Past that the content is
+**unchecked rather than refused**: an element with no children in the model would
+otherwise have everything inside it reported as undeclared, which is a refusal
+for a resource that is right.
+
+The strongest evidence that it does not refuse what it should accept is that the
+specification validates against itself: every resource the embedded bundles
+carry — 212 `StructureDefinition`s, 46 `OperationDefinition`s, five
+`CompartmentDefinition`s and two `CapabilityStatement`s — passes, and a test
+holds that.
 
 ## A document is a Binary, and a DocumentReference names it
 

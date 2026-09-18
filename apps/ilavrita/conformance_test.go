@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"io"
+	"maps"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -567,27 +568,48 @@ func resourcePath(resourceType, id string) string {
 // submission is the smallest body this server accepts for a type. A clinical one
 // names the subject that places it in a compartment, because a resource landing
 // in none is reachable by no confined grant.
+//
+// The elements the type's own definition requires are filled from that
+// definition, so what this suite drives every interaction with is a resource a
+// client could actually send. Hand-written fixtures would drift from what R4
+// requires the moment a type was added, and the suite would then be proving the
+// routes work on bodies nothing would accept.
 func submission(resourceType string) string {
-	body := `{"resourceType":"` + resourceType + `"`
+	fields := map[string]json.RawMessage{
+		resourceTypeField: json.RawMessage(`"` + resourceType + `"`),
+	}
+
+	maps.Copy(fields, submissionRequirements(resourceType))
 
 	// A Subscription states what it watches, how it delivers and whether it is
-	// on. All three are checked when it is written, so a fixture states them.
+	// on. All three are checked when it is written, and none of them is
+	// something a definition can supply: "fixture" is a code R4 permits and not
+	// a channel this server delivers on.
 	if resourceType == string(subscriptionType) {
-		body += `,"criteria":"Observation?status=final","status":"requested"` +
-			`,"channel":{"type":"rest-hook","endpoint":"https://example.test/hook"}`
+		fields["criteria"] = json.RawMessage(`"Observation?status=final"`)
+		fields["status"] = json.RawMessage(`"requested"`)
+		fields["channel"] = json.RawMessage(
+			`{"type":"rest-hook","endpoint":"https://example.test/hook"}`)
 	}
 
 	// A Binary is bytes, and what a client called them is what this server
 	// hands back, so there is nothing to store without it.
 	if resourceType == string(binaryType) {
-		body += `,"contentType":"text/plain","data":"aGVsbG8="`
+		fields["contentType"] = json.RawMessage(`"text/plain"`)
+		fields["data"] = json.RawMessage(`"aGVsbG8="`)
 	}
 
 	if path, placed := compartmentPath(resourceType); placed {
-		body += `,"` + path + `":{"reference":"Patient/` + string(conformancePatient) + `"}`
+		fields[path] = asWritten(resourceType, path,
+			`{"reference":"Patient/`+string(conformancePatient)+`"}`)
 	}
 
-	return body + `}`
+	body, err := json.Marshal(fields)
+	if err != nil {
+		panic("a fixture that cannot be encoded: " + err.Error())
+	}
+
+	return string(body)
 }
 
 // compartmentPath names the element this suite places a clinical resource by. It

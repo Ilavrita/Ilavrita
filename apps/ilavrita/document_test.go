@@ -93,15 +93,18 @@ func TestADocumentIsRefusedWhicheverEntryCarriesTheBytes(t *testing.T) {
 }
 
 // TestADocumentWithNoAttachmentBytesIsUntouched. The check is about inlined
-// bytes and nothing else: an attachment stating what it is, and a content list
-// that is not there at all, are ordinary resources.
+// bytes and nothing else: an attachment stating what it is, or naming where the
+// bytes are, is an ordinary resource.
+//
+// A DocumentReference with no content at all is not one of these cases. R4
+// requires at least one, so it is refused before this rule is ever reached —
+// which TestADocumentStatesWhatItRefersTo is what asserts.
 func TestADocumentWithNoAttachmentBytesIsUntouched(t *testing.T) {
 	routes := servingFHIR(t, everyAction)
 
 	for name, body := range map[string]string{
 		"a url":            aDocument(`"contentType":"text/plain","url":"Binary/held"`),
 		"nothing but type": aDocument(`"contentType":"text/plain"`),
-		"no content":       `{"resourceType":"DocumentReference","status":"current","subject":{"reference":"Patient/` + string(conformancePatient) + `"}}`,
 	} {
 		answer := call{
 			method: http.MethodPost, path: fhir.BasePath + "/DocumentReference", body: body,
@@ -152,5 +155,23 @@ func TestTheRuleReadsTheTypeAndNotTheShape(t *testing.T) {
 		if err := refuseInlineAttachment(storage.ResourceKey{Type: other, ID: "one"}, body); err != nil {
 			t.Errorf("the same body under %q answered %v", other, err)
 		}
+	}
+}
+
+// TestADocumentStatesWhatItRefersTo. R4 requires at least one content, because a
+// reference to a document that names no document is not one.
+func TestADocumentStatesWhatItRefersTo(t *testing.T) {
+	routes := servingFHIR(t, everyAction)
+
+	answer := call{
+		method: http.MethodPost, path: fhir.BasePath + "/DocumentReference",
+		body: `{"resourceType":"DocumentReference","status":"current"` +
+			`,"subject":{"reference":"Patient/` + string(conformancePatient) + `"}}`,
+	}.send(t, routes)
+
+	assertStatus(t, answer, http.StatusBadRequest)
+
+	if !strings.Contains(answer.Body.String(), "DocumentReference.content") {
+		t.Errorf("the refusal does not name what is missing: %s", answer.Body)
 	}
 }

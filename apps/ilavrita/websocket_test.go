@@ -217,19 +217,24 @@ func TestAWebSocketSubscriptionIsNotDeliveredByTheOtherChannel(t *testing.T) {
 func subscribeOver(t *testing.T, routes http.Handler, criteria, channel, payload string) string {
 	t.Helper()
 
-	body := `{"resourceType":"Subscription","criteria":"` + criteria +
-		`","status":"active","channel":{"type":"` + channel + `"`
+	held := `{"type":"` + channel + `"`
 
 	if channel == "rest-hook" {
-		body += `,"endpoint":"https://example.test/hook"`
+		held += `,"endpoint":"https://example.test/hook"`
 	}
 
 	if payload != "" {
-		body += `,"payload":"` + payload + `"`
+		held += `,"payload":"` + payload + `"`
 	}
 
+	body := valid("Subscription", map[string]string{
+		"criteria": `"` + criteria + `"`,
+		"status":   `"active"`,
+		"channel":  held + `}`,
+	})
+
 	answer := call{
-		method: http.MethodPost, path: fhir.BasePath + "/Subscription", body: body + `}}`,
+		method: http.MethodPost, path: fhir.BasePath + "/Subscription", body: body,
 	}.send(t, routes)
 
 	assertStatus(t, answer, http.StatusCreated)

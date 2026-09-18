@@ -401,15 +401,18 @@ paths:
         a warning alongside a pass. Each issue names the element it is about in
         `expression`.
 
-        This is structural validation and no more. This build ships no
-        `StructureDefinition`s, so it cannot tell an element R4 defines from one
-        nobody has ever heard of, and it checks no cardinality, no profile and no
-        terminology binding. What it does check are the rules that hold for every
-        R4 resource whatever its definition — no null, no empty string, no empty
+        Two sets of rules are applied. The ones that hold for every R4 resource
+        whatever its own definition says — no null, no empty string, no empty
         array, an `id` that is the `id` datatype, a relative reference that names
-        an R4 type and an id — plus the syntax of the elements this build indexes
-        for search. A resource that passes is well formed. It may still be
-        clinically nonsensical.
+        an R4 type and an id — and the ones that come from the type's own base
+        definition, which this build embeds and seeds: elements nobody declared,
+        required elements that are absent, repeating elements written as values,
+        choices written twice or under a type they do not permit, and primitive
+        syntax.
+
+        What is not checked is a profile, a terminology binding, a FHIRPath
+        invariant or whether a reference resolves. `"status": "banana"` passes.
+        A resource that passes may still be clinically nonsensical.
 
         The same rules gate `POST` and `PUT`: a resource this refuses is one
         those routes refuse with `400`, carrying the same issues.

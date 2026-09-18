@@ -571,31 +571,32 @@ func TestACompartmentSubjectIsCreatedByNamingIt(t *testing.T) {
 	assertIssue(t, refused, http.StatusForbidden, fhir.CodeForbidden)
 }
 
-// replacement is a body naming the id it replaces. Like submission it places a
-// clinical resource in a compartment: a replacement that dropped the subject
-// would move the resource out of every confined grant's reach, which storage
-// refuses rather than silently orphaning it.
+// replacement is a body naming the id it replaces.
+//
+// It is the submission with the id written in: an update states the whole
+// resource, so a replacement missing what a create had to carry is a body no
+// client could send either. Binary's bytes differ, so a test can tell the two
+// versions apart.
 func replacement(resourceType, id string) string {
-	body := `{"resourceType":"` + resourceType + `","id":"` + id + `"`
+	fields := map[string]json.RawMessage{}
 
-	// A Subscription states what it watches, how it delivers and whether it is
-	// on. All three are checked when it is written, so a fixture states them.
-	if resourceType == string(subscriptionType) {
-		body += `,"criteria":"Observation?status=final","status":"requested"` +
-			`,"channel":{"type":"rest-hook","endpoint":"https://example.test/hook"}`
+	if err := json.Unmarshal([]byte(submission(resourceType)), &fields); err != nil {
+		t := "a fixture that does not parse: " + err.Error()
+		panic(t)
 	}
 
-	// A Binary is bytes, and what a client called them is what this server
-	// hands back, so there is nothing to store without it.
+	fields[idField] = json.RawMessage(`"` + id + `"`)
+
 	if resourceType == string(binaryType) {
-		body += `,"contentType":"text/plain","data":"cmVwbGFjZWQ="`
+		fields["data"] = json.RawMessage(`"cmVwbGFjZWQ="`)
 	}
 
-	if path, placed := compartmentPath(resourceType); placed {
-		body += `,"` + path + `":{"reference":"Patient/` + string(conformancePatient) + `"}`
+	body, err := json.Marshal(fields)
+	if err != nil {
+		panic("a replacement that cannot be encoded: " + err.Error())
 	}
 
-	return body + `}`
+	return string(body)
 }
 
 func decodeBundle(t *testing.T, answer *httptest.ResponseRecorder) fhir.Bundle {

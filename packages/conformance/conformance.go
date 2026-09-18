@@ -82,6 +82,24 @@ var Digest = sync.OnceValue(func() string {
 // digest first: this runs on a first start and after an upgrade, and on no other
 // start.
 func StructureDefinitions() ([]Definition, error) {
+	return bundled(func(definition Definition) bool {
+		return definition.Type == "StructureDefinition" && definition.URL != ""
+	})
+}
+
+// Bundled returns every resource the embedded bundles carry, whatever its type.
+//
+// The bundles hold operations, compartments and capability statements beside the
+// definitions. Nothing is seeded from them, but they are a few hundred real R4
+// resources of several types, which is what a test needs to ask whether this
+// build refuses something the specification itself publishes.
+func Bundled() ([]Definition, error) {
+	return bundled(func(Definition) bool { return true })
+}
+
+// bundled reads both bundles, keeping what the caller wants, ordered by type and
+// id so the result does not depend on how a map was walked.
+func bundled(keeping func(Definition) bool) ([]Definition, error) {
 	var held []Definition
 
 	for _, name := range embedded {
@@ -90,7 +108,11 @@ func StructureDefinitions() ([]Definition, error) {
 			return nil, err
 		}
 
-		held = append(held, found...)
+		for _, definition := range found {
+			if keeping(definition) {
+				held = append(held, definition)
+			}
+		}
 	}
 
 	slices.SortFunc(held, func(a, b Definition) int {
@@ -106,21 +128,34 @@ func StructureDefinitions() ([]Definition, error) {
 
 // definitionsIn reads one bundle.
 func definitionsIn(name string) ([]Definition, error) {
-	raw, err := bundles.Open(name)
+	opened, closer, err := openBundle(name)
 	if err != nil {
-		return nil, fmt.Errorf("%w: %s: %w", ErrUnreadableDefinitions, name, err)
+		return nil, err
 	}
 
-	defer func() { _ = raw.Close() }()
+	defer closer()
+
+	return definitionsFrom(opened, name)
+}
+
+// openBundle decompresses one embedded bundle, returning what closes it.
+func openBundle(name string) (io.Reader, func(), error) {
+	raw, err := bundles.Open(name)
+	if err != nil {
+		return nil, nil, fmt.Errorf("%w: %s: %w", ErrUnreadableDefinitions, name, err)
+	}
 
 	opened, err := gzip.NewReader(raw)
 	if err != nil {
-		return nil, fmt.Errorf("%w: %s: %w", ErrUnreadableDefinitions, name, err)
+		_ = raw.Close()
+
+		return nil, nil, fmt.Errorf("%w: %s: %w", ErrUnreadableDefinitions, name, err)
 	}
 
-	defer func() { _ = opened.Close() }()
-
-	return definitionsFrom(opened, name)
+	return opened, func() {
+		_ = opened.Close()
+		_ = raw.Close()
+	}, nil
 }
 
 // bundleEntry is as much of a Bundle as this reads: the resource, kept raw so
@@ -159,9 +194,9 @@ func definitionsFrom(held io.Reader, name string) ([]Definition, error) {
 	return found, nil
 }
 
-// definitionOf reads what one entry is, and reports whether it is a definition
-// this seeds. A bundle carries operations and compartments beside the
-// definitions; what is seeded is what this build says it seeds.
+// definitionOf reads what one entry is. A bundle carries operations and
+// compartments beside the definitions; which of them a caller wants is the
+// caller's to say.
 func definitionOf(content json.RawMessage) (Definition, bool) {
 	var held struct {
 		ResourceType string `json:"resourceType"`
@@ -174,7 +209,7 @@ func definitionOf(content json.RawMessage) (Definition, bool) {
 		return Definition{}, false
 	}
 
-	if held.ResourceType != "StructureDefinition" || held.ID == "" || held.URL == "" {
+	if held.ResourceType == "" || held.ID == "" {
 		return Definition{}, false
 	}
 

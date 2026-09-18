@@ -160,13 +160,16 @@ None of these are visible from reading the code.
 - **A compartment subject is created by naming it.** A `POST /Patient` mints an id no confined
   grant can name in advance, so it is refused; `PUT /Patient/{id}` under a grant naming that
   patient is how one is provisioned. Correct, and surprising the first time.
-- **Nothing validates a resource against its own definition.** `$validate` is served and the same
-  rules gate every write, but this build ships no `StructureDefinition`s: it checks the rules that
-  hold for every R4 resource — no null, no empty string, no empty array, an `id` that is the `id`
-  datatype, a relative reference that names an R4 type — plus the syntax of the elements it
-  indexes for search. It checks no cardinality, no profile and no terminology binding, so
-  `"status": "banana"` passes. Closing it means shipping the R4 definitions and walking them, and
-  it is still the largest single gap between this and a server somebody should trust with a chart.
+- **Nothing checks a resource against a profile or a terminology.** The R4 base definitions are
+  embedded, seeded at startup and read by the validator: an element nobody declared, a required one
+  that is absent, a repeating element written as a value, a choice written twice and a malformed
+  date are all refused, on `$validate` and on every write alike. What is not checked is a binding —
+  `"status": "banana"` passes — nor a profile, nor a FHIRPath invariant, nor whether a reference
+  resolves. That is the remaining gap between this and a server somebody should trust with a chart.
+- **A resource that nests past six levels of its own kind is unchecked there.** R4 lets an element
+  hold its own kind and a snapshot cannot write that out, so the model expands it to a bound. Past
+  it the content is not walked at all, because an element with no children in the model would have
+  everything inside it refused as undeclared.
 - **An install with one administrator who loses their phone has no way back through the API.**
   `DELETE /admin/projects/{project}/users/{user}/second-factor` is the recovery path, and it
   refuses the caller's own factor: an administrator who could reach around the code requirement

@@ -13,8 +13,10 @@ import (
 // finalObservation is one reading in whatever state the case is about, always
 // subject to the patient the conformance policy is confined to.
 func finalObservation(status string) string {
-	return `{"resourceType":"Observation","status":"` + status + `",` +
-		`"subject":{"reference":"Patient/` + string(conformancePatient) + `"}}`
+	return valid("Observation", map[string]string{
+		"status":  `"` + status + `"`,
+		"subject": `{"reference":"Patient/` + string(conformancePatient) + `"}`,
+	})
 }
 
 // filteredPolicy is the conformance policy with every clinical rule narrowed to
@@ -158,9 +160,12 @@ func TestAFilterOverASetAdmitsEveryValueItNamesOverHTTP(t *testing.T) {
 // richObservation carries members a projection can withhold, subject to the
 // patient the conformance policy is confined to.
 func richObservation() string {
-	return `{"resourceType":"Observation","status":"final",` +
-		`"note":[{"text":"private"}],"valueQuantity":{"value":7},` +
-		`"subject":{"reference":"Patient/` + string(conformancePatient) + `"}}`
+	return valid("Observation", map[string]string{
+		"status":        `"final"`,
+		"note":          `[{"text":"private"}]`,
+		"valueQuantity": `{"value":7}`,
+		"subject":       `{"reference":"Patient/` + string(conformancePatient) + `"}`,
+	})
 }
 
 // projectedPolicy is the conformance policy with every clinical rule returning

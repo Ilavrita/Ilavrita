@@ -6,6 +6,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/Ilavrita/Ilavrita/packages/conformance"
 	"github.com/Ilavrita/Ilavrita/packages/fhir"
 	"github.com/Ilavrita/Ilavrita/packages/search"
 	"github.com/Ilavrita/Ilavrita/packages/storage"
@@ -56,6 +57,21 @@ func Resource(resourceType storage.ResourceType, content []byte) Report {
 	report.checkServerOwned(held, string(resourceType))
 	report.walk(held, string(resourceType), 0)
 	report.checkIndexedElements(resourceType, content)
+
+	// And against what the type's own definition says it may hold. A build that
+	// cannot read its own definitions checks the rules above and no further,
+	// rather than refusing every resource: the definitions are what this server
+	// knows, not what a client did wrong.
+	model, err := conformance.Definitions()
+	if err != nil {
+		report.note(SeverityWarning, string(resourceType),
+			"This server could not read its own definitions, so this resource was "+
+				"not checked against one.")
+
+		return report
+	}
+
+	report.againstDefinition(model, string(resourceType), held)
 
 	return report
 }
@@ -116,12 +132,12 @@ func (r *Report) walk(held map[string]any, at string, depth int) {
 			continue
 		}
 
-		r.checkValue(value, where, depth)
+		r.checkRepresentation(value, where, depth)
 	}
 }
 
-// checkValue holds one element's value to the representation rules.
-func (r *Report) checkValue(value any, where string, depth int) {
+// checkRepresentation holds one element's value to the representation rules.
+func (r *Report) checkRepresentation(value any, where string, depth int) {
 	switch held := value.(type) {
 	case nil:
 		// R4's JSON representation has no null. An element with no value is
@@ -138,7 +154,7 @@ func (r *Report) checkValue(value any, where string, depth int) {
 		}
 
 		for index, member := range held {
-			r.checkValue(member, where+"["+strconv.Itoa(index)+"]", depth+1)
+			r.checkRepresentation(member, where+"["+strconv.Itoa(index)+"]", depth+1)
 		}
 	case map[string]any:
 		r.checkReference(held, where)

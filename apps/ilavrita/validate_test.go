@@ -40,9 +40,10 @@ func outcomeOf(t *testing.T, answer *httptest.ResponseRecorder) fhir.OperationOu
 func TestValidateAnswersWhatItFoundAndStoresNothing(t *testing.T) {
 	routes := servingFHIR(t, everyAction)
 
-	clean := validating(t, routes, "Observation",
-		`{"resourceType":"Observation","status":"final",`+
-			`"subject":{"reference":"Patient/`+string(conformancePatient)+`"}}`)
+	clean := validating(t, routes, "Observation", valid("Observation", map[string]string{
+		"status":  `"final"`,
+		"subject": `{"reference":"Patient/` + string(conformancePatient) + `"}`,
+	}))
 
 	assertStatus(t, clean, http.StatusOK)
 
@@ -51,8 +52,9 @@ func TestValidateAnswersWhatItFoundAndStoresNothing(t *testing.T) {
 		t.Errorf("a clean resource validated as %+v", issues)
 	}
 
-	broken := validating(t, routes, "Observation",
-		`{"resourceType":"Observation","status":null,"performer":[]}`)
+	broken := validating(t, routes, "Observation", valid("Observation", map[string]string{
+		"status": `null`, "performer": `[]`,
+	}))
 
 	// Still 200: the operation was performed, and the issues are the answer.
 	assertStatus(t, broken, http.StatusOK)
@@ -85,7 +87,7 @@ func TestValidateIsAuthorizedAsAWrite(t *testing.T) {
 	routes := servingFHIR(t, readActions)
 
 	assertStatus(t, validating(t, routes, "Observation",
-		`{"resourceType":"Observation","status":"final"}`), http.StatusForbidden)
+		valid("Observation", map[string]string{"status": `"final"`})), http.StatusForbidden)
 }
 
 // TestValidateRefusesATypeThisBuildDoesNotServe, the same as every other route
@@ -104,8 +106,10 @@ func TestAResourceThisServerWillNotStoreIsRefusedOnTheWayIn(t *testing.T) {
 
 	answer := call{
 		method: http.MethodPost, path: fhir.BasePath + "/Observation",
-		body: `{"resourceType":"Observation","status":null,` +
-			`"subject":{"reference":"patient/` + string(conformancePatient) + `"}}`,
+		body: valid("Observation", map[string]string{
+			"status":  `null`,
+			"subject": `{"reference":"patient/` + string(conformancePatient) + `"}`,
+		}),
 	}.send(t, routes)
 
 	assertStatus(t, answer, http.StatusBadRequest)
@@ -138,8 +142,10 @@ func TestAnUpdateCannotStoreWhatACreateCouldNot(t *testing.T) {
 
 	assertStatus(t, call{
 		method: http.MethodPut, path: resourcePath("Observation", id),
-		body: `{"resourceType":"Observation","id":"` + id + `","performer":[],` +
-			`"subject":{"reference":"Patient/` + string(conformancePatient) + `"}}`,
+		body: valid("Observation", map[string]string{
+			"id": `"` + id + `"`, "performer": `[]`,
+			"subject": `{"reference":"Patient/` + string(conformancePatient) + `"}`,
+		}),
 	}.send(t, routes), http.StatusBadRequest)
 }
 

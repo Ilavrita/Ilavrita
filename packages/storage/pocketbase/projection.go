@@ -167,17 +167,7 @@ func (s *ResourceStore) readPlacement(
 // them a partial resource to send back, and the read-back that renders the
 // write already answers for them.
 func refuseBlindReplace(scope storage.Scope, key storage.ResourceKey) error {
-	reads := authorizedGrants(scope, key, storage.ActionRead)
-	if len(reads) == 0 {
-		return nil
-	}
-
-	projections := make([]*storage.Projection, 0, len(reads))
-	for _, grant := range reads {
-		projections = append(projections, grant.Projection)
-	}
-
-	if storage.WidestProjection(projections) == nil {
+	if !scope.Withholds(key.Project, storeKind, key.Type, storage.ActionRead) {
 		return nil
 	}
 

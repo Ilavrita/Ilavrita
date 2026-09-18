@@ -8,6 +8,7 @@ import (
 
 	"github.com/Ilavrita/Ilavrita/packages/fhir"
 	"github.com/Ilavrita/Ilavrita/packages/storage"
+	sqlite "github.com/Ilavrita/Ilavrita/packages/storage/pocketbase"
 	"github.com/pocketbase/pocketbase/core"
 )
 
@@ -279,6 +280,14 @@ func replaceResource(
 	content json.RawMessage,
 	expect storage.VersionID,
 ) error {
+	// Asked before the body is, because no body could be right. A caller who can
+	// only ever see part of a resource cannot state the whole of one, and
+	// telling them an element is missing would send them to invent the content
+	// that was withheld from them and be refused again for the real reason.
+	if held.scope.Withholds(key.Project, storage.KindFHIR, key.Type, storage.ActionRead) {
+		return refuse(request, sqlite.ErrPartialView)
+	}
+
 	compartments, err := fhir.Compartments(string(key.Type), key.ID, content)
 	if err != nil {
 		return refuse(request, err)

@@ -94,8 +94,11 @@ func subscribe(t *testing.T, routes http.Handler, criteria string) string {
 
 	answer := call{
 		method: http.MethodPost, path: fhir.BasePath + "/Subscription",
-		body: `{"resourceType":"Subscription","criteria":"` + criteria +
-			`","status":"active","channel":{"type":"rest-hook","endpoint":"https://example.test/hook"}}`,
+		body: valid("Subscription", map[string]string{
+			"criteria": `"` + criteria + `"`,
+			"status":   `"active"`,
+			"channel":  `{"type":"rest-hook","endpoint":"https://example.test/hook"}`,
+		}),
 	}.send(t, routes)
 
 	assertStatus(t, answer, http.StatusCreated)
@@ -109,8 +112,10 @@ func observe(t *testing.T, routes http.Handler, status string) string {
 
 	answer := call{
 		method: http.MethodPost, path: fhir.BasePath + "/Observation",
-		body: `{"resourceType":"Observation","status":"` + status +
-			`","subject":{"reference":"Patient/` + string(conformancePatient) + `"}}`,
+		body: valid("Observation", map[string]string{
+			"status":  `"` + status + `"`,
+			"subject": `{"reference":"Patient/` + string(conformancePatient) + `"}`,
+		}),
 	}.send(t, routes)
 
 	assertStatus(t, answer, http.StatusCreated)
@@ -223,8 +228,10 @@ func TestASubscriptionNobodyTurnedOnDeliversNothing(t *testing.T) {
 
 	answer := call{
 		method: http.MethodPost, path: fhir.BasePath + "/Subscription",
-		body: `{"resourceType":"Subscription","criteria":"Observation?status=final",` +
-			`"status":"requested","channel":{"type":"rest-hook","endpoint":"https://example.test/hook"}}`,
+		body: valid("Subscription", map[string]string{
+			"criteria": `"Observation?status=final"`, "status": `"requested"`,
+			"channel": `{"type":"rest-hook","endpoint":"https://example.test/hook"}`,
+		}),
 	}.send(t, routes)
 
 	assertStatus(t, answer, http.StatusCreated)
@@ -384,8 +391,10 @@ func TestNothingIsEnqueuedForASubscriptionNobodyTurnedOn(t *testing.T) {
 
 	assertStatus(t, call{
 		method: http.MethodPost, path: fhir.BasePath + "/Subscription",
-		body: `{"resourceType":"Subscription","criteria":"Observation?status=final",` +
-			`"status":"off","channel":{"type":"rest-hook","endpoint":"https://example.test/hook"}}`,
+		body: valid("Subscription", map[string]string{
+			"criteria": `"Observation?status=final"`, "status": `"off"`,
+			"channel": `{"type":"rest-hook","endpoint":"https://example.test/hook"}`,
+		}),
 	}.send(t, routes), http.StatusCreated)
 
 	observe(t, routes, "final")

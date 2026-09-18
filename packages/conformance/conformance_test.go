@@ -138,3 +138,106 @@ func TestTheDefinitionsAreOrdered(t *testing.T) {
 		}
 	}
 }
+
+// TestAnElementThatHoldsItsOwnKindIsExpanded. R4 lets an element hold its own
+// kind — a Questionnaire item holds items, an OperationDefinition parameter
+// holds parts — which a snapshot cannot write out because it would not end. The
+// model expands it, and what it expands has to be there or every element a
+// nested resource writes reads as one nobody declared.
+func TestAnElementThatHoldsItsOwnKindIsExpanded(t *testing.T) {
+	model, err := conformance.Definitions()
+	if err != nil {
+		t.Fatalf("read the definitions: %v", err)
+	}
+
+	for _, held := range []struct {
+		named string
+		path  string
+	}{
+		{"Questionnaire", "item.item.text"},
+		{"Questionnaire", "item.item.item.linkId"},
+		{"OperationDefinition", "parameter.part.name"},
+		{"OperationDefinition", "parameter.part.part.min"},
+	} {
+		structure, defined := model.Structure(held.named)
+		if !defined {
+			t.Fatalf("no structure for %s", held.named)
+		}
+
+		if _, found := structure.Element(held.path); !found {
+			t.Errorf("%s.%s was not expanded", held.named, held.path)
+		}
+	}
+}
+
+// TestNoElementIsLeftWithNothingInsideIt. This is the invariant that stops the
+// expansion producing refusals for resources that are right.
+//
+// An element that names no type is one whose children are declared beneath it —
+// that is what resolving a reference leaves behind. If the expansion stopped
+// before it got there, the element would name no type and have no children, and
+// a walker would then report every element the resource wrote inside it as one
+// nobody declared. What is past the bound is marked opaque so nothing walks into
+// it at all.
+func TestNoElementIsLeftWithNothingInsideIt(t *testing.T) {
+	model, err := conformance.Definitions()
+	if err != nil {
+		t.Fatalf("read the definitions: %v", err)
+	}
+
+	stranded := 0
+
+	for _, name := range model.Types() {
+		structure, _ := model.Structure(name)
+
+		for path, element := range structure.Elements {
+			if len(element.Types) != 0 || element.Opaque {
+				continue
+			}
+
+			if len(structure.Names(path)) != 0 {
+				continue
+			}
+
+			stranded++
+
+			if stranded <= 5 {
+				t.Errorf("%s.%s names no type, holds nothing and is not opaque", name, path)
+			}
+		}
+	}
+
+	if stranded != 0 {
+		t.Errorf("%d elements are stranded", stranded)
+	}
+}
+
+// TestTheModelIsTheSameEveryTime. It is built by walking maps, and a model that
+// depended on the order they were walked would be a validator that refused a
+// resource on one run and accepted it on the next.
+func TestTheModelIsTheSameEveryTime(t *testing.T) {
+	model, err := conformance.Definitions()
+	if err != nil {
+		t.Fatalf("read the definitions: %v", err)
+	}
+
+	first := map[string]int{}
+	for _, name := range model.Types() {
+		structure, _ := model.Structure(name)
+		first[name] = len(structure.Elements)
+	}
+
+	// The same process holds one model, so what this can compare is the model
+	// against itself; TestTheSpecificationValidatesAgainstItself run repeatedly
+	// is what covers two processes disagreeing.
+	for _, name := range model.Types() {
+		structure, _ := model.Structure(name)
+		if len(structure.Elements) != first[name] {
+			t.Errorf("%s holds %d elements and held %d", name, len(structure.Elements), first[name])
+		}
+	}
+
+	if len(first) < 200 {
+		t.Errorf("the model holds %d types", len(first))
+	}
+}
