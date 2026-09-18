@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/Ilavrita/Ilavrita/packages/fhir"
+	"github.com/Ilavrita/Ilavrita/packages/search"
 	"github.com/Ilavrita/Ilavrita/packages/storage"
 	"github.com/pocketbase/pocketbase/apis"
 	"github.com/pocketbase/pocketbase/core"
@@ -20,6 +21,9 @@ const (
 	metadataPath        = "/metadata"
 	typePath            = "/{resourceType}"
 	typeHistoryPath     = "/{resourceType}/_history"
+	typeSearchPath      = "/{resourceType}/_search"
+	systemHistoryPath   = "/_history"
+	systemSearchPath    = "/_search"
 	instancePath        = "/{resourceType}/{id}"
 	instanceHistoryPath = "/{resourceType}/{id}/_history"
 	instanceVersionPath = "/{resourceType}/{id}/_history/{vid}"
@@ -35,8 +39,11 @@ const (
 
 const (
 	contentTypeField = "Content-Type"
-	acceptField      = "Accept"
-	formatParameter  = "_format"
+
+	// formContentType is the one media type R4 names for a posted search.
+	formContentType = "application/x-www-form-urlencoded"
+	acceptField     = "Accept"
+	formatParameter = "_format"
 )
 
 // servedInteraction is one interaction this build implements: the route that
@@ -59,6 +66,8 @@ var servedInteractions = []servedInteraction{
 	{fhir.InteractionDelete, http.MethodDelete, instancePath, deleteResource},
 	{fhir.InteractionInstanceHistory, http.MethodGet, instanceHistoryPath, listResourceHistory},
 	{fhir.InteractionVersionRead, http.MethodGet, instanceVersionPath, readResourceVersion},
+	{fhir.InteractionSearchType, http.MethodGet, typePath, searchResources},
+	{fhir.InteractionSearchType, http.MethodPost, typeSearchPath, searchResourcesByPost},
 }
 
 // The FHIR surface is owned by Ilavrita. PocketBase collections, admin routes
@@ -73,14 +82,29 @@ func registerFHIRRoutes(routes *router.Router[*core.RequestEvent]) {
 
 	base.GET(metadataPath, describeCapabilities)
 
-	// A reserved segment, not a logical id: every method an instance route
-	// answers is refused here, so none of them reads it as one.
+	// Reserved segments, not logical ids: every method an instance route answers
+	// is refused on them, so none of them reads one as an id. _search keeps the
+	// method it actually serves, which is registered below.
 	for _, method := range instanceMethods() {
 		base.Route(method, typeHistoryPath, rejectUnimplemented)
+
+		if method != http.MethodPost {
+			base.Route(method, typeSearchPath, rejectUnimplemented)
+		}
 	}
 
 	for _, served := range servedInteractions {
 		base.Route(served.method, served.path, audited(served.code, served.handler))
+	}
+
+	// Whole-system interactions. Each names an interaction rather than a
+	// resource type, so it answers "not supported" rather than "no such type" —
+	// which is what the bare /{resourceType} routes would otherwise make of it.
+	// They are registered per method rather than for any, because a literal path
+	// answering more methods than the pattern beside it is a routing conflict.
+	for _, method := range methodsOn(typePath) {
+		base.Route(method, systemHistoryPath, rejectUnimplemented)
+		base.Route(method, systemSearchPath, rejectUnimplemented)
 	}
 
 	base.Any(everythingElse, rejectUnimplemented)
@@ -89,10 +113,15 @@ func registerFHIRRoutes(routes *router.Router[*core.RequestEvent]) {
 // instanceMethods is every method registered on the instance path, which is
 // exactly what could otherwise match a reserved segment as a logical id.
 func instanceMethods() []string {
+	return methodsOn(instancePath)
+}
+
+// methodsOn lists the methods one path pattern answers.
+func methodsOn(path string) []string {
 	methods := make([]string, 0, len(servedInteractions))
 
 	for _, served := range servedInteractions {
-		if served.path == instancePath {
+		if served.path == path {
 			methods = append(methods, served.method)
 		}
 	}
@@ -164,6 +193,7 @@ func baseURL(request *core.RequestEvent) (string, error) {
 // travels with the stores, so no handler holds one without the other.
 type granted struct {
 	resources    storage.ResourceRepository
+	searches     search.Repository
 	versions     storage.VersionStore
 	transactions storage.Transactor
 	scope        storage.Scope
@@ -175,7 +205,14 @@ type granted struct {
 // what this server speaks, whether the type is an endpoint here at all, who is
 // asking, and the Scope for each action the interaction will perform.
 func begin(request *core.RequestEvent, actions []storage.Action) (granted, error) {
-	if err := negotiate(request); err != nil {
+	return beginReading(request, actions, bodyMediaTypes)
+}
+
+// beginReading is begin for a route whose body is not a FHIR resource.
+func beginReading(
+	request *core.RequestEvent, actions []storage.Action, accepted []string,
+) (granted, error) {
+	if err := negotiate(request, accepted); err != nil {
 		return granted{}, err
 	}
 
@@ -214,7 +251,8 @@ func permit(request *core.RequestEvent, resourceType storage.ResourceType, actio
 		}
 
 		held.resources, held.versions = allowed.Resources, allowed.Versions
-		held.transactions, held.project = allowed.Transactions, allowed.Project
+		held.searches, held.transactions = allowed.Searches, allowed.Transactions
+		held.project = allowed.Project
 		grants = append(grants, allowed.Scope.Grants()...)
 	}
 
@@ -264,12 +302,21 @@ func addressedVersion(request *core.RequestEvent) (storage.VersionID, error) {
 var (
 	acceptedMediaRanges = []string{"*/*", "application/*", "application/json", fhir.ContentType}
 	bodyMediaTypes      = []string{"application/json", fhir.ContentType}
-	acceptedFormats     = []string{"", "json", "application/json", fhir.ContentType}
+
+	// A posted search states a query, not a resource, so it is the one route
+	// that reads a form.
+	searchBodyMediaTypes = []string{formContentType}
+	acceptedFormats      = []string{"", "json", "application/json", fhir.ContentType}
 )
 
 // negotiate refuses a request this server cannot answer in the representation
 // asked for, before anything else looks at it.
-func negotiate(request *core.RequestEvent) error {
+//
+// accepted is what a body on this route may be sent as. It differs by route
+// because a posted search carries a form and every other body carries a
+// resource, and a route that accepted both would accept a resource submitted as
+// a form.
+func negotiate(request *core.RequestEvent, accepted []string) error {
 	if !acceptsJSON(request.Request.Header.Get(acceptField)) {
 		return unsupportedAccept
 	}
@@ -279,7 +326,7 @@ func negotiate(request *core.RequestEvent) error {
 	}
 
 	if carriesBody(request.Request.Method) &&
-		!slices.Contains(bodyMediaTypes, mediaType(request.Request.Header.Get(contentTypeField))) {
+		!slices.Contains(accepted, mediaType(request.Request.Header.Get(contentTypeField))) {
 		return unsupportedBody
 	}
 

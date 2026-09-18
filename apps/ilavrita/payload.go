@@ -388,8 +388,8 @@ func versionVerb(record storage.ResourceRecord, index, total int) fhir.HTTPVerb 
 func historyEntry(base string, record storage.ResourceRecord, verb fhir.HTTPVerb) (fhir.BundleEntry, error) {
 	entry := fhir.BundleEntry{
 		FullURL: resourceURL(base, record.Key),
-		Request: fhir.EntryRequest{Method: verb, URL: entryURL(record.Key, verb)},
-		Response: fhir.EntryResponse{
+		Request: &fhir.EntryRequest{Method: verb, URL: entryURL(record.Key, verb)},
+		Response: &fhir.EntryResponse{
 			Status:       entryStatus(verb),
 			ETag:         weakETag(record.Version),
 			LastModified: httpDate(record.LastUpdated),

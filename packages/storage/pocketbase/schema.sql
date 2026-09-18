@@ -1136,14 +1136,14 @@ CREATE TABLE IF NOT EXISTS audit_events (
   CHECK (principal_kind <> '' AND principal_id <> ''),
   CHECK (membership_id IS NULL OR membership_id <> ''),
 
-  -- A resource is named by both halves or by neither, so no row points at a
-  -- type with no id or an id belonging to no type. Both halves are tested for
-  -- NULL explicitly: "res_id <> ''" is NULL when res_id is, and a CHECK passes
-  -- on NULL, so the emptiness tests alone would admit a half-named row.
-  CHECK (
-    (res_type IS NULL AND res_id IS NULL)
-    OR (res_type IS NOT NULL AND res_id IS NOT NULL AND res_type <> '' AND res_id <> '')
-  )
+  -- An id belongs to a type. A search names a type and no id, which is what it
+  -- acted on; an id with no type names nothing at all.
+  --
+  -- The NULL tests are explicit because "res_id <> ''" is NULL when res_id is,
+  -- and a CHECK passes on NULL: the emptiness tests alone would admit a row
+  -- this one is written to refuse.
+  CHECK (res_type IS NULL OR res_type <> ''),
+  CHECK (res_id IS NULL OR (res_type IS NOT NULL AND res_id <> ''))
 );
 
 -- An incident reads one Project's events in the order they happened.

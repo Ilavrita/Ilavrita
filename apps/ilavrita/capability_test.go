@@ -40,10 +40,13 @@ func (s servedInteraction) request(resourceType, id string) call {
 
 	sent := call{method: s.method, path: fhir.BasePath + path}
 
-	switch s.method {
-	case http.MethodPost:
+	switch {
+	case s.path == typeSearchPath:
+		// A posted search states a query, not a resource.
+		sent.body, sent.contentType = "_id="+id, formContentType
+	case s.method == http.MethodPost:
 		sent.body = submission(resourceType)
-	case http.MethodPut:
+	case s.method == http.MethodPut:
 		sent.body = replacement(resourceType, id)
 	}
 

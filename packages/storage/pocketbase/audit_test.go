@@ -95,12 +95,12 @@ func TestAnAuditEventIsAppendOnly(t *testing.T) {
 	}
 
 	refused := map[string]string{
-		"an update":             "UPDATE audit_events SET outcome = 'allowed'",
-		"an update of who":      "UPDATE audit_events SET principal_id = 'someone-else'",
-		"a delete":              "DELETE FROM audit_events",
-		"a delete by key":       "DELETE FROM audit_events WHERE project_id = 'prj_a'",
-		"a free-text detail":    "INSERT INTO audit_events (project_id, id, at, principal_kind, principal_id, action, outcome, detail) VALUES ('prj_a', 'aud_x', 0, 'user', 'usr_1', 'read', 'refused', 'password was hunter2')",
-		"a half-named resource": "INSERT INTO audit_events (project_id, id, at, principal_kind, principal_id, action, res_type, outcome) VALUES ('prj_a', 'aud_y', 0, 'user', 'usr_1', 'read', 'Observation', 'allowed')",
+		"an update":                  "UPDATE audit_events SET outcome = 'allowed'",
+		"an update of who":           "UPDATE audit_events SET principal_id = 'someone-else'",
+		"a delete":                   "DELETE FROM audit_events",
+		"a delete by key":            "DELETE FROM audit_events WHERE project_id = 'prj_a'",
+		"a free-text detail":         "INSERT INTO audit_events (project_id, id, at, principal_kind, principal_id, action, outcome, detail) VALUES ('prj_a', 'aud_x', 0, 'user', 'usr_1', 'read', 'refused', 'password was hunter2')",
+		"an id belonging to no type": "INSERT INTO audit_events (project_id, id, at, principal_kind, principal_id, action, res_id, outcome) VALUES ('prj_a', 'aud_y', 0, 'user', 'usr_1', 'read', 'obs-1', 'allowed')",
 	}
 
 	for name, statement := range refused {

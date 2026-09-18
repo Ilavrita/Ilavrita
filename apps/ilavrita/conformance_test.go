@@ -41,7 +41,8 @@ var conformancePrincipal = project.PrincipalRef{
 
 // everyAction is what a principal exercising all six interactions must hold.
 var everyAction = []storage.Action{
-	storage.ActionRead, storage.ActionWrite, storage.ActionDelete, storage.ActionHistory,
+	storage.ActionRead, storage.ActionWrite, storage.ActionDelete,
+	storage.ActionHistory, storage.ActionSearch,
 }
 
 // fixedMembership answers with one standing membership, and with none for any

@@ -8,6 +8,7 @@ import (
 	"github.com/Ilavrita/Ilavrita/packages/audit"
 	"github.com/Ilavrita/Ilavrita/packages/authz"
 	"github.com/Ilavrita/Ilavrita/packages/project"
+	"github.com/Ilavrita/Ilavrita/packages/search"
 	"github.com/Ilavrita/Ilavrita/packages/storage"
 	sqlite "github.com/Ilavrita/Ilavrita/packages/storage/pocketbase"
 	"github.com/pocketbase/pocketbase/core"
@@ -55,6 +56,7 @@ type sessionResolver interface {
 // was decided for. They travel together, so no route holds one without them.
 type access struct {
 	Resources    storage.ResourceRepository
+	Searches     search.Repository
 	Versions     storage.VersionStore
 	Transactions storage.Transactor
 	Scope        storage.Scope

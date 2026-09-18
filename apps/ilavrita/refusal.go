@@ -6,6 +6,7 @@ import (
 	"net/http"
 
 	"github.com/Ilavrita/Ilavrita/packages/fhir"
+	"github.com/Ilavrita/Ilavrita/packages/search"
 	"github.com/Ilavrita/Ilavrita/packages/storage"
 	sqlite "github.com/Ilavrita/Ilavrita/packages/storage/pocketbase"
 	"github.com/pocketbase/pocketbase/core"
@@ -67,6 +68,12 @@ var (
 	unauthenticated = refusal{http.StatusUnauthorized, fhir.CodeLogin,
 		"This request carries no authenticated principal."}
 
+	unreadableSearch = refusal{http.StatusBadRequest, fhir.CodeInvalid,
+		"This search could not be read."}
+
+	unsupportedSearch = refusal{http.StatusBadRequest, fhir.CodeNotSupported,
+		"This server does not implement that search parameter."}
+
 	unreadableLogin = refusal{http.StatusBadRequest, fhir.CodeInvalid,
 		"A login names a project, an email address and a password."}
 
@@ -124,6 +131,11 @@ func translate(err error) refusal {
 		return throttled
 	case errors.Is(err, errMalformedLogin), errors.Is(err, errMalformedControlRequest):
 		return unreadableLogin
+	case errors.Is(err, search.ErrUnknownParameter), errors.Is(err, search.ErrUnsupportedModifier):
+		return unsupportedSearch
+	case errors.Is(err, search.ErrMalformedValue), errors.Is(err, search.ErrMalformedPaging),
+		errors.Is(err, errUnreadableSearchBody):
+		return unreadableSearch
 	case errors.Is(err, errNotAdmin), errors.Is(err, errNotSuperAdmin):
 		return notAuthorized
 	case errors.Is(err, errUnknownProject):

@@ -19,6 +19,7 @@ const (
 	InteractionUpdate          Interaction = "update"
 	InteractionDelete          Interaction = "delete"
 	InteractionInstanceHistory Interaction = "history-instance"
+	InteractionSearchType      Interaction = "search-type"
 )
 
 // servedResourceTypes is the closed list of R4 types this build serves. Storage

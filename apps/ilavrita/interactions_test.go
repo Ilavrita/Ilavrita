@@ -129,7 +129,8 @@ func assertHistory(t *testing.T, routes http.Handler, resourceType, id string) {
 	assertStatus(t, answer, http.StatusOK)
 
 	bundle := decodeBundle(t, answer)
-	if bundle.ResourceType != "Bundle" || bundle.Type != fhir.BundleHistory || bundle.Total != 3 {
+	if bundle.ResourceType != "Bundle" || bundle.Type != fhir.BundleHistory ||
+		bundle.Total == nil || *bundle.Total != 3 {
 		t.Fatalf("bundle is a %s %s of %d, want a history Bundle of 3",
 			bundle.ResourceType, bundle.Type, bundle.Total)
 	}
@@ -508,7 +509,6 @@ func TestUnimplementedInteractionsStillAnswerNotSupported(t *testing.T) {
 	routes := servingFHIR(t, everyAction)
 
 	for _, path := range []string{
-		fhir.BasePath + "/Organization",
 		fhir.BasePath + "/Organization/example/$everything",
 		fhir.BasePath + "/Organization/_history",
 		fhir.BasePath + "/_history",

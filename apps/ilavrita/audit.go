@@ -38,6 +38,7 @@ var auditedAs = map[fhir.Interaction]audit.Action{
 	fhir.InteractionDelete:          audit.ActionDelete,
 	fhir.InteractionInstanceHistory: audit.ActionHistory,
 	fhir.InteractionVersionRead:     audit.ActionHistory,
+	fhir.InteractionSearchType:      audit.ActionSearch,
 }
 
 // answered is what each status means in the audit's own vocabulary. It is keyed
@@ -289,7 +290,9 @@ func (b *backend) eventFor(
 		resource = project.ProfileRef{Type: slot.key.Type, ID: slot.key.ID}
 	}
 
-	if !resource.Valid() {
+	// A search names a type and no id: what it acted on is the type, and a row
+	// that dropped it would say less than what happened.
+	if resource.Type == "" {
 		resource = project.ProfileRef{}
 	}
 
