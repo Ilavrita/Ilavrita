@@ -1,20 +1,32 @@
 # Known limitations
 
-Ilavrita is a scaffold. This page is the authoritative statement of what it does
-not do, and it is kept accurate on purpose: a healthcare server that overstates
-its capabilities is worse than one that does little.
+This page is the authoritative statement of what Ilavrita does not do, and it is
+kept accurate on purpose: a healthcare server that overstates its capabilities is
+worse than one that does little.
+
+The largest thing it does not do is **validate a resource**. A body that is JSON
+and names the type the URL does is stored as sent, so this server will faithfully
+keep a clinically nonsensical record. That, more than anything else here, is why
+patient data does not belong in this build yet.
 
 ## What works
 
 - `GET /healthz` and `GET /version`
 - `GET /fhir/R4/metadata`, returning a CapabilityStatement generated from the
-  routes the server registered, declaring the types this build actually serves
+  routes the server registered, declaring the types and search parameters this
+  build actually serves
 - The six single-resource interactions — create, read, vread, update, delete and
   instance history — for the types that CapabilityStatement declares, with
   `ETag`, `Last-Modified`, `Location` and `If-Match` honoured
+- Search, as `GET /{type}?...` and `POST /{type}/_search`, answering a
+  `searchset` Bundle
 - Project isolation and authorization on every one of those interactions: each
   is decided against an `AccessPolicy` and bounded by a `Scope` the storage layer
-  compiles into the query
+  compiles into the query. A policy narrows by compartment, by an element's
+  value, and by which elements come back
+- An audit trail, written in the transaction that performed the thing it records
+- Password login with an optional TOTP second factor, and a login throttle
+  counted across the install
 
 A resource type is declared only once the conformance suite covers every status
 and header rule for it. A type that is not declared answers `404` on every route,
@@ -27,43 +39,66 @@ Every other `/fhir/R4` route answers `501 Not Implemented` as an
 
 | Area | State |
 | --- | --- |
-| Search, of any parameter type | Not implemented |
-| `_include`, `_revinclude`, chaining | Not implemented |
+| Search | Working, over a declared parameter set; anything outside it is refused, never ignored |
+| `_include`, `_revinclude`, chaining, `_sort` | Not implemented; refused rather than ignored |
 | History paging and filtering (`_count`, `_since`, `_at`, `_list`) | Ignored; see below |
-| Compartment-restricted policies | Authorable, but deny everything; see below |
 | Type-level and system-level history | Not implemented |
 | Bundle batch and transaction | Not implemented |
 | Conditional create, update, delete | Not implemented |
 | Conditional read (`If-None-Match`, `If-Modified-Since`) | Not implemented |
 | Patch | Not implemented |
 | Validation and `$validate` | Not implemented |
-| Clinical resource types | Served, reachable only through a compartment: a create is checked against the compartments the submitted resource declares |
-| Authentication | Working: password login, sessions, logout; see below |
-| Audit trail | Not implemented |
-| Binary and DocumentReference payloads | Not implemented |
-| Reindexing | Not implemented |
-| Migrations, backup, restore | Not implemented |
+| Clinical resource types | Served, reachable only through a compartment a policy names |
+| Authentication | Working: password, sessions, TOTP second factor, per-install throttle; see below |
+| Audit trail | Working: every interaction and login, in the transaction that did it |
+| Binary payloads | Working: bytes kept outside the database, placed by `securityContext` |
+| Subscriptions | Working: `rest-hook`, and `websocket` within one process; see below |
+| Reindexing | Not implemented; the index is rebuilt once when an install first gains it |
+| Backup, restore | Not implemented |
 | Structured logging, request correlation | Not implemented |
 
-`packages/search`, `packages/audit`, `packages/files`, `packages/config` and
-`packages/observability` are outlines that document intended behaviour.
+`packages/config` and `packages/observability` are outlines that document
+intended behaviour.
 
-## Compartments deny rather than restrict
+Search parameters are deliberately a short list. Each one is a projection a
+write has to maintain and a predicate a read has to compile, so
+`packages/search/registry.go` is what this build answers rather than what R4
+defines. Adding a type or a parameter means adding both.
 
-A policy rule may name a compartment, and one that does compiles into a real SQL
-predicate. Nothing in the server ever populates `fhir_resource_compartment`,
-though: that projection belongs to the search-index layer, which is not
-implemented. A compartment-restricted Grant therefore matches no row and reads
-as `404`, indistinguishable from absence.
+## A resource is placed by what it says, and only by that
 
-It fails closed, so no data is exposed by it. But a patient reading their own
-chart cannot work until the projection is written, and a deployment that
-authors such a policy will see refusals rather than a restricted view.
+A resource lands in the compartments its own content names — the patient a
+reading is about, the encounter it happened in — derived on write and replaced
+on every write that states new content. A confined policy reads through that
+projection, so a patient reading their own chart works.
 
-A write is refused outright under one: a row that does not exist yet has no
-compartment projection, so the caller could never read back what it wrote, and
-answering a committed create with `404` would strand the row under an id nobody
-was told. That is a `403` before anything is written.
+Two consequences worth knowing:
+
+A resource landing in **no** compartment cannot be written by a confined caller.
+It is refused with `403` before anything is stored, because a row its own author
+could not read back is one stranded under an id nobody was told. A subject-less
+Observation, or a `Binary` naming no `securityContext`, is that case.
+
+A confined caller cannot **move** a resource out of the compartments it holds.
+Writing `subject: Patient/someone-else` under a grant naming `Patient/mine` is
+the same act as creating it there, and is refused the same way.
+
+## Subscriptions reach one process
+
+A `rest-hook` subscription survives anything: the notification is a row, retried
+six times over about half an hour, and posted from whichever instance picks it
+up. The dialer refuses loopback, private and link-local addresses, because the
+subscriber chooses the URL and the server makes the request.
+
+A `websocket` subscription reaches only the instance the subscriber is connected
+to. A notification worked out elsewhere has nobody there to tell, and is recorded
+as never delivered rather than retried — retrying would not move it to the
+instance holding the socket. Use `rest-hook` where a notification must not be
+missed.
+
+Fan-out costs one search per subscription per write, done by a worker outside the
+request. It is fine at a handful of subscriptions and is the first thing to
+revisit if that number grows.
 
 ## Instance history is unbounded
 
@@ -94,11 +129,28 @@ disabled identity and an identity holding no standing in the Project are the sam
 telling them apart tells an attacker which addresses and Projects exist.
 
 The login route is rate limited: five failed attempts per identity and twenty per client address
-in a fifteen-minute window, checked before the password is proved, cleared by a success. It counts
-in process memory, so a second instance counts its own attempts.
+in a fifteen-minute window, checked before the password is proved, cleared by a success. The count
+lives in the database rather than in process memory, so several instances share one limit. What is
+counted against is a digest, never the address itself: a table of who tried to log in and failed
+is a list of this install's users and where they were.
 
-**What is still missing:** there is no audit trail and no MFA. There is no refresh either: a
-session expires and the credential is proved again.
+An identity may enrol a TOTP second factor. It is pending until a code proves it, and replacing
+one that is in force needs a code from the one it replaces — moving to a new phone and switching
+the factor off are the same request, and the code is what tells them apart. The factor in force
+stays in force until the new one is proved.
+
+The secret is sealed with `ILAVRITA_SEALING_KEY`. Unlike a password it cannot be hashed, because
+the server computes the same code the phone does; sealing means a leaked database file is not a
+list of everyone's second factor. A deployment that configured no key holds no factors rather
+than storing them in the clear.
+
+**What is still missing:**
+
+- **A recovery path for a lost second factor.** Replacing one needs a code from it, and there is
+  no administrator route around that. Somebody who loses their phone is locked out of that
+  account. The rule is deliberate — a self-service bypass is exactly the hole it closes — but the
+  administrator path that should sit beside it does not exist.
+- **Session refresh.** A session expires and the credential is proved again.
 
 ## Out of scope for v0.1
 

@@ -20,16 +20,27 @@
 ---
 
 > [!IMPORTANT]
-> **Ilavrita is a scaffold today, not a working FHIR server.**
+> **Ilavrita serves FHIR R4 today, and is not ready for patient data.**
 >
-> The repository, build, architectural boundaries, release pipeline and project
-> setup exist. The FHIR interactions do not. Every `/fhir/R4` route other than
-> `metadata` answers `501 Not Implemented`, and the CapabilityStatement declares
-> no supported resources — deliberately, because a server must never advertise
-> behaviour it has not implemented and tested.
+> The by-key interactions, search, authorization, audit and payload storage are
+> implemented and tested across 68 resource types. What is missing is listed
+> below and in [docs/known-limitations.md](docs/known-limitations.md); the
+> CapabilityStatement advertises only what the routes actually serve, because a
+> server must never claim behaviour it has not implemented and tested.
 >
-> **Do not put patient data in this build.** It enforces no authorization, no
-> Project boundary and no audit trail.
+> **Do not put patient data in this build yet.** Not because the boundaries are
+> absent — they are enforced and tested — but because:
+>
+> - **Nothing validates a resource.** A body that is JSON and names the right
+>   type is stored as sent. There is no `$validate` and no profile checking, so
+>   this server will faithfully keep a clinically nonsensical record.
+> - **A lost second factor cannot be recovered.** Replacing one needs a code
+>   from the one it replaces, and there is no administrator path around that
+>   yet. Somebody who loses their phone is locked out of that account.
+> - **There is no backup or restore tooling**, and no migration story beyond the
+>   schema this build applies to its own database at startup.
+> - **Nothing here has been through an external security review or an official
+>   FHIR conformance suite.** The tests are ours.
 
 > Picking this up cold? Start with [HANDOFF.md](HANDOFF.md) — what works, what does
 > not, and the traps that are invisible from the code.
@@ -68,15 +79,25 @@ and an architecture that does not have to be rewritten to reach a clustered one.
 | Capability | State |
 | --- | --- |
 | `GET /healthz`, `GET /version` | Working |
-| `GET /fhir/R4/metadata` | Working — declares no supported resources |
-| FHIR create, read, update, delete, history | Not implemented |
-| FHIR search | Not implemented |
+| `GET /fhir/R4/metadata` | Working — advertises exactly what the routes serve |
+| FHIR create, read, update, delete, history, vread | Working, 68 resource types |
+| FHIR search | Working — `GET` and `POST /_search`, over a declared parameter set |
+| Project isolation and authorization | Enforced — compartments, element filters, field restriction |
+| Audit trail | Working — every interaction and login, in the transaction that did it |
+| Authentication | Working — password, sessions, TOTP second factor, per-install throttle |
+| Binary payloads | Working — bytes stored outside the database |
+| Subscriptions | Working — `rest-hook`, and `websocket` within one process |
+| Resource validation and `$validate` | Not implemented |
 | Bundle batch and transaction | Not implemented |
-| Validation and `$validate` | Not implemented |
-| Project isolation, authorization, audit | Interfaces only, not enforced |
-| Binary and DocumentReference payloads | Not implemented |
-| Migrations, backup, restore | Not implemented |
+| Conditional create, update and delete | Not implemented |
+| Backup, restore, whole-system history | Not implemented |
 | PostgreSQL, SMART, Bulk Data, HL7v2, DICOM | Out of scope for v0.1 |
+
+Search is deliberately narrow: every parameter is a projection a write maintains
+and a predicate a read compiles, so `packages/search/registry.go` lists what is
+actually answered rather than what R4 defines. A parameter outside it is refused
+with `400`, never ignored — a search that silently drops a criterion returns more
+than it was asked for, and the caller cannot tell.
 
 [docs/known-limitations.md](docs/known-limitations.md) is the authoritative list,
 and [ROADMAP.md](ROADMAP.md) is the order things arrive in.

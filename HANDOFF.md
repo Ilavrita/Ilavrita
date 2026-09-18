@@ -30,8 +30,9 @@ Encounter it also names, because refusing those would refuse nearly every real o
 `401` to anything else. There is no development principal and no environment variable that names
 one: a request authenticates or it reaches nothing.
 
-Do not deploy this anywhere near patient data yet: no audit trail, no MFA, no rate limit on the
-login route, and no search.
+Do not deploy this anywhere near patient data yet. The audit trail, the second factor, the login
+throttle and search all exist now; what is missing is resource validation, a recovery path for a
+lost second factor, backup and restore, and any review of this by somebody other than us.
 
 A `client_application` or `bot` development principal now also needs a registered, active row in
 its Project, and an id carrying the `cli_` or `bot_` prefix. An id outside the namespace stops the
@@ -159,10 +160,15 @@ None of these are visible from reading the code.
 - **A compartment subject is created by naming it.** A `POST /Patient` mints an id no confined
   grant can name in advance, so it is refused; `PUT /Patient/{id}` under a grant naming that
   patient is how one is provisioned. Correct, and surprising the first time.
-- **No audit trail and no MFA.** Nothing records that anyone authenticated. The login route is
-  rate limited now — five failures per identity, twenty per address, fifteen-minute window,
-  checked before argon2id runs — but the counter is per process, so it is a limit rather than a
-  guarantee behind more than one instance.
+- **Nothing validates a resource.** A body that is JSON and names the type the URL does is stored
+  as sent. There is no `$validate`, no profile checking and no terminology binding, so this
+  server will faithfully keep a clinically nonsensical record. It is the largest single gap
+  between this and a server somebody should trust with a chart.
+- **A lost second factor has no recovery path.** Replacing one needs a code from the one it
+  replaces — which is what stops a stolen session switching it off — and there is no
+  administrator route around that yet. Somebody who loses their phone is locked out of that
+  account until one exists. That is the deliberate half of the trade; the missing half is the
+  administrator route.
 - **The control plane is a working subset, not the whole surface.** It creates Projects,
   invites identities, grants standing and registers client applications. AccessPolicy authoring,
   link management, credential rotation and every list endpoint are still store-only.
@@ -300,11 +306,25 @@ rule may cover them, and the other 28 all derive compartments, so a confined rul
 what it costs to advertise the *next* type, not a gap in the ones already served.
 
 **6. Second factors and the login throttle. Done.** An identity may enrol a TOTP factor at
-`POST /auth/mfa`; it is pending until a code proves it, so nothing can lock somebody out of their
-own account except their own phone. The code is carried with the password rather than asked for
-afterwards — a server that answered "now the code, please" would be saying the password was
-right, and would say it to anyone who guessed an address that exists. A refused code, a wrong
-password and an unknown address are one answer.
+`POST /auth/mfa`; it is pending until a code proves it, so nothing can put a factor between a
+person and their account except their own phone. The code is carried with the password rather
+than asked for afterwards — a server that answered "now the code, please" would be saying the
+password was right, and would say it to anyone who guessed an address that exists. A refused
+code, a wrong password and an unknown address are one answer.
+
+**Replacing a factor needs a code from the one it replaces.** This was a hole and is worth
+stating plainly: re-enrolling and switching the factor off are the same request, so without a
+code, a stolen session alone was enough to disable MFA — exactly what a second factor exists to
+survive. The rule was already applied to withdrawal and was simply missing next to it.
+
+The factor in force stays in force until the new one is proved, so moving to a new phone never
+leaves the account without one. Enrolling where nothing is in force still needs no code: an
+unproved factor protects nobody, and asking for one would strand whoever's first attempt went
+wrong.
+
+The cost of that rule is that **a lost phone has no self-service way back**. That is the right
+trade — a self-service bypass is the hole — but the administrator path that should sit beside it
+does not exist yet.
 
 The secret is sealed with `ILAVRITA_SEALING_KEY` (32 bytes, base64). Unlike a password it cannot
 be hashed: the server computes the same code the phone does, so whatever holds it holds the

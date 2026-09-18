@@ -11,7 +11,7 @@ v2.0 defines the whole platform rather than only the first server release. The
 capabilities below therefore belong to one product definition and must share a
 single security and Project model, even though they ship in phases.
 
-## Now — scaffold
+## Done — foundations
 
 - [x] Monorepo, build, and the pinned PocketBase fork
 - [x] Architecture boundaries expressed as interfaces
@@ -22,21 +22,31 @@ single security and Project model, even though they ship in phases.
 
 ## Phase 1 — FHIR core / v0.1
 
-- [ ] Resource create, read, update, delete
-- [ ] Immutable version history and versioned read
-- [ ] Optimistic concurrency through ETag and If-Match
-- [ ] Typed search indexes: string, token, reference, date, number, quantity, URI
-- [ ] Search parser, AST and SearchParameter registry
-- [ ] Paginated searchset Bundles
+- [x] Resource create, read, update, delete
+- [x] Immutable version history and versioned read
+- [x] Optimistic concurrency through ETag and If-Match
+- [x] Search parser and SearchParameter registry
+- [x] Paginated searchset Bundles
+- [x] OperationOutcome on every FHIR failure path
+- [x] Project isolation enforced in the query layer
+- [x] Authentication, authorization and an audit trail
+- [ ] Typed search indexes — string, token, reference and date are in; number,
+      quantity and URI are not
+- [ ] Binary and DocumentReference payloads — Binary is in, over local disk; the
+      S3-compatible store and any special handling of a DocumentReference's own
+      attachments are not
+- [ ] Reindexing — an install gaining the index backfills once; there is no
+      operator-triggered reindex
+- [ ] Migrations, backup, restore, upgrade and rollback procedures — the schema
+      is prepared at startup, including rebuilding a table to adopt a constraint;
+      backup, restore and rollback are not
 - [ ] Bundle batch and transaction, with proven atomic rollback
 - [ ] Structural validation and a baseline `$validate`
-- [ ] OperationOutcome on every FHIR failure path
-- [ ] Project isolation enforced in the query layer
-- [ ] Authentication, authorization and an audit trail
-- [ ] Binary and DocumentReference payloads, local and S3-compatible
-- [ ] Migrations, backup, restore, upgrade and rollback procedures
 - [ ] Single binary and container image
-- [ ] Reindexing
+
+**Structural validation is the one that matters most.** Everything else on this
+list is breadth; that one is the difference between a server that keeps a record
+and a server that keeps a record somebody can rely on.
 
 ## Phase 2 — control plane and developer platform
 
@@ -48,6 +58,12 @@ rules; OAuth and OIDC, SMART App Launch, MFA, external identity providers and
 token exchange; the TypeScript SDK, a CLI, GraphQL, subscriptions, terminology,
 implementation-guide packages, a stronger `$validate`, Bulk Data, async jobs,
 import and export, and expanded search behaviour.
+
+Several of these arrived early because Phase 1 needed them: Projects and
+memberships, AccessPolicy with parameterized authorization, client applications
+and service accounts, a TOTP second factor, and `rest-hook` and `websocket`
+subscriptions. What remains in this phase is the rest of the control-plane
+surface, OAuth and OIDC, external identity providers, and the developer tooling.
 
 ## Phase 3 — automation and application platform
 

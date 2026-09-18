@@ -160,18 +160,39 @@ paths:
         returned once, here, and never again: what is stored afterwards is
         sealed, and what an authenticator app holds is the person's own.
 
-        Enrolling replaces whatever the identity had, and the new factor is
-        pending until a code proves it. That is how somebody who lost their
-        phone starts again — and why it cannot lock anyone out, because a
-        pending factor is required of nobody.
+        **Enrolling over a factor that is in force needs a current code from
+        it.** Moving to a new phone and switching the factor off are the same
+        request, and the code is what tells them apart — without it, a stolen
+        session alone would be enough to disable the second factor, which is
+        exactly what it exists to survive. A missing or wrong code answers
+        `401`.
+
+        The factor in force stays in force until the new one is proved at
+        `/auth/mfa/activate`, so the move never leaves the account without one.
+
+        Enrolling where nothing is in force needs no code: an unproved factor
+        protects nobody, and asking for one would strand whoever's first
+        attempt went wrong.
+
+        There is no way back from a lost phone while a factor is in force. That
+        is deliberate — a self-service bypass would be the hole this rule
+        closes — and an administrator path does not exist yet.
 
         `501` is the answer from a deployment that configured no sealing key.
         Storing the secret in the clear instead would make the database a list
         of everyone's second factor.
       operationId: enrolSecondFactor
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/FactorCode"
       responses:
         "201":
           $ref: "#/components/responses/FactorEnrolled"
+        "400":
+          $ref: "#/components/responses/Invalid"
         "401":
           $ref: "#/components/responses/Unauthenticated"
         "500":
@@ -214,9 +235,13 @@ paths:
       tags: [Authentication]
       summary: Activate a second factor
       description: |
-        Proves a pending factor, which is the only way one becomes required.
-        Nothing can put a factor between a person and their account except a
-        code from the phone holding it.
+        Proves whatever is awaiting proof and puts it in force: a first
+        enrolment, or a replacement begun at `/auth/mfa`. This is the only way
+        a factor becomes required and the only way one is replaced — nothing
+        can put a factor between a person and their account, or swap the phone
+        that answers for it, except a code from that phone.
+
+        `409` is the answer when nothing is awaiting proof.
 
         A code is accepted once. Presenting the same one again is refused, so a
         code watched over somebody's shoulder is not good for the rest of its
@@ -237,6 +262,8 @@ paths:
           $ref: "#/components/responses/Unauthenticated"
         "404":
           $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
         "500":
           $ref: "#/components/responses/InternalFailure"
         "501":
