@@ -6,6 +6,7 @@ import (
 	"net/http"
 
 	"github.com/Ilavrita/Ilavrita/packages/fhir"
+	"github.com/Ilavrita/Ilavrita/packages/project"
 	"github.com/Ilavrita/Ilavrita/packages/search"
 	"github.com/Ilavrita/Ilavrita/packages/storage"
 	sqlite "github.com/Ilavrita/Ilavrita/packages/storage/pocketbase"
@@ -68,6 +69,15 @@ var (
 	unauthenticated = refusal{http.StatusUnauthorized, fhir.CodeLogin,
 		"This request carries no authenticated principal."}
 
+	codeRefused = refusal{http.StatusUnauthorized, fhir.CodeLogin,
+		"The second-factor code was refused."}
+
+	factorUnavailable = refusal{http.StatusNotImplemented, fhir.CodeNotSupported,
+		"This deployment is not configured to hold second factors."}
+
+	factorNotEnrolled = refusal{http.StatusNotFound, fhir.CodeNotFound,
+		"No second factor is enrolled for this identity."}
+
 	unreadableSearch = refusal{http.StatusBadRequest, fhir.CodeInvalid,
 		"This search could not be read."}
 
@@ -129,6 +139,12 @@ func translate(err error) refusal {
 		return unauthenticated
 	case errors.Is(err, errTooManyAttempts):
 		return throttled
+	case errors.Is(err, errFactorUnavailable):
+		return factorUnavailable
+	case errors.Is(err, errFactorNotEnrolled):
+		return factorNotEnrolled
+	case errors.Is(err, project.ErrCodeRefused), errors.Is(err, project.ErrMalformedCode):
+		return codeRefused
 	case errors.Is(err, errMalformedLogin), errors.Is(err, errMalformedControlRequest):
 		return unreadableLogin
 	case errors.Is(err, search.ErrUnknownParameter), errors.Is(err, search.ErrUnsupportedModifier):

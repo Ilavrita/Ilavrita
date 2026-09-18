@@ -57,6 +57,15 @@ type loginRequest struct {
 	Project  string `json:"project"`
 	Email    string `json:"email"`
 	Password string `json:"password"`
+
+	// Code is the second factor, when the identity has one. It is carried with
+	// the password rather than asked for afterwards: a server that answered
+	// "now the code, please" would be saying the password was right, and would
+	// say it to anyone who guessed an address that exists.
+	//
+	// So a client offers the field always and fills it when its user has a
+	// factor, which is something the person knows and the server never says.
+	Code string `json:"code,omitempty"`
 }
 
 // loginResponse is what a successful login returns. The token appears here once
@@ -93,6 +102,10 @@ func registerAuthRoutes(routes *router.Router[*core.RequestEvent]) {
 	base.POST(loginPath, logIn)
 	base.POST(logoutPath, logOut)
 	base.GET(sessionPath, describeSession)
+
+	base.POST(factorPath, enrolSecondFactor)
+	base.DELETE(factorPath, withdrawSecondFactor)
+	base.POST(factorActivatePath, activateSecondFactor)
 }
 
 // logIn proves a credential and issues one session. Every refusal answers the
@@ -207,7 +220,56 @@ func (b *backend) authenticate(
 		return project.Session{}, project.SessionToken{}, errCredentialsRefused
 	}
 
+	if err := b.proveSecondFactor(ctx, user.ID(), body.Code); err != nil {
+		return project.Session{}, project.SessionToken{}, err
+	}
+
 	return b.issue(ctx, owner.ID(), user.ID(), standing.ID())
+}
+
+// proveSecondFactor requires the code when the identity has a factor it proved.
+//
+// A refusal is errCredentialsRefused, the same answer a wrong password gets: a
+// distinct one would tell whoever is guessing that the password was right, and
+// that this identity exists and has a second factor.
+//
+// A pending factor requires nothing. It was enrolled and never proved, and a
+// person who scanned the code and then lost the phone must still be able to log
+// in and start again.
+func (b *backend) proveSecondFactor(ctx context.Context, user project.UserID, code string) error {
+	if !b.factors.Available() {
+		return nil
+	}
+
+	factor, enrolled, err := b.factors.Enrolled(ctx, user)
+	if err != nil {
+		// A factor this deployment cannot open is not one anybody proved.
+		// Treating it as absent would turn a misconfigured key into a way past
+		// everyone's second factor.
+		return err
+	}
+
+	if !enrolled || !factor.Required() {
+		return nil
+	}
+
+	proved, err := factor.Prove(code, b.clock())
+	if err != nil {
+		return errCredentialsRefused
+	}
+
+	if err := b.factors.Prove(ctx, proved); err != nil {
+		// Only a refused code is a refused credential. A fault in this server is
+		// not one: reporting it as a wrong password would both lie and count an
+		// outage against the throttle of somebody whose code was right.
+		if errors.Is(err, project.ErrCodeRefused) {
+			return errCredentialsRefused
+		}
+
+		return err
+	}
+
+	return nil
 }
 
 // identity proves the credential in the Project's own realm, then in the system

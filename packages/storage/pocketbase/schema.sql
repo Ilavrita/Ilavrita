@@ -1270,3 +1270,38 @@ CREATE TABLE IF NOT EXISTS login_attempts (
 
 -- The count one attempt asks for: one key's failures inside the window.
 CREATE INDEX IF NOT EXISTS ix_login_attempts_key ON login_attempts (key, at);
+
+-- ===========================================================================
+-- Second factors. One per identity, because a person proves they are
+-- themselves once rather than choosing which of several ways to.
+-- ===========================================================================
+
+-- The secret is sealed, not hashed. A password can be hashed because the server
+-- only ever has to recognise it; this one the server has to compute with, so
+-- whatever holds it holds the factor. Sealing means a database read on its own
+-- — a leaked backup, a replica, a stolen file — does not hand over anyone's
+-- second factor, because the key lives in the deployment's environment.
+
+-- last_step is the counter of the last code accepted. A code at or before it is
+-- a replay: without this a code watched over someone's shoulder is good for the
+-- rest of its thirty seconds.
+
+-- No tenant column. A user is an identity in the install, and the realm its
+-- membership resolves in is the users row's own business.
+CREATE TABLE IF NOT EXISTS user_second_factors (
+  user_id       TEXT NOT NULL PRIMARY KEY
+                REFERENCES users (id) ON DELETE CASCADE ON UPDATE RESTRICT,
+  state         TEXT NOT NULL CHECK (state IN ('pending', 'active')),
+  sealed_secret TEXT NOT NULL,
+  last_step     BIGINT NOT NULL DEFAULT 0,
+  created_at    BIGINT NOT NULL,
+  activated_at  BIGINT,
+
+  CHECK (sealed_secret <> ''),
+  CHECK (last_step >= 0),
+
+  -- A factor is active only once a code proved the person holds it. Enrolling
+  -- one and never proving it must not lock anyone out of their own account.
+  CHECK (state <> 'active' OR activated_at IS NOT NULL),
+  CHECK (state = 'active' OR activated_at IS NULL)
+);

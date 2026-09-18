@@ -335,6 +335,7 @@ type call struct {
 	contentType string
 	host        string
 	origin      string
+	bearer      string
 	anonymous   bool
 }
 
@@ -372,8 +373,13 @@ func (c call) send(t *testing.T, routes http.Handler) *httptest.ResponseRecorder
 	}
 
 	// The surface authenticates now, so a call that names no session reaches
-	// nothing. A test that wants that answer sets anonymous.
-	if !c.anonymous {
+	// nothing. A test that wants that answer sets anonymous; one acting as a
+	// session it actually obtained names the token.
+	switch {
+	case c.anonymous:
+	case c.bearer != "":
+		sent.Header.Set(authorizationField, bearerPrefix+c.bearer)
+	default:
 		sent.Header.Set(authorizationField, bearerPrefix+"conformance-token")
 	}
 

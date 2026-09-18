@@ -30,6 +30,16 @@ type backend struct {
 	applications *sqlite.ClientApplicationStore
 	resolvers    authz.Resolvers
 
+	// factors holds the second factor an identity proved. A backend wired
+	// without one requires none, which is what a deployment that configured no
+	// sealing key can honestly offer.
+	factors *sqlite.FactorStore
+
+	// now is what this server reads the time from. It is a field so a test can
+	// move it: a second factor turns on a thirty-second step, and a suite that
+	// had to wait one out would either be slow or be testing something else.
+	now func() time.Time
+
 	// audits records what happened. A backend wired without one records
 	// nothing, which is a wiring mistake rather than a decision — so the
 	// decorator asks before it opens a transaction, and a process serving
@@ -61,6 +71,16 @@ type access struct {
 	Transactions storage.Transactor
 	Scope        storage.Scope
 	Project      storage.ProjectID
+}
+
+// clock is the time this server reads, falling back to the real one so weak
+// wiring cannot substitute a clock that never advances.
+func (b *backend) clock() time.Time {
+	if b == nil || b.now == nil {
+		return time.Now().UTC()
+	}
+
+	return b.now().UTC()
 }
 
 // decision names the one triple a Scope answers. A Scope built to read Patient
@@ -115,6 +135,7 @@ func newBackend(db *sql.DB) *backend {
 		memberships:  sqlite.NewMembershipStore(db),
 		applications: sqlite.NewClientApplicationStore(db),
 		audits:       sqlite.NewAuditStore(db),
+		factors:      sqlite.NewFactorStore(db, sealingKey()),
 		attempts:     newAttemptLimiter(sqlite.NewAttemptStore(db), nil),
 		resolvers: authz.Resolvers{
 			Memberships: sqlite.NewMembershipResolver(db),
