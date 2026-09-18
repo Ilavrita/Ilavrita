@@ -67,7 +67,7 @@ Every other `/fhir/R4` route answers `501 Not Implemented` as an
 | Patch | Not implemented |
 | Validation and `$validate` | Not implemented |
 | Clinical resource types | Served, reachable only through a compartment a policy names |
-| Authentication | Working: password, sessions, TOTP second factor, per-install throttle; see below |
+| Authentication | Working: password, sessions, TOTP second factor with an administrator recovery path, per-install throttle; see below |
 | Audit trail | Working: every interaction and login, in the transaction that did it |
 | Binary payloads | Working: bytes kept outside the database, placed by `securityContext` |
 | DocumentReference | Working: the document is a `Binary` its attachment names; inlined bytes are refused |
@@ -226,12 +226,20 @@ the server computes the same code the phone does; sealing means a leaked databas
 list of everyone's second factor. A deployment that configured no key holds no factors rather
 than storing them in the clear.
 
+A lost phone is recovered by somebody else. `DELETE /admin/projects/{project}/users/{user}/second-factor`
+takes a factor off an identity, and needs standing to administer that Project — the identity must hold
+standing there, and an identity holding none is the same answer as one that does not exist. The
+identity is signed out everywhere as part of it, because the reset is also what an operator reaches
+for when the phone was stolen rather than lost. It is recorded against who did it and to whom.
+
+**An administrator cannot recover their own.** That is the hole the whole design closes: withdrawing
+your own factor needs a code from it, so an administrator who could reach around that with their own
+session would make a stolen administrator session enough to disable the factor it was meant to
+survive. The cost is real — an install with one administrator who loses their phone has no way back
+through the API, and an operator has to reach the database.
+
 **What is still missing:**
 
-- **A recovery path for a lost second factor.** Replacing one needs a code from it, and there is
-  no administrator route around that. Somebody who loses their phone is locked out of that
-  account. The rule is deliberate — a self-service bypass is exactly the hole it closes — but the
-  administrator path that should sit beside it does not exist.
 - **Session refresh.** A session expires and the credential is proved again.
 
 ## Out of scope for v0.1

@@ -131,6 +131,7 @@ func registerControlRoutes(routes *router.Router[*core.RequestEvent]) {
 	base.POST(identitiesPath, inviteIdentity)
 	base.POST(membershipsPath, grantMembership)
 	base.POST(applicationsPath, registerApplication)
+	base.DELETE(secondFactorPath, recoverSecondFactor)
 }
 
 // administers resolves the standing a control-plane request rests on. It reads

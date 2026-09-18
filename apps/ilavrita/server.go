@@ -84,6 +84,14 @@ type sessionResolver interface {
 	// server may serve as. A bound socket holds no token to present again, so
 	// this is asked of the session it named.
 	Live(ctx context.Context, proj project.ID, id project.SessionID, now time.Time) (bool, error)
+
+	// RevokeEveryUserSession signs one identity out of one Project everywhere.
+	// It is what a stolen token is answered with, and what a recovered second
+	// factor takes with it: a session open on the phone that was lost would
+	// otherwise outlive the factor.
+	RevokeEveryUserSession(
+		ctx context.Context, proj project.ID, user project.UserID, at time.Time,
+	) (int64, error)
 }
 
 // access is what one authorized interaction may do: the storage it reads and

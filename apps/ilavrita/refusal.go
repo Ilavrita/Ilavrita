@@ -96,6 +96,13 @@ var (
 	factorUnavailable = refusal{http.StatusNotImplemented, fhir.CodeNotSupported,
 		"This deployment is not configured to hold second factors."}
 
+	unknownIdentity = refusal{http.StatusNotFound, fhir.CodeNotFound,
+		"No such identity holds standing in that project."}
+
+	ownFactor = refusal{http.StatusForbidden, fhir.CodeForbidden,
+		"An identity's own second factor is withdrawn with a code from it, " +
+			"never through this route."}
+
 	factorNotEnrolled = refusal{http.StatusNotFound, fhir.CodeNotFound,
 		"No second factor is enrolled for this identity."}
 
@@ -186,6 +193,10 @@ func translate(err error) refusal {
 		return factorUnavailable
 	case errors.Is(err, errFactorNotEnrolled):
 		return factorNotEnrolled
+	case errors.Is(err, errNoSuchIdentity):
+		return unknownIdentity
+	case errors.Is(err, errOwnFactor):
+		return ownFactor
 	case errors.Is(err, project.ErrCodeRefused), errors.Is(err, project.ErrMalformedCode),
 		errors.Is(err, project.ErrFactorInForce):
 		return codeRefused

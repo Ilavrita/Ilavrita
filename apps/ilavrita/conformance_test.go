@@ -103,6 +103,12 @@ func (f fixedSession) Revoke(context.Context, project.ID, project.SessionID, tim
 	return nil
 }
 
+func (f fixedSession) RevokeEveryUserSession(
+	context.Context, project.ID, project.UserID, time.Time,
+) (int64, error) {
+	return 0, nil
+}
+
 func (f fixedSession) Live(
 	context.Context, project.ID, project.SessionID, time.Time,
 ) (bool, error) {
