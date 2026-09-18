@@ -78,6 +78,11 @@ type sessionResolver interface {
 	Issue(ctx context.Context, session project.Session) error
 	Resolve(ctx context.Context, token project.SessionToken, now time.Time) (project.Session, bool, error)
 	Revoke(ctx context.Context, proj project.ID, id project.SessionID, at time.Time) error
+
+	// Live answers whether a session a socket bound earlier is still one this
+	// server may serve as. A bound socket holds no token to present again, so
+	// this is asked of the session it named.
+	Live(ctx context.Context, proj project.ID, id project.SessionID, now time.Time) (bool, error)
 }
 
 // access is what one authorized interaction may do: the storage it reads and

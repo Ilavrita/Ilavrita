@@ -90,6 +90,12 @@ six times over about half an hour, and posted from whichever instance picks it
 up. The dialer refuses loopback, private and link-local addresses, because the
 subscriber chooses the URL and the server makes the request.
 
+A socket is authorized once, at the connect, and then held — so the session
+behind it is asked after again rather than assumed. A logout or an expiry closes
+it within thirty seconds, and nothing is delivered over it in between: the
+delivery path checks as well. The connection never outlives the session, whatever
+the idle bound says.
+
 A `websocket` subscription reaches only the instance the subscriber is connected
 to. A notification worked out elsewhere has nobody there to tell, and is recorded
 as never delivered rather than retried — retrying would not move it to the

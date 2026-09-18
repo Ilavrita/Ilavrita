@@ -180,3 +180,32 @@ func (s *SessionStore) RevokeEveryUserSession(
 
 	return revoked, nil
 }
+
+// Live reports whether one session is still one a request may be served as.
+//
+// It answers from the row rather than from a token, because a socket bound
+// earlier holds no token to present again — and must not: a credential kept in
+// memory for the life of a connection is one a crash dump carries. What it
+// still holds is which session it was, and that is enough to ask whether that
+// session is still there.
+func (s *SessionStore) Live(
+	ctx context.Context, owner project.ID, id project.SessionID, now time.Time,
+) (bool, error) {
+	const query = "SELECT state, expires_at FROM sessions WHERE project_id = ? AND id = ?"
+
+	var (
+		state     string
+		expiresAt int64
+	)
+
+	switch err := conn(ctx, s.db).QueryRowContext(ctx, query, string(owner), string(id)).
+		Scan(&state, &expiresAt); {
+	case errors.Is(err, sql.ErrNoRows):
+		return false, nil
+	case err != nil:
+		return false, fmt.Errorf("pocketbase: read a session's standing: %w", err)
+	}
+
+	return project.SessionState(state) == project.SessionActive &&
+		now.Before(time.UnixMilli(expiresAt).UTC()), nil
+}

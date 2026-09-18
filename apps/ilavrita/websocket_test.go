@@ -267,3 +267,94 @@ func TestOnlyABindBinds(t *testing.T) {
 		t.Errorf("bind answered %q (ok=%v)", answer, ok)
 	}
 }
+
+// TestASocketIsClosedWhenItsSessionEnds. Every other route proves a token on
+// each request, so a logout takes effect on the next one. A socket is
+// authorized once and then held, so without a watch it would outlive the
+// session it bound under for as long as the connection lasted.
+func TestASocketIsClosedWhenItsSessionEnds(t *testing.T) {
+	routes, _, _, _ := watchingServer(t)
+
+	serving.sockets.interval = 20 * time.Millisecond
+
+	server := httptest.NewServer(routes)
+	defer server.Close()
+
+	id := subscribeOver(t, routes, "Observation?status=final", "websocket", "")
+
+	socket := connected(t, server, conformanceTokenValue)
+
+	if answer, ok := says(t, socket, "bind "+id); !ok || answer != "bound "+id {
+		t.Fatalf("bind answered %q (ok=%v)", answer, ok)
+	}
+
+	endTheSession(t)
+
+	ctx, stop := context.WithTimeout(context.Background(), 2*time.Second)
+	defer stop()
+
+	_, _, err := socket.Read(ctx)
+	if err == nil {
+		t.Fatal("a socket whose session ended is still being served")
+	}
+
+	if reason := websocket.CloseStatus(err); reason != websocket.StatusPolicyViolation {
+		t.Errorf("the socket closed with %v, want a policy violation", reason)
+	}
+}
+
+// TestASubscriberWhoseSessionEndedIsNotPinged. The watch bounds how long a
+// closed session leaves a socket open; this is what makes it never told
+// anything in between, which is the part that matters — a ping says a resource
+// this subscriber may read has changed, and somebody who logged out is no
+// longer that subscriber.
+func TestASubscriberWhoseSessionEndedIsNotPinged(t *testing.T) {
+	routes, db, _, worker := watchingServer(t)
+
+	worker.channels = map[subscription.Channel]deliverer{subscription.ChannelWebSocket: serving.sockets}
+
+	// Long enough that the watch cannot be what closed the socket: what is
+	// asserted here is the check the delivery itself makes.
+	serving.sockets.interval = time.Hour
+
+	server := httptest.NewServer(routes)
+	defer server.Close()
+
+	id := subscribeOver(t, routes, "Observation?status=final", "websocket", "")
+
+	socket := connected(t, server, conformanceTokenValue)
+
+	if answer, ok := says(t, socket, "bind "+id); !ok || answer != "bound "+id {
+		t.Fatalf("bind answered %q (ok=%v)", answer, ok)
+	}
+
+	endTheSession(t)
+	observe(t, routes, "final")
+	worker.pass(context.Background())
+
+	if notice, heard := hears(t, socket, 2*time.Second); heard && notice == "ping "+id {
+		t.Error("a subscriber whose session ended was told its subscription fired")
+	}
+
+	held := deliveryStates(t, db)
+	if len(held) != 1 || held[0] != string(subscription.Abandoned) {
+		t.Errorf("the delivery is %v, want it recorded as never made", held)
+	}
+}
+
+// TestASocketOutlivesNeitherItsSessionNorTheIdleBound. A session shorter than
+// the idle bound is what actually ends the connection, and asking the store
+// again is not how that is noticed — the deadline is known at the connect.
+func TestASocketOutlivesNeitherItsSessionNorTheIdleBound(t *testing.T) {
+	now := time.Date(2024, time.March, 1, 12, 0, 0, 0, time.UTC)
+
+	shorter := earlier(now.Add(connectionMaxIdle), now.Add(time.Minute))
+	if !shorter.Equal(now.Add(time.Minute)) {
+		t.Errorf("a session ending in a minute is held for %v", shorter.Sub(now))
+	}
+
+	longer := earlier(now.Add(connectionMaxIdle), now.Add(12*time.Hour))
+	if !longer.Equal(now.Add(connectionMaxIdle)) {
+		t.Errorf("a long session is held for %v, want the idle bound", longer.Sub(now))
+	}
+}

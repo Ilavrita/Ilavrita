@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/Ilavrita/Ilavrita/packages/authz"
 	"github.com/Ilavrita/Ilavrita/packages/fhir"
@@ -363,4 +364,63 @@ func TestARevokedMembershipStopsAnExistingSessionReaching(t *testing.T) {
 	// The token is still live; the standing behind it is not.
 	assertStatus(t, bearer(t, routes, http.MethodGet, "/fhir/R4/Organization/nothing", token, ""),
 		http.StatusForbidden)
+}
+
+// TestALoggedOutSessionIsNoLongerLive. A socket bound earlier holds no token to
+// present again — and must not keep one, because a credential held for the life
+// of a connection is one a crash dump carries. What it asks after instead is the
+// session it named, which has to answer the same thing the token route does.
+func TestALoggedOutSessionIsNoLongerLive(t *testing.T) {
+	routes, db := authenticatedServer(t)
+
+	token := tokenFrom(t, logInOver(t, routes, loginAddress, loginPassword))
+
+	parsed, err := project.ParseSessionToken(token)
+	if err != nil {
+		t.Fatalf("parse the token the login returned: %v", err)
+	}
+
+	ctx := context.Background()
+	sessions := sqlite.NewSessionStore(db)
+	now := serving.clock()
+
+	held, found, err := sessions.Resolve(ctx, parsed, now)
+	if err != nil || !found {
+		t.Fatalf("resolve the session: %v (found=%v)", err, found)
+	}
+
+	live, err := sessions.Live(ctx, held.Project(), held.ID(), now)
+	if err != nil || !live {
+		t.Fatalf("a session just issued reports live=%v (%v)", live, err)
+	}
+
+	// A session belongs to one Project, and is asked after as that pair. An id
+	// alone would let a socket in one Project be held open by a row in another.
+	// Asked while the session is still live, so the Project is what decides it.
+	live, err = sessions.Live(ctx, "another-project", held.ID(), now)
+	if err != nil || live {
+		t.Errorf("a session read under the wrong Project reports live=%v (%v)", live, err)
+	}
+
+	// An expiry needs no row to change: the session simply stops being one.
+	live, err = sessions.Live(ctx, held.Project(), held.ID(), held.ExpiresAt().Add(time.Second))
+	if err != nil || live {
+		t.Errorf("a session past its expiry reports live=%v (%v)", live, err)
+	}
+
+	assertStatus(t, bearer(t, routes, http.MethodPost, authBasePath+logoutPath, token, ""),
+		http.StatusNoContent)
+
+	live, err = sessions.Live(ctx, held.Project(), held.ID(), now)
+	if err != nil || live {
+		t.Errorf("a logged-out session reports live=%v (%v)", live, err)
+	}
+
+	// An id nobody issued is not live either, and is not an error: a socket
+	// asking after a session that is simply gone is the ordinary case.
+	live, err = sessions.Live(ctx, held.Project(), "ses_never_issued", now)
+	if err != nil || live {
+		t.Errorf("an unissued session reports live=%v (%v)", live, err)
+	}
+
 }

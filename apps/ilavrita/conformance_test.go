@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -69,6 +70,10 @@ func (f fixedMembership) Membership(
 type fixedSession struct {
 	proj      project.ID
 	principal project.PrincipalRef
+
+	// ended is what a logout elsewhere looks like to a socket already
+	// connected: the token still parses, and the session behind it is gone.
+	ended *atomic.Bool
 }
 
 func (f fixedSession) Issue(context.Context, project.Session) error {
@@ -96,6 +101,24 @@ func (f fixedSession) Resolve(
 
 func (f fixedSession) Revoke(context.Context, project.ID, project.SessionID, time.Time) error {
 	return nil
+}
+
+func (f fixedSession) Live(
+	context.Context, project.ID, project.SessionID, time.Time,
+) (bool, error) {
+	return f.ended == nil || !f.ended.Load(), nil
+}
+
+// endTheSession makes the wired resolver report the caller's session gone.
+func endTheSession(t *testing.T) {
+	t.Helper()
+
+	held, ok := serving.sessions.(fixedSession)
+	if !ok || held.ended == nil {
+		t.Fatal("the wired session resolver cannot report a session ending")
+	}
+
+	held.ended.Store(true)
 }
 
 type activeProject struct{}
@@ -222,7 +245,9 @@ func serveUnder(t *testing.T, db *sql.DB, proj project.ID, policy authz.AccessPo
 			Policies:    fixedPolicy{policy},
 			Links:       noProjectLinks{},
 		},
-		sessions: fixedSession{proj: proj, principal: conformancePrincipal},
+		sessions: fixedSession{
+			proj: proj, principal: conformancePrincipal, ended: &atomic.Bool{},
+		},
 	})
 }
 

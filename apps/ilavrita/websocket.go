@@ -33,6 +33,13 @@ const (
 	pingDeadline      = 5 * time.Second
 	maxBindMessage    = 512
 	connectionMaxIdle = 10 * time.Minute
+
+	// sessionCheckInterval is how often a bound socket asks whether the session
+	// it bound under is still there. Every other route proves a token on each
+	// request; this one is authorized once and then held, so the check that
+	// route makes for free has to be made on a clock instead. It bounds how long
+	// a logout elsewhere leaves this socket open.
+	sessionCheckInterval = 30 * time.Second
 )
 
 // The messages R4 defines for this channel. They are plain text, deliberately:
@@ -53,10 +60,14 @@ var (
 	errNotYours = errors.New("ilavrita: a subscriber binds only to its own subscription")
 )
 
-// listener is one bound socket.
+// listener is one bound socket, held under the session that bound it.
 type listener struct {
 	socket *websocket.Conn
-	done   chan struct{}
+
+	// alive answers whether that session is still one this server may serve as.
+	// It is a function rather than a store so the hub reaches no database: what
+	// a bound socket needs is this one question, asked about itself.
+	alive func(context.Context) bool
 }
 
 // hub holds the sockets bound in this process and tells them when their
@@ -71,6 +82,11 @@ type listener struct {
 type hub struct {
 	mutex sync.RWMutex
 	bound map[boundKey][]*listener
+
+	// interval is how often a bound socket re-asks after its session. It is a
+	// field rather than a constant read in place so a test can watch a session
+	// end without waiting out the real one.
+	interval time.Duration
 }
 
 // boundKey names one Project's one subscription.
@@ -80,7 +96,7 @@ type boundKey struct {
 }
 
 func newHub() *hub {
-	return &hub{bound: map[boundKey][]*listener{}}
+	return &hub{bound: map[boundKey][]*listener{}, interval: sessionCheckInterval}
 }
 
 // bind registers one socket against one subscription and returns how to undo it.
@@ -137,6 +153,15 @@ func (h *hub) Deliver(
 	told := 0
 
 	for _, socket := range bound {
+		// The session is asked about again here rather than trusted from the
+		// connect. A notification is something the subscriber is told about its
+		// own data, and somebody who logged out is no longer that subscriber.
+		if !socket.alive(ctx) {
+			_ = socket.socket.Close(websocket.StatusPolicyViolation, sessionEndedReason)
+
+			continue
+		}
+
 		sending, stop := context.WithTimeout(ctx, pingDeadline)
 
 		err := socket.socket.Write(sending, websocket.MessageText, []byte(notice))
@@ -252,7 +277,7 @@ func serveSocket(ctx context.Context, socket *websocket.Conn, session project.Se
 		return nil
 	}
 
-	listening := &listener{socket: socket, done: make(chan struct{})}
+	listening := &listener{socket: socket, alive: sessionStillLive(session)}
 	release := serving.sockets.bind(boundKey{project: session.Project(), held: held}, listening)
 
 	defer release()
@@ -262,14 +287,82 @@ func serveSocket(ctx context.Context, socket *websocket.Conn, session project.Se
 		return nil
 	}
 
-	// Held until the subscriber goes away or stops saying anything. Nothing
-	// else is read from it: a bound socket is written to, not talked over.
-	idle, stopIdle := context.WithTimeout(ctx, connectionMaxIdle)
+	// Held until the subscriber goes away, stops saying anything, or loses the
+	// session it bound under. Nothing else is read from it: a bound socket is
+	// written to, not talked over.
+	idle, stopIdle := context.WithDeadline(
+		ctx, earlier(serving.clock().Add(connectionMaxIdle), session.ExpiresAt()))
 	defer stopIdle()
+
+	watching, stopWatching := context.WithCancel(idle)
+	defer stopWatching()
+
+	go watchSession(watching, listening, serving.sockets.interval)
 
 	_, _, _ = socket.Read(idle)
 
 	return nil
+}
+
+// sessionEndedReason is what a socket is told when the session behind it is gone.
+// It says nothing about which of revocation and expiry it was: the subscriber
+// authenticates again either way.
+const sessionEndedReason = "the session ended"
+
+// earlier is the first of two deadlines to arrive.
+func earlier(first, second time.Time) time.Time {
+	if second.Before(first) {
+		return second
+	}
+
+	return first
+}
+
+// sessionStillLive answers whether one session is one this server may still
+// serve as.
+//
+// A fault answers that it is. A socket already authenticated is not one an
+// unreachable database should disconnect, and the write that follows is
+// authorized on its own terms anyway — the subscriber reads the resource under
+// its own standing, which a dead database refuses for itself.
+func sessionStillLive(session project.Session) func(context.Context) bool {
+	return func(ctx context.Context) bool {
+		if serving == nil || serving.sessions == nil {
+			return false
+		}
+
+		live, err := serving.sessions.Live(
+			ctx, session.Project(), session.ID(), serving.clock())
+		if err != nil {
+			return true
+		}
+
+		return live
+	}
+}
+
+// watchSession closes a bound socket once the session behind it ends.
+//
+// A socket is authorized at the connect and then held, so without this a logout
+// would leave one being told about writes for as long as the connection lasts.
+// The interval is what bounds that; the deliver path checks as well, so nothing
+// is actually told in between.
+func watchSession(ctx context.Context, held *listener, every time.Duration) {
+	ticker := time.NewTicker(every)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			if !held.alive(ctx) {
+				_ = held.socket.Close(websocket.StatusPolicyViolation, sessionEndedReason)
+
+				return
+			}
+		}
+	}
 }
 
 // boundSubscription reads which subscription a socket asked for, and refuses
