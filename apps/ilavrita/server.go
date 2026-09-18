@@ -137,7 +137,29 @@ func startServing(app core.App) error {
 
 	serving = newBackend(db.DB(), app.DataDir())
 
+	// The notifier outlives every request and stops with the process. A write
+	// records what it owes and returns; this is what pays it.
+	working, stop := context.WithCancel(context.Background())
+
+	app.OnTerminate().BindFunc(func(terminate *core.TerminateEvent) error {
+		stop()
+
+		return terminate.Next()
+	})
+
+	go runNotifier(working, serving.notifier())
+
 	return nil
+}
+
+// notifier builds the worker that turns writes into notifications.
+func (b *backend) notifier() *notifier {
+	return &notifier{
+		queue:    b.notifications,
+		searches: b.resources,
+		deliver:  newRestHook(),
+		resolve:  b.resolvers,
+	}
 }
 
 // payloadDirectory is where a Binary's bytes live, beside the database rather

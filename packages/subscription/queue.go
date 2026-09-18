@@ -124,8 +124,20 @@ func mintID(random io.Reader, prefix string) (storage.LogicalID, error) {
 	return storage.LogicalID(prefix + base64.RawURLEncoding.EncodeToString(raw)), nil
 }
 
+// Watcher is one stored Subscription, as the content it was written with.
+type Watcher struct {
+	ID      storage.LogicalID
+	Content []byte
+}
+
 // Queue is what a write records and a worker works through.
 type Queue interface {
+	// Watching returns the Subscriptions one Project currently holds. They are
+	// read as the server's own configuration rather than under anybody's Scope:
+	// what a subscription may be told is decided when it is delivered, against
+	// the standing that created it.
+	Watching(ctx context.Context, project storage.ProjectID) ([]Watcher, error)
+
 	// Record notes one write. It joins whatever transaction the context
 	// carries, so a write that rolls back owes nobody anything.
 	Record(ctx context.Context, written Written) error

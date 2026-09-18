@@ -1,8 +1,12 @@
 package authz
 
 import (
+	"context"
 	"errors"
 	"testing"
+	"time"
+
+	"github.com/Ilavrita/Ilavrita/packages/project"
 
 	"github.com/Ilavrita/Ilavrita/packages/storage"
 )
@@ -431,4 +435,58 @@ func TestAParameterStillResolvesToOneSubject(t *testing.T) {
 	if want := (storage.Compartment{Type: "Patient", ID: "pat-9"}); *grants[0].Compartment != want {
 		t.Errorf("the grant reaches %v, want %v", *grants[0].Compartment, want)
 	}
+}
+
+// TestAPrincipalNobodyHoldsBuildsNoScope.
+//
+// Everything that resolves standing rests on this: a request naming a principal
+// that is not there must reach nothing, rather than reaching whatever a Scope
+// built from an empty name would. The notifier leans on it in particular — a
+// subscription whose standing has been withdrawn asks for a Scope with nothing
+// behind it, and must get one that authorizes nothing.
+func TestAPrincipalNobodyHoldsBuildsNoScope(t *testing.T) {
+	empty := map[string]project.PrincipalRef{
+		"nothing at all":         {},
+		"a kind with no id":      {Kind: project.PrincipalUser},
+		"an id with no kind":     {ID: "usr_1"},
+		"a kind nobody declared": {Kind: project.PrincipalKind("wishful"), ID: "usr_1"},
+	}
+
+	for name, principal := range empty {
+		scope, err := BuildScope(t.Context(), Request{
+			Principal: principal,
+			Project:   clinic,
+			Kind:      storage.KindFHIR,
+			Type:      "Observation",
+			Action:    storage.ActionRead,
+			Now:       time.Date(2026, time.March, 1, 9, 0, 0, 0, time.UTC),
+			Resolvers: Resolvers{
+				Memberships: standingNobodyHolds{},
+				Projects:    activeEverywhere{},
+			},
+		})
+
+		// Either answer is safe. What must not happen is a Scope that reaches
+		// something.
+		if err == nil && !scope.IsEmpty() {
+			t.Errorf("%s built a Scope holding %d grants", name, len(scope.Grants()))
+		}
+	}
+}
+
+// standingNobodyHolds answers every lookup with no membership, which is what a
+// withdrawn one looks like.
+type standingNobodyHolds struct{}
+
+func (standingNobodyHolds) Membership(
+	context.Context, project.ID, project.PrincipalRef,
+) (project.Membership, bool, error) {
+	return project.Membership{}, false, nil
+}
+
+// activeEverywhere reports every Project as one that serves requests.
+type activeEverywhere struct{}
+
+func (activeEverywhere) State(context.Context, project.ID) (project.State, error) {
+	return project.StateActive, nil
 }

@@ -79,6 +79,7 @@ type Subscription struct {
 	stated   string
 	channel  Channel
 	endpoint string
+	payload  string
 	status   Status
 }
 
@@ -104,6 +105,14 @@ func (s Subscription) Endpoint() string { return s.endpoint }
 // Status returns where it is in its life.
 func (s Subscription) Status() Status { return s.status }
 
+// SendsPayload reports whether a notification carries the resource.
+//
+// R4 sends an empty body unless the subscription states a payload type, because
+// the notification is a signal and the resource behind it is something the
+// subscriber reads for themselves — under their own authorization, at their own
+// time. Asking for no payload is the safer subscription, and it is the default.
+func (s Subscription) SendsPayload() bool { return s.payload != "" }
+
 // Delivers reports whether a matching write is told to this subscriber. Only an
 // active Subscription delivers: the other three are states somebody has to move
 // it out of.
@@ -117,6 +126,7 @@ type resource struct {
 	Channel  struct {
 		Type     string `json:"type"`
 		Endpoint string `json:"endpoint"`
+		Payload  string `json:"payload"`
 	} `json:"channel"`
 }
 
@@ -152,9 +162,14 @@ func Read(id storage.LogicalID, content []byte) (Subscription, error) {
 		return Subscription{}, fmt.Errorf("%w: %q", ErrUnknownStatus, held.Status)
 	}
 
+	payload, err := readPayload(held.Channel.Payload)
+	if err != nil {
+		return Subscription{}, err
+	}
+
 	return Subscription{
 		id: id, watching: watching, criteria: criteria, stated: held.Criteria,
-		channel: channel, endpoint: endpoint, status: status,
+		channel: channel, endpoint: endpoint, payload: payload, status: status,
 	}, nil
 }
 
@@ -200,6 +215,20 @@ func readCriteria(stated string) (storage.ResourceType, search.Query, error) {
 	}
 
 	return watching, plan, nil
+}
+
+// readPayload checks what a notification would carry. This server serves one
+// representation, so a subscription asking for another is asking for something
+// it would not get.
+func readPayload(stated string) (string, error) {
+	switch strings.TrimSpace(stated) {
+	case "":
+		return "", nil
+	case "application/fhir+json", "application/json":
+		return "application/fhir+json", nil
+	default:
+		return "", fmt.Errorf("%w: this server does not send %q", ErrUnknownChannel, stated)
+	}
 }
 
 // readEndpoint checks where a channel would deliver to.

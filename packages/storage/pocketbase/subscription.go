@@ -241,3 +241,41 @@ func (s *SubscriptionStore) Attempted(
 
 	return nil
 }
+
+// Watching returns the Subscriptions one Project currently holds.
+//
+// A tombstone is excluded: a deleted Subscription delivers nothing, which is
+// how one is switched off for good.
+func (s *SubscriptionStore) Watching(
+	ctx context.Context, owner storage.ProjectID,
+) ([]subscription.Watcher, error) {
+	const query = "SELECT res_id, content FROM fhir_resource" +
+		" WHERE project_id = ? AND res_type = 'Subscription' AND deleted = 0 ORDER BY res_id"
+
+	rows, err := s.db.QueryContext(ctx, query, string(owner))
+	if err != nil {
+		return nil, fmt.Errorf("pocketbase: read a project's subscriptions: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	var held []subscription.Watcher
+
+	for rows.Next() {
+		var (
+			id      string
+			content []byte
+		)
+
+		if err := rows.Scan(&id, &content); err != nil {
+			return nil, fmt.Errorf("pocketbase: scan a subscription: %w", err)
+		}
+
+		held = append(held, subscription.Watcher{ID: storage.LogicalID(id), Content: content})
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("pocketbase: read a project's subscriptions: %w", err)
+	}
+
+	return held, nil
+}
