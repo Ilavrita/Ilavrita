@@ -220,3 +220,86 @@ func TestAnEventIdentifierIsDrawnInItsOwnNamespace(t *testing.T) {
 		t.Error("two events were minted the same identifier")
 	}
 }
+
+// TestTheStoreItselfRefusesToReplaceAFactorInForce.
+//
+// The route asks for a code before it gets here, so this is the last line
+// rather than the first. It is worth having: a route added later that forgot
+// would turn every second factor into one a stolen session can switch off, and
+// nothing else would say so.
+func TestTheStoreItselfRefusesToReplaceAFactorInForce(t *testing.T) {
+	_, db := newStore(t)
+
+	encoded, err := project.MintSealingKey(rand.Reader)
+	if err != nil {
+		t.Fatalf("mint a key: %v", err)
+	}
+
+	key, err := project.ParseSealingKey(encoded)
+	if err != nil {
+		t.Fatalf("parse a key: %v", err)
+	}
+
+	if _, err := db.ExecContext(t.Context(),
+		"INSERT INTO users (id, scope, email_normalized, email_display, state, created_at, updated_at)"+
+			" VALUES ('usr_1', 'server', 'a@example.test', 'a@example.test', 'active', 0, 0)"); err != nil {
+		t.Fatalf("seed the identity: %v", err)
+	}
+
+	factors := NewFactorStore(db, key)
+	at := time.Date(2026, time.March, 1, 9, 0, 0, 0, time.UTC)
+
+	secret, err := project.MintTOTPSecret(rand.Reader)
+	if err != nil {
+		t.Fatalf("mint a secret: %v", err)
+	}
+
+	enrolled, err := project.EnrolSecondFactor("usr_1", secret, at)
+	if err != nil {
+		t.Fatalf("enrol: %v", err)
+	}
+
+	if err := factors.Enrol(t.Context(), enrolled); err != nil {
+		t.Fatalf("store the enrolment: %v", err)
+	}
+
+	// Proved, so it is in force.
+	confirmed, err := enrolled.Confirm(secret.Code(project.Step(at)), at)
+	if err != nil {
+		t.Fatalf("confirm: %v", err)
+	}
+
+	if err := factors.Confirm(t.Context(), confirmed); err != nil {
+		t.Fatalf("store the confirmation: %v", err)
+	}
+
+	// Enrolling over it, which is what a route that forgot would do.
+	replacement, err := project.MintTOTPSecret(rand.Reader)
+	if err != nil {
+		t.Fatalf("mint a replacement: %v", err)
+	}
+
+	over, err := project.EnrolSecondFactor("usr_1", replacement, at)
+	if err != nil {
+		t.Fatalf("build the replacement: %v", err)
+	}
+
+	if err := factors.Enrol(t.Context(), over); !errors.Is(err, project.ErrFactorInForce) {
+		t.Fatalf("err = %v, want %v", err, project.ErrFactorInForce)
+	}
+
+	// And the factor in force is untouched.
+	held, enrolledStill, err := factors.Enrolled(t.Context(), "usr_1")
+	if err != nil || !enrolledStill {
+		t.Fatalf("read it back: found = %v, err = %v", enrolledStill, err)
+	}
+
+	if !held.Required() {
+		t.Error("the factor is no longer in force")
+	}
+
+	later := at.Add(time.Minute)
+	if _, err := held.Prove(secret.Code(project.Step(later)), later); err != nil {
+		t.Errorf("the original phone no longer answers: %v", err)
+	}
+}

@@ -575,3 +575,120 @@ func TestADriftedSubjectSetDenies(t *testing.T) {
 		}
 	}
 }
+
+// legacySecondFactorDatabase builds a database whose user_second_factors table
+// predates the replacement column, with a factor already in force.
+func legacySecondFactorDatabase(t *testing.T) *sql.DB {
+	t.Helper()
+
+	dsn := "file:" + t.TempDir() + "/legacy.db?_pragma=foreign_keys(ON)"
+
+	db, err := sql.Open("sqlite", dsn)
+	if err != nil {
+		t.Fatalf("open database: %v", err)
+	}
+
+	db.SetMaxOpenConns(1)
+	t.Cleanup(func() { _ = db.Close() })
+
+	// users names projects, so the parent is declared first.
+	applyStatements(t, db, declarationOf(t, "projects"))
+	applyStatements(t, db, declarationOf(t, "users"))
+
+	legacy, err := os.ReadFile(filepath.Join("testdata", "legacy_second_factors.sql"))
+	if err != nil {
+		t.Fatalf("read the legacy declaration: %v", err)
+	}
+
+	applyStatements(t, db, string(legacy))
+
+	execAll(t, db, []string{
+		"INSERT INTO users (id, scope, email_normalized, email_display, state, created_at, updated_at)" +
+			" VALUES ('usr_1', 'server', 'a@example.test', 'a@example.test', 'active', 0, 0)",
+		"INSERT INTO user_second_factors (user_id, state, sealed_secret, last_step, created_at, activated_at)" +
+			" VALUES ('usr_1', 'active', 'sealed-material', 7, 0, 0)",
+	})
+
+	return db
+}
+
+// TestAnInstallThatPredatesTheReplacementColumnIsBroughtForward.
+//
+// The table is created by the schema like any other, so without this an install
+// that already holds second factors would come up naming a column that is not
+// there — and every login by somebody holding one would fail. The factor itself
+// has to survive, or bringing the database forward would be the same as taking
+// everyone's second factor away.
+func TestAnInstallThatPredatesTheReplacementColumnIsBroughtForward(t *testing.T) {
+	db := legacySecondFactorDatabase(t)
+
+	if err := AssertFactorReplacement(t.Context(), db); !errors.Is(err, ErrFactorReplacementMissing) {
+		t.Fatalf("the legacy table was accepted: err = %v, want %v", err, ErrFactorReplacementMissing)
+	}
+
+	if err := PrepareSchema(t.Context(), db); err != nil {
+		t.Fatalf("prepare the legacy database: %v", err)
+	}
+
+	if err := AssertFactorReplacement(t.Context(), db); err != nil {
+		t.Fatalf("the prepared database still cannot hold a replacement: %v", err)
+	}
+
+	var (
+		state, sealed string
+		step          int64
+		pending       sql.NullString
+	)
+
+	err := db.QueryRowContext(t.Context(),
+		"SELECT state, sealed_secret, pending_secret, last_step FROM user_second_factors"+
+			" WHERE user_id = 'usr_1'").Scan(&state, &sealed, &pending, &step)
+	if err != nil {
+		t.Fatalf("the factor did not survive: %v", err)
+	}
+
+	if state != "active" || sealed != "sealed-material" || step != 7 {
+		t.Errorf("the factor came through as %s/%q/%d", state, sealed, step)
+	}
+
+	if pending.Valid {
+		t.Error("a factor that was in force came through as one being replaced")
+	}
+
+	// The check came with the column, so the table refuses what the declaration
+	// refuses rather than only holding the column it names.
+	if _, err := db.ExecContext(t.Context(),
+		"UPDATE user_second_factors SET state = 'pending', activated_at = NULL,"+
+			" pending_secret = 'x' WHERE user_id = 'usr_1'"); err == nil {
+		t.Error("a replacement beside a pending factor was accepted")
+	}
+}
+
+// TestPreparingTwiceDoesNotRebuildTheFactorTable.
+//
+// A rebuild copies every row, so one that happened needlessly would leave no
+// trace in the data. What it cannot survive is a column the current declaration
+// does not name: the rebuild refuses rather than dropping it. So a column added
+// by hand is what tells a second prepare that rebuilt from one that did not.
+func TestPreparingTwiceDoesNotRebuildTheFactorTable(t *testing.T) {
+	db := legacySecondFactorDatabase(t)
+
+	if err := PrepareSchema(t.Context(), db); err != nil {
+		t.Fatalf("prepare: %v", err)
+	}
+
+	execAll(t, db, []string{
+		"ALTER TABLE user_second_factors ADD COLUMN operator_note TEXT",
+	})
+
+	if err := PrepareSchema(t.Context(), db); err != nil {
+		t.Fatalf("preparing a database that already has the column rebuilt it: %v", err)
+	}
+
+	// And the factor is still there, with the column beside it.
+	var note sql.NullString
+	if err := db.QueryRowContext(t.Context(),
+		"SELECT operator_note FROM user_second_factors WHERE user_id = 'usr_1'").Scan(&note); err != nil {
+		t.Errorf("the second prepare disturbed the table: %v", err)
+	}
+}

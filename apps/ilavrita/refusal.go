@@ -92,6 +92,9 @@ var (
 	factorNotEnrolled = refusal{http.StatusNotFound, fhir.CodeNotFound,
 		"No second factor is enrolled for this identity."}
 
+	nothingToProve = refusal{http.StatusConflict, fhir.CodeConflict,
+		"No second factor is awaiting proof."}
+
 	unreadableSearch = refusal{http.StatusBadRequest, fhir.CodeInvalid,
 		"This search could not be read."}
 
@@ -172,8 +175,11 @@ func translate(err error) refusal {
 		return factorUnavailable
 	case errors.Is(err, errFactorNotEnrolled):
 		return factorNotEnrolled
-	case errors.Is(err, project.ErrCodeRefused), errors.Is(err, project.ErrMalformedCode):
+	case errors.Is(err, project.ErrCodeRefused), errors.Is(err, project.ErrMalformedCode),
+		errors.Is(err, project.ErrFactorInForce):
 		return codeRefused
+	case errors.Is(err, project.ErrNothingToProve):
+		return nothingToProve
 	case errors.Is(err, errMalformedLogin), errors.Is(err, errMalformedControlRequest):
 		return unreadableLogin
 	case errors.Is(err, search.ErrUnknownParameter), errors.Is(err, search.ErrUnsupportedModifier):

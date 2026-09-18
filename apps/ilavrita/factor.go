@@ -52,18 +52,24 @@ type factorStatus struct {
 // it can be shown, because what is stored afterwards is sealed and what an
 // authenticator app holds is the person's own.
 //
-// Enrolling replaces whatever the identity had, and the new factor is pending
-// until a code proves it. That is how somebody who lost their phone starts
-// again — and why it cannot lock anyone out: a pending factor is required of
-// nobody.
+// Enrolling over a factor that is in force is moving to a new phone, and it
+// needs a current code from the old one — it is the same request somebody
+// holding a stolen session would make to turn the factor off, and the code is
+// what tells the two apart. The factor in force stays in force until the new
+// one is proved, so the move never leaves the account without one.
+//
+// Enrolling when there is nothing in force needs no code: an unproved factor
+// protects nobody, and requiring one would strand somebody whose first attempt
+// went wrong.
 func enrolSecondFactor(request *core.RequestEvent) error {
-	held, err := callerIdentity(request)
+	held, presented, err := callerCode(request)
 	if err != nil {
 		return refuse(request, err)
 	}
 
-	if !serving.factors.Available() {
-		return refuse(request, errFactorUnavailable)
+	existing, enrolled, err := serving.factors.Enrolled(request.Request.Context(), held.User())
+	if err != nil {
+		return refuse(request, err)
 	}
 
 	secret, err := project.MintTOTPSecret(rand.Reader)
@@ -71,12 +77,13 @@ func enrolSecondFactor(request *core.RequestEvent) error {
 		return refuse(request, err)
 	}
 
-	factor, err := project.EnrolSecondFactor(held.User(), secret, serving.clock())
-	if err != nil {
-		return refuse(request, err)
+	if enrolled && existing.Required() {
+		err = replaceSecondFactor(request, existing, secret, presented)
+	} else {
+		err = beginSecondFactor(request, held, secret)
 	}
 
-	if err := serving.factors.Enrol(request.Request.Context(), factor); err != nil {
+	if err != nil {
 		return refuse(request, err)
 	}
 
@@ -86,12 +93,47 @@ func enrolSecondFactor(request *core.RequestEvent) error {
 	})
 }
 
+// beginSecondFactor enrols where nothing is in force.
+func beginSecondFactor(
+	request *core.RequestEvent, held project.Session, secret project.TOTPSecret,
+) error {
+	factor, err := project.EnrolSecondFactor(held.User(), secret, serving.clock())
+	if err != nil {
+		return err
+	}
+
+	return serving.factors.Enrol(request.Request.Context(), factor)
+}
+
+// replaceSecondFactor puts a new secret behind a factor that is in force, once
+// a code from that factor has proved who is asking.
+func replaceSecondFactor(
+	request *core.RequestEvent,
+	existing project.SecondFactor,
+	secret project.TOTPSecret,
+	presented string,
+) error {
+	proved, err := existing.Prove(presented, serving.clock())
+	if err != nil {
+		return err
+	}
+
+	replacing, err := proved.Replace(secret, serving.clock())
+	if err != nil {
+		return err
+	}
+
+	return serving.factors.Replace(request.Request.Context(), replacing)
+}
+
 // factorIssuer is the name an authenticator app files the entry under.
 const factorIssuer = "Ilavrita"
 
-// activateSecondFactor proves a pending factor, which is the only way one
-// becomes required. Nothing can put a factor between a person and their account
-// except a code from the phone holding it.
+// activateSecondFactor proves whatever is awaiting proof and puts it in force.
+//
+// This is the only way a factor becomes required, and the only way one is
+// replaced: nothing can put a factor between a person and their account, or
+// swap the phone that answers for it, except a code from that phone.
 func activateSecondFactor(request *core.RequestEvent) error {
 	held, presented, err := callerCode(request)
 	if err != nil {
@@ -107,16 +149,16 @@ func activateSecondFactor(request *core.RequestEvent) error {
 		return refuse(request, errFactorNotEnrolled)
 	}
 
-	proved, err := factor.Prove(presented, serving.clock())
+	confirmed, err := factor.Confirm(presented, serving.clock())
 	if err != nil {
 		return refuse(request, err)
 	}
 
-	if err := serving.factors.Prove(request.Request.Context(), proved); err != nil {
+	if err := serving.factors.Confirm(request.Request.Context(), confirmed); err != nil {
 		return refuse(request, err)
 	}
 
-	return request.JSON(http.StatusOK, factorStatus{Enrolled: true, State: string(proved.State())})
+	return request.JSON(http.StatusOK, factorStatus{Enrolled: true, State: string(confirmed.State())})
 }
 
 // withdrawSecondFactor removes the caller's factor, and requires a current code

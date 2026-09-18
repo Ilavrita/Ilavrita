@@ -1289,13 +1289,19 @@ CREATE INDEX IF NOT EXISTS ix_login_attempts_key ON login_attempts (key, at);
 -- No tenant column. A user is an identity in the install, and the realm its
 -- membership resolves in is the users row's own business.
 CREATE TABLE IF NOT EXISTS user_second_factors (
-  user_id       TEXT NOT NULL PRIMARY KEY
-                REFERENCES users (id) ON DELETE CASCADE ON UPDATE RESTRICT,
-  state         TEXT NOT NULL CHECK (state IN ('pending', 'active')),
-  sealed_secret TEXT NOT NULL,
-  last_step     BIGINT NOT NULL DEFAULT 0,
-  created_at    BIGINT NOT NULL,
-  activated_at  BIGINT,
+  user_id        TEXT NOT NULL PRIMARY KEY
+                 REFERENCES users (id) ON DELETE CASCADE ON UPDATE RESTRICT,
+  state          TEXT NOT NULL CHECK (state IN ('pending', 'active')),
+  sealed_secret  TEXT NOT NULL,
+
+  -- A replacement awaiting proof. The secret above stays in force until a code
+  -- from the new phone arrives, so moving to one never leaves a window in
+  -- which the account has no second factor at all.
+  pending_secret TEXT,
+
+  last_step      BIGINT NOT NULL DEFAULT 0,
+  created_at     BIGINT NOT NULL,
+  activated_at   BIGINT,
 
   CHECK (sealed_secret <> ''),
   CHECK (last_step >= 0),
@@ -1303,7 +1309,12 @@ CREATE TABLE IF NOT EXISTS user_second_factors (
   -- A factor is active only once a code proved the person holds it. Enrolling
   -- one and never proving it must not lock anyone out of their own account.
   CHECK (state <> 'active' OR activated_at IS NOT NULL),
-  CHECK (state = 'active' OR activated_at IS NULL)
+  CHECK (state = 'active' OR activated_at IS NULL),
+
+  -- Only a factor in force can be being replaced. A replacement beside a
+  -- pending one would be a second unproved secret, and nothing could say which
+  -- of them a code was meant to prove.
+  CHECK (pending_secret IS NULL OR (state = 'active' AND pending_secret <> ''))
 );
 
 -- ===========================================================================

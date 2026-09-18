@@ -220,3 +220,90 @@ func TestTheProvisioningURICarriesWhatAnAppNeeds(t *testing.T) {
 		}
 	}
 }
+
+// TestProvingAFactorNeverChangesWhatItIs.
+//
+// A login proves the factor as it stands. If proving could also activate one,
+// then presenting a code for a factor nobody had confirmed would put it in
+// force — and the whole point of the pending state is that only a deliberate
+// confirmation does that.
+func TestProvingAFactorNeverChangesWhatItIs(t *testing.T) {
+	secret := rfcSecret(t)
+	at := time.Unix(1111111109, 0).UTC()
+
+	pending, err := project.EnrolSecondFactor("usr_1", secret, at)
+	if err != nil {
+		t.Fatalf("enrol: %v", err)
+	}
+
+	proved, err := pending.Prove(secret.Code(project.Step(at)), at)
+	if err != nil {
+		t.Fatalf("prove: %v", err)
+	}
+
+	if proved.State() != project.FactorPending || proved.Required() {
+		t.Errorf("proving a pending factor made it %s", proved.State())
+	}
+
+	if !proved.ActivatedAt().IsZero() {
+		t.Error("proving a pending factor recorded it as activated")
+	}
+}
+
+// TestAReplacementIsProvedByItsOwnCodeAndNotTheOldOne, so finishing a move to a
+// new phone needs that phone.
+func TestAReplacementIsProvedByItsOwnCodeAndNotTheOldOne(t *testing.T) {
+	old := rfcSecret(t)
+	at := time.Unix(1111111109, 0).UTC()
+
+	enrolled, err := project.EnrolSecondFactor("usr_1", old, at)
+	if err != nil {
+		t.Fatalf("enrol: %v", err)
+	}
+
+	active, err := enrolled.Confirm(old.Code(project.Step(at)), at)
+	if err != nil {
+		t.Fatalf("confirm: %v", err)
+	}
+
+	fresh, err := project.MintTOTPSecret(rand.Reader)
+	if err != nil {
+		t.Fatalf("mint: %v", err)
+	}
+
+	moving, err := active.Replace(fresh, at)
+	if err != nil {
+		t.Fatalf("replace: %v", err)
+	}
+
+	if !moving.Required() || !moving.Replacing() {
+		t.Fatalf("a move left the factor %s (replacing=%v)", moving.State(), moving.Replacing())
+	}
+
+	later := at.Add(time.Minute)
+
+	// The old phone cannot finish the move.
+	if _, err := moving.Confirm(old.Code(project.Step(later)), later); !errors.Is(err, project.ErrCodeRefused) {
+		t.Errorf("the old phone finished the move: %v", err)
+	}
+
+	// The new one can, and then it is the one that answers.
+	finished, err := moving.Confirm(fresh.Code(project.Step(later)), later)
+	if err != nil {
+		t.Fatalf("the new phone could not finish the move: %v", err)
+	}
+
+	if finished.Replacing() {
+		t.Error("the replacement is still waiting after it was proved")
+	}
+
+	after := later.Add(time.Minute)
+
+	if _, err := finished.Prove(fresh.Code(project.Step(after)), after); err != nil {
+		t.Errorf("the new phone does not answer: %v", err)
+	}
+
+	if _, err := finished.Prove(old.Code(project.Step(after)), after); !errors.Is(err, project.ErrCodeRefused) {
+		t.Error("the old phone still answers after the move")
+	}
+}

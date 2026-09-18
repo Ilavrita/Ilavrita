@@ -16,6 +16,13 @@ var (
 	ErrMembershipPrincipalKeysMissing = errors.New(
 		"pocketbase: project_memberships is missing its principal foreign keys")
 
+	// ErrFactorReplacementMissing reports a user_second_factors table with
+	// nowhere to hold a replacement awaiting proof. Without that column a
+	// factor can only be replaced by being switched off first, which is what a
+	// stolen session would want, so a database without it is refused.
+	ErrFactorReplacementMissing = errors.New(
+		"pocketbase: user_second_factors cannot hold a replacement awaiting proof")
+
 	// ErrRuleRestrictionColumnsMissing reports an access_policy_rules table with
 	// nowhere to state a filter or a projection. A rule that cannot record its
 	// restriction compiles to a Grant narrowed by nothing, which reaches further
@@ -60,6 +67,9 @@ const (
 
 	// searchIndexTable holds what each resource is searchable by.
 	searchIndexTable = "fhir_search_index"
+
+	// factorTable holds the second factor an identity proved.
+	factorTable = "user_second_factors"
 )
 
 // principalParents are the registries project_memberships must name, each with
@@ -102,10 +112,15 @@ func PrepareSchema(ctx context.Context, db *sql.DB) error {
 		return err
 	}
 
+	factors, err := rebuildFactorReplacement(ctx, db)
+	if err != nil {
+		return err
+	}
+
 	// A rebuild drops its table, and that table's indexes and triggers go with
 	// it. The file is the only definition of them, so it is replayed rather than
 	// a second hand-written list kept in step with it.
-	if memberships || restrictions {
+	if memberships || restrictions || factors {
 		if err := ApplySchema(ctx, db); err != nil {
 			return err
 		}
@@ -116,6 +131,10 @@ func PrepareSchema(ctx context.Context, db *sql.DB) error {
 	}
 
 	if err := AssertRuleRestrictionColumns(ctx, db); err != nil {
+		return err
+	}
+
+	if err := AssertFactorReplacement(ctx, db); err != nil {
 		return err
 	}
 
@@ -310,6 +329,53 @@ func rebuildRuleRestrictions(ctx context.Context, db *sql.DB) (bool, error) {
 	}
 
 	return true, nil
+}
+
+// rebuildFactorReplacement adopts the replacement column onto a
+// user_second_factors table that predates it.
+//
+// The table is created by the schema like any other, so an install that
+// predates the column keeps its shape: every read of a factor would then name a
+// column that is not there, and every login by somebody holding one would fail.
+func rebuildFactorReplacement(ctx context.Context, db *sql.DB) (bool, error) {
+	present, err := hasColumn(ctx, db, factorTable, "pending_secret")
+	if err != nil || present {
+		return false, err
+	}
+
+	// A table that is not there yet is created by the schema with the column
+	// already in it, and has nothing to carry across.
+	declared, err := hasTable(ctx, db, factorTable)
+	if err != nil || !declared {
+		return false, err
+	}
+
+	plan, err := planRebuild(ctx, db, factorTable)
+	if err != nil {
+		return false, err
+	}
+
+	if err := performRebuild(ctx, db, plan); err != nil {
+		return false, err
+	}
+
+	return true, nil
+}
+
+// AssertFactorReplacement refuses a database that cannot hold a replacement
+// awaiting proof. Without it a factor can only be replaced by being switched
+// off first, which is what somebody holding a stolen session would want.
+func AssertFactorReplacement(ctx context.Context, db *sql.DB) error {
+	present, err := hasColumn(ctx, db, factorTable, "pending_secret")
+	if err != nil {
+		return err
+	}
+
+	if !present {
+		return fmt.Errorf("%w: %s.pending_secret", ErrFactorReplacementMissing, factorTable)
+	}
+
+	return nil
 }
 
 // AssertRuleRestrictionColumns refuses a database whose policy rules cannot

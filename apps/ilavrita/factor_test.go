@@ -95,12 +95,37 @@ func logInWithCode(t *testing.T, routes http.Handler, email, password, code stri
 func enrol(t *testing.T, routes http.Handler, token string) project.TOTPSecret {
 	t.Helper()
 
-	answer := call{
-		method: http.MethodPost, path: authBasePath + factorPath,
-		bearer: token, contentType: "application/json", body: "{}",
-	}.send(t, routes)
-
+	answer := enrolling(t, routes, token, "")
 	assertStatus(t, answer, http.StatusCreated)
+
+	return secretFrom(t, answer)
+}
+
+// enrolling makes one enrolment request, with or without a code.
+func enrolling(t *testing.T, routes http.Handler, token, code string) *httptest.ResponseRecorder {
+	t.Helper()
+
+	body := "{}"
+	if code != "" {
+		body = `{"code":"` + code + `"}`
+	}
+
+	return call{
+		method: http.MethodPost, path: authBasePath + factorPath,
+		bearer: token, contentType: "application/json", body: body,
+	}.send(t, routes)
+}
+
+// replace begins a move to a new phone, which needs a code from the old one.
+func replace(t *testing.T, routes http.Handler, token, code string) *httptest.ResponseRecorder {
+	t.Helper()
+
+	return enrolling(t, routes, token, code)
+}
+
+// secretFrom reads the secret an enrolment handed over.
+func secretFrom(t *testing.T, answer *httptest.ResponseRecorder) project.TOTPSecret {
+	t.Helper()
 
 	var held factorEnrolment
 	if err := json.Unmarshal(answer.Body.Bytes(), &held); err != nil {
@@ -346,6 +371,11 @@ func TestAWrongCodeOnTheFactorRoutesSaysSo(t *testing.T) {
 	assertStatus(t, activate(t, routes, token, codeNow(secret, clock)), http.StatusOK)
 	clock.advance(31 * time.Second)
 
+	// A wrong code while a replacement is awaiting proof, which is the case
+	// where a code is what the route is actually asking for.
+	assertStatus(t, replace(t, routes, token, codeNow(secret, clock)), http.StatusCreated)
+	clock.advance(31 * time.Second)
+
 	answer := activate(t, routes, token, "000000")
 	assertStatus(t, answer, http.StatusUnauthorized)
 
@@ -395,4 +425,145 @@ func TestAFactorFaultIsNotAWrongPassword(t *testing.T) {
 	clock.advance(31 * time.Second)
 	assertStatus(t, logInWithCode(t, routes, loginAddress, loginPassword,
 		codeNow(secret, clock)), http.StatusOK)
+}
+
+// TestAStolenSessionCannotTurnTheFactorOff.
+//
+// Re-enrolling is how somebody moves to a new phone, and it is also the request
+// somebody holding a stolen session would make to switch the factor off — they
+// are the same request. Without a code from the factor in force, the second
+// factor would survive nothing it exists to survive.
+func TestAStolenSessionCannotTurnTheFactorOff(t *testing.T) {
+	routes, _, clock := factoredServer(t)
+
+	token := sessionToken(t, routes, "")
+	secret := enrol(t, routes, token)
+	assertStatus(t, activate(t, routes, token, codeNow(secret, clock)), http.StatusOK)
+	clock.advance(31 * time.Second)
+
+	// Everything somebody holding only the session could present.
+	for name, code := range map[string]string{
+		"no code at all": "",
+		"a wrong code":   "000000",
+		"a made-up code": "123456",
+		"not a code":     "abcdef",
+	} {
+		answer := enrolling(t, routes, token, code)
+		if answer.Code == http.StatusCreated {
+			t.Errorf("%s replaced a factor in force", name)
+		}
+	}
+
+	// And the factor is still in force.
+	assertStatus(t, logInWithCode(t, routes, loginAddress, loginPassword, ""), http.StatusUnauthorized)
+	assertStatus(t, logInWithCode(t, routes, loginAddress, loginPassword,
+		codeNow(secret, clock)), http.StatusOK)
+}
+
+// TestMovingToANewPhoneNeverLeavesTheAccountWithoutAFactor.
+//
+// The old phone answers until the new one has proved itself. An account that
+// lost its second factor for the minute somebody spent scanning a QR code would
+// be one an attacker only has to wait for.
+func TestMovingToANewPhoneNeverLeavesTheAccountWithoutAFactor(t *testing.T) {
+	routes, _, clock := factoredServer(t)
+
+	token := sessionToken(t, routes, "")
+	old := enrol(t, routes, token)
+	assertStatus(t, activate(t, routes, token, codeNow(old, clock)), http.StatusOK)
+	clock.advance(31 * time.Second)
+
+	// The move begins, proved by the old phone.
+	begun := replace(t, routes, token, codeNow(old, clock))
+	assertStatus(t, begun, http.StatusCreated)
+
+	fresh := secretFrom(t, begun)
+
+	clock.advance(31 * time.Second)
+
+	// In between, the old phone still answers and the password alone does not.
+	assertStatus(t, logInWithCode(t, routes, loginAddress, loginPassword, ""), http.StatusUnauthorized)
+	assertStatus(t, logInWithCode(t, routes, loginAddress, loginPassword,
+		codeNow(old, clock)), http.StatusOK)
+
+	clock.advance(31 * time.Second)
+
+	// The new phone does not answer until it has proved itself.
+	assertStatus(t, logInWithCode(t, routes, loginAddress, loginPassword,
+		codeNow(fresh, clock)), http.StatusUnauthorized)
+
+	clock.advance(31 * time.Second)
+	assertStatus(t, activate(t, routes, token, codeNow(fresh, clock)), http.StatusOK)
+	clock.advance(31 * time.Second)
+
+	// Now the new phone answers and the old one does not.
+	assertStatus(t, logInWithCode(t, routes, loginAddress, loginPassword,
+		codeNow(fresh, clock)), http.StatusOK)
+
+	clock.advance(31 * time.Second)
+	assertStatus(t, logInWithCode(t, routes, loginAddress, loginPassword,
+		codeNow(old, clock)), http.StatusUnauthorized)
+}
+
+// TestAFirstEnrolmentNeedsNoCode, and neither does a second attempt at one: an
+// unproved factor protects nobody, and asking for a code would strand whoever's
+// first attempt went wrong.
+func TestAFirstEnrolmentNeedsNoCode(t *testing.T) {
+	routes, _, clock := factoredServer(t)
+
+	token := sessionToken(t, routes, "")
+
+	first := enrolling(t, routes, token, "")
+	assertStatus(t, first, http.StatusCreated)
+
+	// A second attempt, the phone having been lost before it was ever proved.
+	second := enrolling(t, routes, token, "")
+	assertStatus(t, second, http.StatusCreated)
+
+	// It is the second secret that now counts.
+	fresh := secretFrom(t, second)
+	assertStatus(t, activate(t, routes, token, codeNow(fresh, clock)), http.StatusOK)
+	clock.advance(31 * time.Second)
+
+	assertStatus(t, logInWithCode(t, routes, loginAddress, loginPassword,
+		codeNow(fresh, clock)), http.StatusOK)
+
+	// And the first, which nobody proved, answers nothing.
+	clock.advance(31 * time.Second)
+	assertStatus(t, logInWithCode(t, routes, loginAddress, loginPassword,
+		codeNow(secretFrom(t, first), clock)), http.StatusUnauthorized)
+}
+
+// TestTheCodeThatAuthorisedAMoveCannotAuthoriseItTwice, so a code seen once is
+// not a second move somebody else can make.
+func TestTheCodeThatAuthorisedAMoveCannotAuthoriseItTwice(t *testing.T) {
+	routes, _, clock := factoredServer(t)
+
+	token := sessionToken(t, routes, "")
+	secret := enrol(t, routes, token)
+	assertStatus(t, activate(t, routes, token, codeNow(secret, clock)), http.StatusOK)
+	clock.advance(31 * time.Second)
+
+	code := codeNow(secret, clock)
+
+	assertStatus(t, replace(t, routes, token, code), http.StatusCreated)
+	assertStatus(t, replace(t, routes, token, code), http.StatusUnauthorized)
+}
+
+// TestConfirmingWithNothingAwaitingProofSaysSo, rather than answering as though
+// a code had been wrong.
+func TestConfirmingWithNothingAwaitingProofSaysSo(t *testing.T) {
+	routes, _, clock := factoredServer(t)
+
+	token := sessionToken(t, routes, "")
+	secret := enrol(t, routes, token)
+	assertStatus(t, activate(t, routes, token, codeNow(secret, clock)), http.StatusOK)
+	clock.advance(31 * time.Second)
+
+	answer := activate(t, routes, token, codeNow(secret, clock))
+	assertStatus(t, answer, http.StatusConflict)
+
+	if !strings.Contains(answer.Body.String(), "awaiting proof") {
+		t.Errorf("answered %s", answer.Body.String())
+	}
 }
