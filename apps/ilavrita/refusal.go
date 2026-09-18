@@ -86,6 +86,9 @@ var (
 	unreadablePayload = refusal{http.StatusBadRequest, fhir.CodeInvalid,
 		"A payload states its content type and carries readable content."}
 
+	payloadMissing = refusal{http.StatusInternalServerError, fhir.CodeException,
+		"This resource exists and the payload it describes could not be read."}
+
 	factorUnavailable = refusal{http.StatusNotImplemented, fhir.CodeNotSupported,
 		"This deployment is not configured to hold second factors."}
 
@@ -169,6 +172,8 @@ func translate(err error) refusal {
 		return unreadablePayload
 	case errors.Is(err, files.ErrTooLarge):
 		return oversizedBody
+	case errors.Is(err, errPayloadMissing):
+		return payloadMissing
 	case errors.Is(err, files.ErrNotFound), errors.Is(err, files.ErrMalformedKey):
 		return unknownResource
 	case errors.Is(err, errFactorUnavailable):

@@ -226,6 +226,12 @@ func (b *backend) recordInteraction(
 	// names, and the two would disagree about who acted.
 	asked = asked.WithContext(context.WithValue(asked.Context(), sessionKey{}, presented))
 
+	// A payload is placed on the disk inside this transaction, and the disk has
+	// no rollback of its own. This is where they are taken back, because this is
+	// the boundary that decides whether anything committed.
+	placements := &placedPayloads{}
+	asked = asked.WithContext(context.WithValue(asked.Context(), placedKey{}, placements))
+
 	commit := b.resources.WithinTransaction(asked.Context(), func(ctx context.Context) error {
 		request.Request = asked.WithContext(context.WithValue(ctx, settledKey{}, slot))
 
@@ -240,6 +246,10 @@ func (b *backend) recordInteraction(
 
 		return b.record(ctx, b.eventFor(request, who, membership, slot, action, outcome, reason))
 	})
+
+	if commit != nil {
+		discardPlaced(asked.Context(), b.payloads, placements)
+	}
 
 	switch {
 	case commit == nil:

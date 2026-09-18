@@ -3,12 +3,17 @@ package main
 import (
 	"encoding/base64"
 	"encoding/json"
+	"errors"
+	"io/fs"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/Ilavrita/Ilavrita/packages/fhir"
+	"github.com/Ilavrita/Ilavrita/packages/files"
+	"github.com/Ilavrita/Ilavrita/packages/storage"
 )
 
 // aPDF is a payload that is plainly not JSON, so what happens to it is what
@@ -350,5 +355,138 @@ func TestAVersionReadServesItsOwnPayload(t *testing.T) {
 
 	if first.Body.String() != "the first" {
 		t.Errorf("version 1 reads %q, want the bytes it was written with", first.Body.String())
+	}
+}
+
+// storedPayloads lists the files a payload root holds.
+func storedPayloads(t *testing.T, root string) []string {
+	t.Helper()
+
+	var held []string
+
+	if err := filepath.WalkDir(root, func(path string, entry fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+
+		if !entry.IsDir() {
+			held = append(held, strings.TrimPrefix(path, root))
+		}
+
+		return nil
+	}); err != nil {
+		t.Fatalf("walk the payload store: %v", err)
+	}
+
+	return held
+}
+
+// TestAPayloadWhoseWriteRolledBackIsNotLeftOnTheDisk. The bytes are placed
+// inside the transaction that writes the row — which is what stops a committed
+// row ever naming bytes that are not there — so a transaction that rolls away
+// would otherwise leave a patient's document on the disk under a version no row
+// names, after the client was told it was not stored.
+func TestAPayloadWhoseWriteRolledBackIsNotLeftOnTheDisk(t *testing.T) {
+	routes, db := auditingServer(t)
+
+	root := t.TempDir()
+	serving.payloads = files.NewDisk(root)
+
+	// A write this server cannot account for is one it must not perform, which
+	// is the rollback this asks about.
+	serving.audits = failingRecorder{err: errors.New("the audit trail is unavailable")}
+
+	assertStatus(t, postPayload(t, routes, "application/pdf", aPDF,
+		"Patient/"+string(conformancePatient)), http.StatusInternalServerError)
+
+	assertStoredCount(t, db, "Binary", 0)
+
+	if held := storedPayloads(t, root); len(held) != 0 {
+		t.Errorf("the rolled-back write left %v on the disk", held)
+	}
+}
+
+// TestAPayloadRefusedBeforeItIsStoredLeavesNothing. The same question asked of
+// the ordinary refusal: a Binary landing in no compartment is refused, and a
+// refusal that had already written the document to the disk would have stored
+// what it said it would not.
+func TestAPayloadRefusedBeforeItIsStoredLeavesNothing(t *testing.T) {
+	routes, _ := auditingServer(t)
+
+	root := t.TempDir()
+	serving.payloads = files.NewDisk(root)
+
+	assertStatus(t, postPayload(t, routes, "application/pdf", aPDF, ""), http.StatusForbidden)
+
+	if held := storedPayloads(t, root); len(held) != 0 {
+		t.Errorf("a refused payload left %v on the disk", held)
+	}
+}
+
+// TestABinaryWhoseBytesAreGoneSaysSo rather than answering a resource that
+// claims to be a PDF and carries nothing. The two stores are ordered so a crash
+// cannot produce this, so one that turns up is a store somebody edited or a
+// backup restored in halves — which is worth saying.
+func TestABinaryWhoseBytesAreGoneSaysSo(t *testing.T) {
+	routes, _ := auditingServer(t)
+
+	root := t.TempDir()
+	store := files.NewDisk(root)
+	serving.payloads = store
+
+	created := postPayload(t, routes, "application/pdf", aPDF,
+		"Patient/"+string(conformancePatient))
+	assertStatus(t, created, http.StatusCreated)
+
+	id := resourceID(t, created)
+
+	if err := store.Discard(t.Context(), files.Key{
+		Project: homeProject, Type: "Binary",
+		ID: storage.LogicalID(id), Version: "1",
+	}); err != nil {
+		t.Fatalf("take the bytes away: %v", err)
+	}
+
+	for name, accept := range map[string]string{
+		"as a resource": fhir.ContentType,
+		"as a document": "application/pdf",
+	} {
+		answer := call{
+			method: http.MethodGet, path: resourcePath("Binary", id), accept: accept,
+		}.send(t, routes)
+
+		if answer.Code != http.StatusInternalServerError {
+			t.Errorf("reading it %s answered %d, want the server saying it cannot",
+				name, answer.Code)
+		}
+	}
+}
+
+// TestAnUnauditedWriteAlsoTakesItsPayloadBack. The audit decorator is the outer
+// commit boundary on every interaction this build serves, so it is what usually
+// takes back a payload nothing committed. A write is its own boundary when
+// nothing is auditing it, and has to do the same: a document left on the disk
+// after a failed write is left there whichever boundary failed.
+func TestAnUnauditedWriteAlsoTakesItsPayloadBack(t *testing.T) {
+	routes, db := auditingServer(t)
+
+	root := t.TempDir()
+	serving.payloads = files.NewDisk(root)
+	serving.audits = nil
+
+	// The note a write owes whoever is watching, with nowhere to put it. It is
+	// written after the payload is placed and inside the same transaction, so
+	// this is a rollback that happens with the bytes already on the disk.
+	if _, err := db.ExecContext(t.Context(), "DROP TABLE subscription_backlog"); err != nil {
+		t.Fatalf("take the backlog away: %v", err)
+	}
+
+	assertStatus(t, postPayload(t, routes, "application/pdf", aPDF,
+		"Patient/"+string(conformancePatient)), http.StatusInternalServerError)
+
+	assertStoredCount(t, db, "Binary", 0)
+
+	if held := storedPayloads(t, root); len(held) != 0 {
+		t.Errorf("the rolled-back write left %v on the disk", held)
 	}
 }

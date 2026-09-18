@@ -72,6 +72,12 @@ type Store interface {
 	// Describe reports what a payload is without reading it.
 	Describe(ctx context.Context, key Key) (Stored, error)
 
+	// Discard removes one version's payload, quietly when there is none. It is
+	// what a write that did not commit calls: the bytes are placed inside the
+	// transaction that writes the row, so a rollback would otherwise leave a
+	// document on the disk that the client was told was not stored.
+	Discard(ctx context.Context, key Key) error
+
 	// Remove deletes every version of one resource's payload. It is what a
 	// Project's purge calls, not what a FHIR delete calls: a deleted resource
 	// keeps its history, and its payloads are that history.

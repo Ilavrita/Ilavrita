@@ -304,6 +304,14 @@ func (g granted) written(
 ) (storage.ResourceRecord, error) {
 	var written storage.ResourceRecord
 
+	// A boundary outside this one keeps its own slot; this is for the write
+	// that is its own boundary, which is what an unaudited interaction is.
+	slot, listening := ctx.Value(placedKey{}).(*placedPayloads)
+	if !listening {
+		slot = &placedPayloads{}
+		ctx = context.WithValue(ctx, placedKey{}, slot)
+	}
+
 	err := g.transactions.WithinTransaction(ctx, func(ctx context.Context) error {
 		// The audit is written by the decorator around this interaction, and a
 		// create mints an id no URL carries. This is the one thing it cannot
@@ -331,8 +339,13 @@ func (g granted) written(
 
 		return after(ctx, record)
 	})
+	if err != nil {
+		discardPlaced(ctx, g.payloads, slot)
 
-	return written, err
+		return storage.ResourceRecord{}, err
+	}
+
+	return written, nil
 }
 
 // deleteResource makes the resource a tombstone. Reads of the id afterwards

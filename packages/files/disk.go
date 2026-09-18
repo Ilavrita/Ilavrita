@@ -50,6 +50,14 @@ func NewDisk(root string) *Disk {
 // The bytes land in a temporary file and are renamed into place, so a read
 // never sees a half-written payload and a crash leaves no partial file under a
 // name something will later serve.
+//
+// Both files are flushed to the disk before this returns, and the directory
+// entries with them. That is what orders this store against the database: the
+// caller places a payload inside the transaction that writes the row, so bytes
+// durable before that commit mean a crash can leave a file no row names — which
+// is wasted space — but never a row naming bytes that are not there. It does not
+// defeat a drive that lies about its own cache, which is the caveat the database
+// carries too.
 func (d *Disk) Put(
 	ctx context.Context, key Key, media string, body io.Reader, limit int64,
 ) (Stored, error) {
@@ -62,42 +70,131 @@ func (d *Disk) Put(
 		return Stored{}, fmt.Errorf("files: make room for a payload: %w", err)
 	}
 
-	temporary, err := os.CreateTemp(filepath.Dir(path), ".writing-*")
-	if err != nil {
-		return Stored{}, fmt.Errorf("files: open a payload for writing: %w", err)
-	}
+	var stored Stored
 
-	// Removed on every path that does not rename it into place.
-	defer func() { _ = os.Remove(temporary.Name()) }()
+	if err := placed(path, func(into *os.File) error {
+		read, err := copyInto(into, body, media, limit)
+		stored = read
 
-	stored, err := copyInto(temporary, body, media, limit)
-	if err != nil {
-		_ = temporary.Close()
-
+		return err
+	}); err != nil {
 		return Stored{}, err
 	}
 
-	if err := temporary.Chmod(payloadMode); err != nil {
-		_ = temporary.Close()
-
-		return Stored{}, fmt.Errorf("files: restrict a payload: %w", err)
+	described, err := json.Marshal(stored)
+	if err != nil {
+		return Stored{}, fmt.Errorf("files: describe a payload: %w", err)
 	}
 
-	if err := temporary.Close(); err != nil {
-		return Stored{}, fmt.Errorf("files: finish writing a payload: %w", err)
-	}
+	// The sidecar is placed second because it is what makes the payload
+	// visible: every read goes through it. A crash between the two leaves bytes
+	// nothing names rather than a name with nothing behind it.
+	if err := placed(path+describedSuffix, func(into *os.File) error {
+		_, err := into.Write(described)
 
-	if err := os.Rename(temporary.Name(), path); err != nil {
-		return Stored{}, fmt.Errorf("files: place a payload: %w", err)
-	}
-
-	if err := d.describe(path, stored); err != nil {
+		return err
+	}); err != nil {
 		return Stored{}, err
 	}
 
 	_ = ctx
 
 	return stored, nil
+}
+
+// placed writes one file and renames it into place, with the bytes and the
+// directory entry both on the disk before it returns.
+func placed(path string, write func(*os.File) error) error {
+	temporary, err := os.CreateTemp(filepath.Dir(path), ".writing-*")
+	if err != nil {
+		return fmt.Errorf("files: open a payload for writing: %w", err)
+	}
+
+	// Removed on every path that does not rename it into place.
+	defer func() { _ = os.Remove(temporary.Name()) }()
+
+	if err := write(temporary); err != nil {
+		_ = temporary.Close()
+
+		return err
+	}
+
+	if err := temporary.Chmod(payloadMode); err != nil {
+		_ = temporary.Close()
+
+		return fmt.Errorf("files: restrict a payload: %w", err)
+	}
+
+	// Flushed before the rename, so the name never arrives ahead of the bytes.
+	if err := temporary.Sync(); err != nil {
+		_ = temporary.Close()
+
+		return fmt.Errorf("files: flush a payload: %w", err)
+	}
+
+	if err := temporary.Close(); err != nil {
+		return fmt.Errorf("files: finish writing a payload: %w", err)
+	}
+
+	if err := os.Rename(temporary.Name(), path); err != nil {
+		return fmt.Errorf("files: place a payload: %w", err)
+	}
+
+	// A rename is a change to the directory, so without this the file is
+	// durable under no name at all.
+	return syncDirectory(filepath.Dir(path))
+}
+
+// syncDirectory flushes a directory's own entries.
+func syncDirectory(path string) error {
+	held, err := os.Open(path) //nolint:gosec // the caller built this path from a checked key.
+	if err != nil {
+		return fmt.Errorf("files: open a payload directory: %w", err)
+	}
+
+	if err := held.Sync(); err != nil {
+		_ = held.Close()
+
+		return fmt.Errorf("files: flush a payload directory: %w", err)
+	}
+
+	if err := held.Close(); err != nil {
+		return fmt.Errorf("files: close a payload directory: %w", err)
+	}
+
+	return nil
+}
+
+// Discard removes one version's payload.
+//
+// It is what a write that did not commit calls. The bytes are placed inside the
+// transaction that writes the row, so a transaction that rolls away leaves a
+// document on the disk that the client was told was not stored.
+func (d *Disk) Discard(_ context.Context, key Key) error {
+	path, err := d.pathFor(key)
+	if err != nil {
+		return err
+	}
+
+	removed := false
+
+	// The sidecar first, because it is what makes the payload visible: an
+	// interrupted discard leaves bytes nothing names rather than a name with
+	// nothing behind it.
+	for _, name := range []string{path + describedSuffix, path} {
+		switch err := os.Remove(name); {
+		case err == nil:
+			removed = true
+		case !errors.Is(err, os.ErrNotExist):
+			return fmt.Errorf("files: discard a payload: %w", err)
+		}
+	}
+
+	if !removed {
+		return nil
+	}
+
+	return syncDirectory(filepath.Dir(path))
 }
 
 // copyInto streams the body onto disk, digesting as it goes and stopping the
@@ -118,20 +215,6 @@ func copyInto(into io.Writer, body io.Reader, media string, limit int64) (Stored
 	}
 
 	return Stored{Media: media, Size: written, Digest: hex.EncodeToString(digest.Sum(nil))}, nil
-}
-
-// describe writes the fact of what a payload is beside it.
-func (d *Disk) describe(path string, stored Stored) error {
-	body, err := json.Marshal(stored)
-	if err != nil {
-		return fmt.Errorf("files: describe a payload: %w", err)
-	}
-
-	if err := os.WriteFile(path+describedSuffix, body, payloadMode); err != nil {
-		return fmt.Errorf("files: describe a payload: %w", err)
-	}
-
-	return nil
 }
 
 // Open returns a payload's bytes and what it is.

@@ -106,6 +106,22 @@ Fan-out costs one search per subscription per write, done by a worker outside th
 request. It is fine at a handful of subscriptions and is the first thing to
 revisit if that number grows.
 
+## A payload and its row are two stores
+
+A `Binary`'s bytes live on the disk and the resource describing them lives in the
+database, so a write has to settle what a crash between them means. The bytes are
+placed inside the transaction that writes the row and flushed — the file, and the
+directory entry naming it — before that transaction commits. So a crash can leave
+a file no row names, which is wasted space, but never a row naming bytes that are
+not there. A transaction that rolls back takes its payload with it, at whichever
+boundary decided not to commit.
+
+Two things this does not cover. A drive that lies about its own write cache
+defeats it, exactly as it defeats the database. And a payload removed behind the
+server's back — an edited store, a backup restored in halves — leaves a row whose
+bytes are gone: reading it answers `500` and says so, rather than handing back a
+`Binary` that claims to be a PDF and carries nothing.
+
 ## Instance history is unbounded
 
 `GET /fhir/R4/{Type}/{id}/_history` returns every version the caller may see, in

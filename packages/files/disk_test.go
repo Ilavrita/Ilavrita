@@ -345,3 +345,116 @@ func TestAnOversizedPayloadIsNotReadPastTheLimit(t *testing.T) {
 		t.Errorf("%d bytes were read to refuse a %d-byte limit", counted.read, limit)
 	}
 }
+
+// TestDiscardingTakesOneVersionAndLeavesTheRest. It is what a write that did
+// not commit calls, and a write that did not commit is one version of one
+// resource — not the history beside it.
+func TestDiscardingTakesOneVersionAndLeavesTheRest(t *testing.T) {
+	store, _ := newDisk(t)
+
+	first := aKey()
+	put(t, store, first, "text/plain", "the first")
+
+	second := aKey()
+	second.Version = "2"
+	put(t, store, second, "text/plain", "the second")
+
+	if err := store.Discard(context.Background(), second); err != nil {
+		t.Fatalf("discard: %v", err)
+	}
+
+	if _, _, err := store.Open(context.Background(), second); !errors.Is(err, files.ErrNotFound) {
+		t.Errorf("a discarded payload is still readable: %v", err)
+	}
+
+	if body, _ := read(t, store, first); body != "the first" {
+		t.Errorf("the version beside it reads %q", body)
+	}
+}
+
+// TestDiscardingLeavesNothingBehindOnTheDisk. The point of taking a payload
+// back is that the document is gone, not that it stops being served: a file
+// under a name nothing reads is still a patient document on the disk.
+func TestDiscardingLeavesNothingBehindOnTheDisk(t *testing.T) {
+	store, root := newDisk(t)
+
+	put(t, store, aKey(), "text/plain", "a document")
+
+	if err := store.Discard(context.Background(), aKey()); err != nil {
+		t.Fatalf("discard: %v", err)
+	}
+
+	var left []string
+
+	if err := filepath.WalkDir(root, func(path string, entry os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+
+		if !entry.IsDir() {
+			left = append(left, path)
+		}
+
+		return nil
+	}); err != nil {
+		t.Fatalf("walk the store: %v", err)
+	}
+
+	if len(left) != 0 {
+		t.Errorf("the discard left %v behind", left)
+	}
+}
+
+// TestDiscardingWhatIsNotThereIsQuiet. A write rolls back whether or not it
+// reached the disk, so the compensation has to be safe to run either way — and
+// safe to run twice, because two boundaries may both take it back.
+func TestDiscardingWhatIsNotThereIsQuiet(t *testing.T) {
+	store, _ := newDisk(t)
+
+	put(t, store, aKey(), "text/plain", "a document")
+
+	for attempt := range 3 {
+		if err := store.Discard(context.Background(), aKey()); err != nil {
+			t.Fatalf("discard %d: %v", attempt, err)
+		}
+	}
+}
+
+// TestDiscardingRefusesAKeyThatCouldWalkOutOfTheRoot, the same as every other
+// route into this store: a removal that escaped would delete another Project's
+// documents rather than read them.
+func TestDiscardingRefusesAKeyThatCouldWalkOutOfTheRoot(t *testing.T) {
+	store, _ := newDisk(t)
+
+	for _, id := range []string{"..", "../../etc", "a/b", ""} {
+		key := aKey()
+		key.ID = storage.LogicalID(id)
+
+		if err := store.Discard(context.Background(), key); !errors.Is(err, files.ErrMalformedKey) {
+			t.Errorf("discarding %q answered %v", id, err)
+		}
+	}
+}
+
+// TestAPayloadIsVisibleOnlyOnceItIsDescribed. The two files are placed in that
+// order on purpose: a crash between them leaves bytes nothing names, which is
+// wasted space, rather than a name with nothing behind it, which is a read that
+// fails after saying the payload is there.
+func TestAPayloadIsVisibleOnlyOnceItIsDescribed(t *testing.T) {
+	store, root := newDisk(t)
+
+	put(t, store, aKey(), "text/plain", "a document")
+
+	described := filepath.Join(root, "prj_a", "Binary", "bin-1", "1.meta")
+	if err := os.Remove(described); err != nil {
+		t.Fatalf("remove what says what the payload is: %v", err)
+	}
+
+	if _, err := store.Describe(context.Background(), aKey()); !errors.Is(err, files.ErrNotFound) {
+		t.Errorf("a payload nothing describes is described as %v", err)
+	}
+
+	if _, _, err := store.Open(context.Background(), aKey()); !errors.Is(err, files.ErrNotFound) {
+		t.Errorf("a payload nothing describes is readable: %v", err)
+	}
+}

@@ -45,6 +45,12 @@ var (
 
 	// errUnreadablePayload reports base64 in a Binary's data member that is not.
 	errUnreadablePayload = errors.New("ilavrita: the payload could not be read")
+
+	// errPayloadMissing reports a row whose bytes are not there. The two stores
+	// are ordered so a crash cannot produce this, so one that turns up is a
+	// store somebody edited or a backup restored in halves — which is worth
+	// saying rather than answering a Binary that quietly carries no document.
+	errPayloadMissing = errors.New("ilavrita: the row exists and its payload does not")
 )
 
 // carriesRawPayload reports whether this request submits bytes rather than a
@@ -205,12 +211,58 @@ func (g granted) storing(
 			return errPayloadUnavailable
 		}
 
-		_, err := g.payloads.Put(ctx, files.Key{
+		placing := files.Key{
 			Project: key.Project, Type: key.Type, ID: key.ID, Version: record.Version,
-		}, payload.media, bytes.NewReader(payload.body), maximumPayloadBytes)
+		}
 
-		return err
+		if _, err := g.payloads.Put(
+			ctx, placing, payload.media, bytes.NewReader(payload.body), maximumPayloadBytes,
+		); err != nil {
+			return err
+		}
+
+		recordPlacement(ctx, placing)
+
+		return nil
 	}
+}
+
+// placedKey is where a write reports the payloads it put on the disk, so a
+// commit boundary that does not commit can take them back.
+//
+// The disk has no rollback of its own. The bytes are placed inside the
+// transaction that writes the row — which is what keeps a committed row from
+// ever naming bytes that are not there — so a transaction that rolls away
+// leaves a document on the disk the client was told was not stored.
+type placedKey struct{}
+
+// placedPayloads is the slot a write fills in. One request is one goroutine, so
+// nothing guards it.
+type placedPayloads struct{ keys []files.Key }
+
+// recordPlacement notes a payload this boundary placed, if something is
+// listening.
+func recordPlacement(ctx context.Context, key files.Key) {
+	if slot, listening := ctx.Value(placedKey{}).(*placedPayloads); listening {
+		slot.keys = append(slot.keys, key)
+	}
+}
+
+// discardPlaced takes back every payload a boundary placed and did not commit,
+// and forgets them so a boundary outside this one does not try again.
+//
+// Best effort: the row is gone either way, so a file that cannot be removed is
+// wasted space rather than a wrong answer.
+func discardPlaced(ctx context.Context, store files.Store, slot *placedPayloads) {
+	if store == nil {
+		return
+	}
+
+	for _, key := range slot.keys {
+		_ = store.Discard(ctx, key)
+	}
+
+	slot.keys = nil
 }
 
 // mediaOf reads the content type a Binary states.
@@ -262,6 +314,12 @@ func servePayload(
 		Project: record.Key.Project, Type: record.Key.Type,
 		ID: record.Key.ID, Version: record.Version,
 	})
+	if errors.Is(err, files.ErrNotFound) {
+		// Same as the JSON read: the row was reached, so its bytes being gone is
+		// this server's own inconsistency rather than a resource nobody has.
+		return false, errPayloadMissing
+	}
+
 	if err != nil {
 		return false, err
 	}
@@ -308,11 +366,11 @@ func embedPayload(
 		ID: record.Key.ID, Version: record.Version,
 	})
 	if errors.Is(err, files.ErrNotFound) {
-		// A Binary whose row exists and whose bytes do not is one written by an
-		// earlier build or restored from a partial backup. It reads as the
-		// resource it is rather than failing: what it says about itself is still
-		// true, and the data member is absent rather than empty.
-		return record, nil
+		// The row was already read under this caller's Scope, so this is not an
+		// authorization answer dressed as a missing one. Returning the resource
+		// without its data would hand back a Binary that says it is a PDF and
+		// carries nothing.
+		return storage.ResourceRecord{}, errPayloadMissing
 	}
 
 	if err != nil {
