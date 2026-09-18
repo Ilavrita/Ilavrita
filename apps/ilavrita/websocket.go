@@ -60,6 +60,60 @@ var (
 	errNotYours = errors.New("ilavrita: a subscriber binds only to its own subscription")
 )
 
+// socketDuty is everything one socket needs, taken once when it is accepted.
+//
+// A socket outlives the request that accepted it — that is the whole point of
+// one — so nothing below may reach back into this package's own wiring. What
+// `serving` points at is replaced when a process reconfigures and unset when a
+// test finishes, and a goroutine still reading it then is reading a variable
+// somebody else is writing.
+//
+// Every field is taken in the handler, while the wiring is known good, and
+// carried from there.
+type socketDuty struct {
+	sockets  *hub
+	owners   subscription.Queue
+	sessions sessionResolver
+	now      func() time.Time
+	interval time.Duration
+}
+
+// onDuty takes what a socket needs from the wiring, once.
+func onDuty(held *backend) socketDuty {
+	duty := socketDuty{
+		sockets:  held.sockets,
+		owners:   held.notifications,
+		sessions: held.sessions,
+		now:      held.clock,
+		interval: sessionCheckInterval,
+	}
+
+	if held.sockets != nil {
+		duty.interval = held.sockets.interval
+	}
+
+	return duty
+}
+
+// alive answers whether one session is still one this server may serve as.
+//
+// A fault answers that it is. A socket already authenticated is not one an
+// unreachable database should disconnect, and the write that follows is
+// authorized on its own terms anyway — the subscriber reads the resource under
+// its own standing, which a dead database refuses for itself.
+func (d socketDuty) alive(ctx context.Context, session project.Session) bool {
+	if d.sessions == nil {
+		return false
+	}
+
+	live, err := d.sessions.Live(ctx, session.Project(), session.ID(), d.now())
+	if err != nil {
+		return true
+	}
+
+	return live
+}
+
 // listener is one bound socket, held under the session that bound it.
 type listener struct {
 	socket *websocket.Conn
@@ -195,7 +249,12 @@ func subscribeOverWebSocket(request *core.RequestEvent) error {
 		return refuse(request, errSubscriptionsUnavailable)
 	}
 
-	session, err := websocketCaller(request)
+	// Taken before the socket is accepted, and the only place the wiring is
+	// read: everything after this point runs for as long as the connection
+	// does.
+	duty := onDuty(serving)
+
+	session, err := websocketCaller(request, duty)
 	if err != nil {
 		return refuse(request, err)
 	}
@@ -213,7 +272,7 @@ func subscribeOverWebSocket(request *core.RequestEvent) error {
 
 	defer func() { _ = socket.CloseNow() }()
 
-	return serveSocket(request.Request.Context(), socket, session)
+	return serveSocket(request.Request.Context(), socket, session, duty)
 }
 
 // websocketCaller reads the session a socket presents.
@@ -223,7 +282,7 @@ func subscribeOverWebSocket(request *core.RequestEvent) error {
 // token per subscription, minted over HTTP — would be better, and is what R5's
 // binding token is for; this reuses the session so that revoking it closes the
 // socket's authority too.
-func websocketCaller(request *core.RequestEvent) (project.Session, error) {
+func websocketCaller(request *core.RequestEvent, duty socketDuty) (project.Session, error) {
 	offered := request.Request.Header.Get("Sec-WebSocket-Protocol")
 
 	var token string
@@ -242,8 +301,12 @@ func websocketCaller(request *core.RequestEvent) (project.Session, error) {
 		return project.Session{}, errNoPrincipal
 	}
 
-	session, found, err := serving.sessions.Resolve(
-		request.Request.Context(), parsed, serving.clock())
+	if duty.sessions == nil {
+		return project.Session{}, errNoPrincipal
+	}
+
+	session, found, err := duty.sessions.Resolve(
+		request.Request.Context(), parsed, duty.now())
 	if err != nil {
 		return project.Session{}, err
 	}
@@ -256,7 +319,9 @@ func websocketCaller(request *core.RequestEvent) (project.Session, error) {
 }
 
 // serveSocket binds one socket and holds it until either side is done.
-func serveSocket(ctx context.Context, socket *websocket.Conn, session project.Session) error {
+func serveSocket(
+	ctx context.Context, socket *websocket.Conn, session project.Session, duty socketDuty,
+) error {
 	socket.SetReadLimit(maxBindMessage)
 
 	binding, stop := context.WithTimeout(ctx, bindDeadline)
@@ -273,15 +338,19 @@ func serveSocket(ctx context.Context, socket *websocket.Conn, session project.Se
 		return nil
 	}
 
-	held, err := boundSubscription(ctx, session, string(message))
+	held, err := boundSubscription(ctx, session, string(message), duty)
 	if err != nil {
 		_ = socket.Close(websocket.StatusPolicyViolation, "the bind was refused")
 
 		return nil
 	}
 
-	listening := &listener{socket: socket, alive: sessionStillLive(session)}
-	release := serving.sockets.bind(boundKey{project: session.Project(), held: held}, listening)
+	listening := &listener{
+		socket: socket,
+		alive:  func(ctx context.Context) bool { return duty.alive(ctx, session) },
+	}
+
+	release := duty.sockets.bind(boundKey{project: session.Project(), held: held}, listening)
 
 	defer release()
 
@@ -294,13 +363,13 @@ func serveSocket(ctx context.Context, socket *websocket.Conn, session project.Se
 	// session it bound under. Nothing else is read from it: a bound socket is
 	// written to, not talked over.
 	idle, stopIdle := context.WithDeadline(
-		ctx, earlier(serving.clock().Add(connectionMaxIdle), session.ExpiresAt()))
+		ctx, earlier(duty.now().Add(connectionMaxIdle), session.ExpiresAt()))
 	defer stopIdle()
 
 	watching, stopWatching := context.WithCancel(idle)
 	defer stopWatching()
 
-	go watchSession(watching, listening, serving.sockets.interval)
+	go watchSession(watching, listening, duty.interval)
 
 	_, _, _ = socket.Read(idle)
 
@@ -319,29 +388,6 @@ func earlier(first, second time.Time) time.Time {
 	}
 
 	return first
-}
-
-// sessionStillLive answers whether one session is one this server may still
-// serve as.
-//
-// A fault answers that it is. A socket already authenticated is not one an
-// unreachable database should disconnect, and the write that follows is
-// authorized on its own terms anyway — the subscriber reads the resource under
-// its own standing, which a dead database refuses for itself.
-func sessionStillLive(session project.Session) func(context.Context) bool {
-	return func(ctx context.Context) bool {
-		if serving == nil || serving.sessions == nil {
-			return false
-		}
-
-		live, err := serving.sessions.Live(
-			ctx, session.Project(), session.ID(), serving.clock())
-		if err != nil {
-			return true
-		}
-
-		return live
-	}
 }
 
 // watchSession closes a bound socket once the session behind it ends.
@@ -375,7 +421,7 @@ func watchSession(ctx context.Context, held *listener, every time.Duration) {
 // knowing something about the data behind it — and the notification itself is
 // authorized as its owner, not as whoever happens to be listening.
 func boundSubscription(
-	ctx context.Context, session project.Session, message string,
+	ctx context.Context, session project.Session, message string, duty socketDuty,
 ) (storage.LogicalID, error) {
 	command, named, found := strings.Cut(strings.TrimSpace(message), " ")
 	if !found || command != bindCommand {
@@ -387,7 +433,11 @@ func boundSubscription(
 		return "", errNotBound
 	}
 
-	owner, owned, err := serving.notifications.Owner(ctx, session.Project(), held)
+	if duty.owners == nil {
+		return "", errSubscriptionsUnavailable
+	}
+
+	owner, owned, err := duty.owners.Owner(ctx, session.Project(), held)
 	if err != nil {
 		return "", err
 	}
