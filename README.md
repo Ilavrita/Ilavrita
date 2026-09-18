@@ -31,14 +31,15 @@
 > **Do not put patient data in this build yet.** Not because the boundaries are
 > absent — they are enforced and tested — but because:
 >
-> - **Nothing validates a resource.** A body that is JSON and names the right
->   type is stored as sent. There is no `$validate` and no profile checking, so
->   this server will faithfully keep a clinically nonsensical record.
-> - **A lost second factor cannot be recovered.** Replacing one needs a code
->   from the one it replaces, and there is no administrator path around that
->   yet. Somebody who loses their phone is locked out of that account.
-> - **There is no backup or restore tooling**, and no migration story beyond the
->   schema this build applies to its own database at startup.
+> - **Nothing validates a resource against its own definition.** `$validate` is
+>   served and the same rules gate every write, but this build ships no
+>   `StructureDefinition`s: it checks the rules that hold for every R4 resource
+>   and nothing that depends on knowing what an `Observation` is. `"status":
+>   "banana"` passes, so this server will faithfully keep a well-formed but
+>   clinically nonsensical record.
+> - **There is no migration story** beyond the schema this build applies to its
+>   own database at startup. Backup and restore exist; upgrading between
+>   releases is what does not.
 > - **Nothing here has been through an external security review or an official
 >   FHIR conformance suite.** The tests are ours.
 
@@ -84,13 +85,14 @@ and an architecture that does not have to be rewritten to reach a clustered one.
 | FHIR search | Working — `GET` and `POST /_search`, over a declared parameter set |
 | Project isolation and authorization | Enforced — compartments, element filters, field restriction |
 | Audit trail | Working — every interaction and login, in the transaction that did it |
-| Authentication | Working — password, sessions, TOTP second factor, per-install throttle |
+| Authentication | Working — password, sessions, TOTP second factor with an administrator recovery path, per-install throttle |
 | Binary payloads | Working — bytes stored outside the database |
-| Subscriptions | Working — `rest-hook`, and `websocket` within one process |
-| Resource validation and `$validate` | Not implemented |
+| Subscriptions | Working — `rest-hook`, and `websocket` within one process; queues are claimed, so replicas do not notify twice |
+| Resource validation, `$validate` | Structural only — no `StructureDefinition`s, so no cardinality, profile or terminology |
 | Bundle batch and transaction | Not implemented |
 | Conditional create, update and delete | Not implemented |
-| Backup, restore, whole-system history | Not implemented |
+| Backup and restore | Working — `ilavrita backup`, `verify-backup`, `restore` |
+| Whole-system history | Not implemented |
 | PostgreSQL, SMART, Bulk Data, HL7v2, DICOM | Out of scope for v0.1 |
 
 Search is deliberately narrow: every parameter is a projection a write maintains

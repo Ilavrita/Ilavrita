@@ -13,6 +13,8 @@ most expensive mistake on this project so far.
 | `GET /healthz`, `GET /version` | Working |
 | `GET /fhir/R4/metadata` | Working, R4-valid, generated from the routes actually served |
 | create, read, vread, update, delete, history-instance | Working, for 126 resource types: 64 non-clinical, 62 clinical |
+| `POST /fhir/R4/{type}/$validate` | Working, structural only |
+| `ilavrita backup`, `verify-backup`, `restore` | Working |
 | Everything else under `/fhir/R4` | `501` |
 | `POST /auth/login`, `POST /auth/logout`, `GET /auth/session` | Working |
 | `/admin/projects` and the surface beneath it | Working, for a Super Admin or the Project's own admin |
@@ -30,9 +32,10 @@ Encounter it also names, because refusing those would refuse nearly every real o
 `401` to anything else. There is no development principal and no environment variable that names
 one: a request authenticates or it reaches nothing.
 
-Do not deploy this anywhere near patient data yet. The audit trail, the second factor, the login
-throttle and search all exist now; what is missing is resource validation, a recovery path for a
-lost second factor, backup and restore, and any review of this by somebody other than us.
+Do not deploy this anywhere near patient data yet. The audit trail, the second factor and its
+recovery path, the login throttle, search, backup and restore all exist now; what is missing is
+validation against a resource's own definition, a migration story between releases, and any review
+of this by somebody other than us.
 
 A `client_application` or `bot` development principal now also needs a registered, active row in
 its Project, and an id carrying the `cli_` or `bot_` prefix. An id outside the namespace stops the
@@ -157,15 +160,18 @@ None of these are visible from reading the code.
 - **A compartment subject is created by naming it.** A `POST /Patient` mints an id no confined
   grant can name in advance, so it is refused; `PUT /Patient/{id}` under a grant naming that
   patient is how one is provisioned. Correct, and surprising the first time.
-- **Nothing validates a resource.** A body that is JSON and names the type the URL does is stored
-  as sent. There is no `$validate`, no profile checking and no terminology binding, so this
-  server will faithfully keep a clinically nonsensical record. It is the largest single gap
-  between this and a server somebody should trust with a chart.
-- **A lost second factor has no recovery path.** Replacing one needs a code from the one it
-  replaces — which is what stops a stolen session switching it off — and there is no
-  administrator route around that yet. Somebody who loses their phone is locked out of that
-  account until one exists. That is the deliberate half of the trade; the missing half is the
-  administrator route.
+- **Nothing validates a resource against its own definition.** `$validate` is served and the same
+  rules gate every write, but this build ships no `StructureDefinition`s: it checks the rules that
+  hold for every R4 resource — no null, no empty string, no empty array, an `id` that is the `id`
+  datatype, a relative reference that names an R4 type — plus the syntax of the elements it
+  indexes for search. It checks no cardinality, no profile and no terminology binding, so
+  `"status": "banana"` passes. Closing it means shipping the R4 definitions and walking them, and
+  it is still the largest single gap between this and a server somebody should trust with a chart.
+- **An install with one administrator who loses their phone has no way back through the API.**
+  `DELETE /admin/projects/{project}/users/{user}/second-factor` is the recovery path, and it
+  refuses the caller's own factor: an administrator who could reach around the code requirement
+  with their own session would make a stolen administrator session enough to disable MFA. Recovery
+  is something somebody else does for you, and a single-administrator install has nobody else.
 - **The control plane is a working subset, not the whole surface.** It creates Projects,
   invites identities, grants standing and registers client applications. AccessPolicy authoring,
   link management, credential rotation and every list endpoint are still store-only.
