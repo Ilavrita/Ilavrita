@@ -337,7 +337,7 @@ func (s *ProjectStore) writeInstance(ctx context.Context, instance project.Insta
 // applying nothing unless the row is still pending.
 func (s *ProjectStore) CompleteClaim(ctx context.Context, claim project.Claim) error {
 	return s.within(ctx, func(ctx context.Context) error {
-		if err := s.insertMembership(ctx, claim.Membership, claim.At); err != nil {
+		if err := writeMembership(ctx, s.db, claim.Membership, claim.At); err != nil {
 			return err
 		}
 
@@ -355,52 +355,6 @@ func (s *ProjectStore) CompleteClaim(ctx context.Context, claim project.Claim) e
 
 		return nil
 	})
-}
-
-// insertMembership writes one membership row. It binds the stored flags rather
-// than the effective ones, because a membership that is not yet active still
-// holds what it was granted.
-func (s *ProjectStore) insertMembership(
-	ctx context.Context, member project.Membership, at time.Time,
-) error {
-	principal := member.Principal()
-
-	var user, application, bot any
-
-	switch principal.Kind {
-	case project.PrincipalUser:
-		user = string(principal.ID)
-	case project.PrincipalClientApplication:
-		application = string(principal.ID)
-	case project.PrincipalBot:
-		bot = string(principal.ID)
-	default:
-		return fmt.Errorf("%w: %q", project.ErrInvalidPrincipal, string(principal.Kind))
-	}
-
-	var profileType, profileID any
-	if profile, held := member.Profile(); held {
-		profileType, profileID = string(profile.Type), string(profile.ID)
-	}
-
-	stamp := at.UTC().UnixMilli()
-
-	var activated any
-	if member.State() == project.MembershipActive {
-		activated = stamp
-	}
-
-	_, err := conn(ctx, s.db).ExecContext(ctx, createMembership,
-		string(member.Project()), string(member.ID()), string(member.ProjectKind()),
-		user, application, bot, profileType, profileID, string(member.State()),
-		asInteger(member.StoredAdmin()), asInteger(member.StoredSuperAdmin()),
-		string(member.Source()), stamp, stamp, activated,
-	)
-	if err != nil {
-		return fmt.Errorf("pocketbase: create membership %s: %w", member.ID(), err)
-	}
-
-	return nil
 }
 
 // within runs work inside one transaction, joining the caller's if the context
