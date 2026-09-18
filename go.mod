@@ -2,21 +2,25 @@ module github.com/Ilavrita/Ilavrita
 
 go 1.27
 
-// Ilavrita builds exclusively against the Ilavrita PocketBase fork, vendored as
-// a pinned git submodule at third_party/pocketbase.
-//
-// The fork still declares the upstream module path (`github.com/pocketbase/pocketbase`),
-// so a module-path replacement to `github.com/Ilavrita/pocketbase` is rejected by the
-// Go toolchain. A directory replacement is therefore the only wiring that guarantees
-// the fork — and never upstream — is what gets compiled.
-//
-// Run `make bootstrap` (or `git submodule update --init --recursive`) before building.
-require github.com/pocketbase/pocketbase v0.0.0
-
-// IDNA (UTS #46) is how packages/project normalises an email domain. One code
-// path encodes every domain, so an ASCII lookalike cannot skip the validation a
-// Unicode domain gets.
-require golang.org/x/net v0.59.0
+require (
+	github.com/pocketbase/dbx v1.12.0
+	// Ilavrita builds exclusively against the Ilavrita PocketBase fork, vendored as
+	// a pinned git submodule at third_party/pocketbase.
+	//
+	// The fork still declares the upstream module path (`github.com/pocketbase/pocketbase`),
+	// so a module-path replacement to `github.com/Ilavrita/pocketbase` is rejected by the
+	// Go toolchain. A directory replacement is therefore the only wiring that guarantees
+	// the fork — and never upstream — is what gets compiled.
+	//
+	// Run `make bootstrap` (or `git submodule update --init --recursive`) before building.
+	github.com/pocketbase/pocketbase v0.0.0
+	golang.org/x/crypto v0.57.0
+	// IDNA (UTS #46) is how packages/project normalises an email domain. One code
+	// path encodes every domain, so an ASCII lookalike cannot skip the validation a
+	// Unicode domain gets.
+	golang.org/x/net v0.59.0
+	modernc.org/sqlite v1.57.0
+)
 
 require (
 	github.com/asaskevich/govalidator v0.0.0-20230301143203-a9d515a09cc2 // indirect
@@ -33,13 +37,11 @@ require (
 	github.com/mattn/go-colorable v0.1.15 // indirect
 	github.com/mattn/go-isatty v0.0.24 // indirect
 	github.com/ncruces/go-strftime v1.0.0 // indirect
-	github.com/pocketbase/dbx v1.12.0 // indirect
 	github.com/pocketbase/ozzo-validation/v4 v4.3.0 // indirect
 	github.com/remyoudompheng/bigfft v0.0.0-20230129092748-24d4a6f8daec // indirect
 	github.com/spf13/cast v1.10.0 // indirect
 	github.com/spf13/cobra v1.10.2 // indirect
 	github.com/spf13/pflag v1.0.10 // indirect
-	golang.org/x/crypto v0.57.0 // indirect
 	golang.org/x/image v0.46.0 // indirect
 	golang.org/x/oauth2 v0.36.0 // indirect
 	golang.org/x/sync v0.23.0 // indirect
@@ -49,7 +51,6 @@ require (
 	modernc.org/libc v1.74.4 // indirect
 	modernc.org/mathutil v1.7.1 // indirect
 	modernc.org/memory v1.12.0 // indirect
-	modernc.org/sqlite v1.57.0 // indirect
 )
 
 replace github.com/pocketbase/pocketbase => ./third_party/pocketbase

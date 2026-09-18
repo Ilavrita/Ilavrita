@@ -203,6 +203,95 @@ func (s *UserStore) writeState(
 	return UserVersion(version), nil
 }
 
+// ErrCredentialNotMinted reports a write carrying the sentinel a read rebuilds
+// an identity with. A hash no password hashes to would lock the identity out
+// forever, so it is refused rather than written.
+var ErrCredentialNotMinted = errors.New("pocketbase: a credential is written with a derived hash, never a rebuilt one")
+
+// The one statement in this package that reads a stored password hash. Every
+// other projection reads it as the single bit userColumns carries, so this is
+// the whole surface on which a presented password can be checked.
+const authenticateQuery = "SELECT id, COALESCE(password_hash, '')" +
+	" FROM users WHERE identity_realm = ? AND email_normalized = ? AND state = 'active'"
+
+// acceptInvitation sets a credential and activates in one statement, conditional
+// on the identity still being invited, so an accepted invitation cannot be
+// replayed into a password reset.
+const acceptInvitation = "UPDATE users SET password_hash = ?, state = 'active'," +
+	" updated_at = ?, version = version + 1" +
+	" WHERE id = ? AND version = ? AND state = 'invited' AND password_hash IS NULL" +
+	" RETURNING version"
+
+// AcceptInvitation moves an invited identity to active and sets its credential in
+// the same write, so no row exists that is active without one. A replay matches
+// nothing, because the statement requires the identity to still be invited.
+func (s *UserStore) AcceptInvitation(
+	ctx context.Context, id project.UserID, hash project.PasswordHash, expect UserVersion,
+) (UserVersion, error) {
+	// A User a read rebuilt carries the sentinel rather than a derived hash, so
+	// writing one back would lock the identity out of every future login.
+	if hash == "" || hash == credentialOnFile {
+		return 0, fmt.Errorf("%w: %s", ErrCredentialNotMinted, id)
+	}
+
+	var version int64
+
+	err := conn(ctx, s.db).QueryRowContext(ctx, acceptInvitation,
+		string(hash), time.Now().UTC().UnixMilli(), string(id), int64(expect),
+	).Scan(&version)
+
+	switch {
+	case errors.Is(err, sql.ErrNoRows):
+		return 0, fmt.Errorf("%w: %s is not an invitation standing at version %d",
+			storage.ErrVersionConflict, id, expect)
+	case err != nil:
+		return 0, fmt.Errorf("pocketbase: accept invitation: %w", err)
+	}
+
+	return UserVersion(version), nil
+}
+
+// Authenticate resolves one identity by the credential it presents. It is the
+// only read in this package that fetches a stored password hash, and it returns
+// the identity rather than the hash, so the material never leaves this method.
+//
+// An unknown address and a wrong password are the same answer: found is false and
+// no error, because telling them apart tells an attacker which addresses exist.
+func (s *UserStore) Authenticate(
+	ctx context.Context, realm project.IdentityRealm, email project.Email, password string,
+) (project.User, bool, error) {
+	if realm == "" {
+		return project.User{}, false, fmt.Errorf("%w: a login names its realm", project.ErrInvalidProjectID)
+	}
+
+	if email.IsZero() {
+		return project.User{}, false, fmt.Errorf("%w: login", project.ErrMissingEmail)
+	}
+
+	var id, stored string
+
+	switch err := conn(ctx, s.db).QueryRowContext(ctx, authenticateQuery,
+		string(realm), email.Normalized()).Scan(&id, &stored); {
+	case errors.Is(err, sql.ErrNoRows):
+		return project.User{}, false, nil
+	case err != nil:
+		return project.User{}, false, fmt.Errorf("pocketbase: authenticate in %s: %w", realm, err)
+	}
+
+	if !project.PasswordHash(stored).Matches(password) {
+		return project.User{}, false, nil
+	}
+
+	// The identity is read back through the ordinary projection, so what a caller
+	// receives carries the sentinel and never the hash just compared.
+	user, _, found, err := s.ByID(ctx, project.UserID(id))
+	if err != nil || !found {
+		return project.User{}, false, err
+	}
+
+	return user, true, nil
+}
+
 // userRow is one users row as the reads select it: every column the domain needs
 // to rebuild an identity, and the password hash only as whether one exists.
 type userRow struct {
