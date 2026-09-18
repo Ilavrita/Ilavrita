@@ -85,6 +85,163 @@ paths:
               schema:
                 $ref: "#/components/schemas/VersionReport"
 
+  /auth/login:
+    post:
+      tags: [Authentication]
+      summary: Log in
+      description: |
+        Proves a credential in one Project and issues a session. The token it
+        returns appears here once and is never readable again: only its digest
+        is stored.
+
+        Every refusal answers the same way. A wrong password, an address nobody
+        registered, a slug that resolves to nothing, an identity holding no
+        standing, and a missing or wrong second-factor code are one answer, so
+        nothing here can be used to find out which of them it was.
+
+        `code` is carried with the password rather than asked for afterwards. A
+        server that answered "now the code, please" would be saying the password
+        was right, and would say it to anyone who guessed an address that exists.
+      operationId: logIn
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/LoginRequest"
+      responses:
+        "200":
+          $ref: "#/components/responses/SessionIssued"
+        "400":
+          $ref: "#/components/responses/Invalid"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "429":
+          $ref: "#/components/responses/TooManyAttempts"
+        "500":
+          $ref: "#/components/responses/InternalFailure"
+
+  /auth/logout:
+    post:
+      tags: [Authentication]
+      summary: Log out
+      description: |
+        Destroys the session the request carries. The stored token digest is
+        removed rather than labelled, so the token matches nothing afterwards.
+      operationId: logOut
+      responses:
+        "204":
+          description: The session is gone.
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "500":
+          $ref: "#/components/responses/InternalFailure"
+
+  /auth/session:
+    get:
+      tags: [Authentication]
+      summary: Describe the current session
+      description: Reports who the token names, for a client that holds one.
+      operationId: describeSession
+      responses:
+        "200":
+          $ref: "#/components/responses/SessionDescribed"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "500":
+          $ref: "#/components/responses/InternalFailure"
+
+  /auth/mfa:
+    post:
+      tags: [Authentication]
+      summary: Enrol a second factor
+      description: |
+        Begins a TOTP enrolment for the caller's own identity. The secret is
+        returned once, here, and never again: what is stored afterwards is
+        sealed, and what an authenticator app holds is the person's own.
+
+        Enrolling replaces whatever the identity had, and the new factor is
+        pending until a code proves it. That is how somebody who lost their
+        phone starts again — and why it cannot lock anyone out, because a
+        pending factor is required of nobody.
+
+        `501` is the answer from a deployment that configured no sealing key.
+        Storing the secret in the clear instead would make the database a list
+        of everyone's second factor.
+      operationId: enrolSecondFactor
+      responses:
+        "201":
+          $ref: "#/components/responses/FactorEnrolled"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "500":
+          $ref: "#/components/responses/InternalFailure"
+        "501":
+          $ref: "#/components/responses/NotImplemented"
+    delete:
+      tags: [Authentication]
+      summary: Withdraw a second factor
+      description: |
+        Removes the caller's factor. A current code is required to do it: a
+        session is a bearer credential, so without one, stealing a session would
+        be enough to take the second factor off the account it protects.
+
+        A pending factor needs no code — the phone that would produce it may be
+        exactly what was lost.
+      operationId: withdrawSecondFactor
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/FactorCode"
+      responses:
+        "204":
+          description: The factor is gone.
+        "400":
+          $ref: "#/components/responses/Invalid"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "500":
+          $ref: "#/components/responses/InternalFailure"
+        "501":
+          $ref: "#/components/responses/NotImplemented"
+
+  /auth/mfa/activate:
+    post:
+      tags: [Authentication]
+      summary: Activate a second factor
+      description: |
+        Proves a pending factor, which is the only way one becomes required.
+        Nothing can put a factor between a person and their account except a
+        code from the phone holding it.
+
+        A code is accepted once. Presenting the same one again is refused, so a
+        code watched over somebody's shoulder is not good for the rest of its
+        thirty seconds.
+      operationId: activateSecondFactor
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/FactorCode"
+      responses:
+        "200":
+          $ref: "#/components/responses/FactorActivated"
+        "400":
+          $ref: "#/components/responses/Invalid"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "500":
+          $ref: "#/components/responses/InternalFailure"
+        "501":
+          $ref: "#/components/responses/NotImplemented"
+
   /fhir/R4/metadata:
     get:
       tags: [FHIR]
@@ -784,6 +941,89 @@ components:
                       type: boolean
                       description: Always true; an update may create the id a client names.
 
+    LoginRequest:
+      type: object
+      required: [project, email, password]
+      properties:
+        project:
+          type: string
+          description: The Project's slug.
+        email:
+          type: string
+        password:
+          type: string
+        code:
+          type: string
+          description: |
+            The second factor, when the identity has one. A client offers the
+            field always and fills it when its user has a factor, which is
+            something the person knows and the server never says.
+          pattern: "^[0-9]{6}$"
+
+    LoginResponse:
+      type: object
+      required: [token, expiresAt, project, membership]
+      properties:
+        token:
+          type: string
+          description: |
+            The session token. It appears here once and is never readable
+            again: only its digest is stored.
+        expiresAt:
+          type: string
+        project:
+          type: string
+        membership:
+          type: string
+
+    SessionResponse:
+      type: object
+      required: [project, user, membership, expiresAt, admin, superAdmin]
+      properties:
+        project:
+          type: string
+        user:
+          type: string
+        membership:
+          type: string
+        expiresAt:
+          type: string
+        admin:
+          type: boolean
+        superAdmin:
+          type: boolean
+
+    FactorCode:
+      type: object
+      required: [code]
+      properties:
+        code:
+          type: string
+          pattern: "^[0-9]{6}$"
+
+    FactorEnrolment:
+      type: object
+      required: [secret, uri]
+      properties:
+        secret:
+          type: string
+          description: |
+            The shared secret, base32-encoded. This is the only moment it is
+            readable: what is stored is sealed.
+        uri:
+          type: string
+          description: The otpauth:// URL an authenticator app scans.
+
+    FactorStatus:
+      type: object
+      required: [enrolled]
+      properties:
+        enrolled:
+          type: boolean
+        state:
+          type: string
+          enum: [pending, active]
+
     Bundle:
       type: object
       description: One resource's versions, newest first.
@@ -968,6 +1208,45 @@ components:
         application/fhir+json:
           schema:
             $ref: "#/components/schemas/Resource"
+
+    SessionIssued:
+      description: The credential was proved and a session issued.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/LoginResponse"
+
+    SessionDescribed:
+      description: Who the token names.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/SessionResponse"
+
+    FactorEnrolled:
+      description: The enrolment began. The secret is readable here and nowhere else.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/FactorEnrolment"
+
+    FactorActivated:
+      description: The factor was proved and is required from now on.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/FactorStatus"
+
+    TooManyAttempts:
+      description: |
+        Too many attempts have been refused for this identity or from this
+        address inside the window. It is counted across the install rather than
+        within one process, so a deployment running several does not allow
+        several times the guesses.
+      content:
+        application/fhir+json:
+          schema:
+            $ref: "#/components/schemas/OperationOutcome"
 
     SearchResults:
       description: One page of the resources the search matched.
