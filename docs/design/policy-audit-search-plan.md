@@ -7,8 +7,10 @@ the existing code that were expensive to discover — so the next implementation
 starts from them rather than rediscovering them.
 
 Testable rules are numbered `POL-n`, `AUD-n` and `SRC-n`, following the
-`SCH-`/`CP-`/`LNK-`/`AUTH-`/`HIST-`/`IDN-`/`REST-`/`CAP-` convention. Nothing here is
-implemented.
+`SCH-`/`CP-`/`LNK-`/`AUTH-`/`HIST-`/`IDN-`/`REST-`/`CAP-` convention.
+
+**Section 2 is implemented.** POL-1 through POL-9 are in the tree, with the
+deviations §2.4 records. Audit and search are not.
 
 ## 1. Why policies come before search
 
@@ -42,9 +44,15 @@ filter can say may widen a Grant, so a malformed or unreadable filter denies
 rather than being dropped.
 
 **POL-2.** A filter names one element path, one comparator and one value set. The
-first version supports equality and set membership on a top-level or
-`one.two`-style path — enough for `status`, `category.coding.code` and `class`. A
+first version supports equality and set membership on a dotted path of up to
+four segments — enough for `status`, `category.coding.code` and `class.code`. A
 path this server cannot read is POL-1's denial, never a match.
+
+A path crosses whatever shape FHIR chose. `category.coding.code` passes through
+two arrays and `class.code` through none, and the author writes neither fact:
+each hop normalises what it finds to an array before iterating it. `json_extract`
+alone cannot do this — it does not traverse arrays, so a naive dotted path would
+have matched nothing for exactly the example this rule names.
 
 **POL-3.** The filter is applied in the storage query and not after it. A row
 fetched and then discarded has already been read, and the count of what was
@@ -75,6 +83,12 @@ one nobody recorded.
 resource that cannot be addressed or version-checked is not usable, and
 withholding them buys nothing: the reader already holds the row.
 
+As built, `meta` is returned whole rather than only its `versionId`. It is the
+server's own bookkeeping rather than clinical content, and a version id without
+the instant beside it is a record a client cannot reason about. This is a
+superset of what POL-7 requires, and it is the one place the implementation
+returns more than the rule asks for.
+
 **POL-8.** Restriction happens on the way out, in one place, applied to every route
 that returns a resource. It is the one rule here that cannot be a query predicate,
 so it must not be scattered across handlers.
@@ -83,6 +97,25 @@ so it must not be scattered across handlers.
 
 **POL-9.** A rule may name several compartment ids, compiling to one Grant each.
 This removes the row-per-patient roster without altering what is expressible.
+
+### 2.4 What the implementation added that this document did not ask for
+
+- **A write is checked against the content it submits, for filters as well as
+  compartments.** POL-5 said this; what it did not say is that the same
+  generated predicate serves both, run against a bound body instead of a stored
+  row. A second evaluator written in Go would have been a second rule, and the
+  two would have disagreed the first time either changed.
+- **Projections are decided per row, not per Scope.** A caller holding one
+  patient's chart in full and another's status alone must not read the second
+  patient in full because the first Grant exists. Which Grants reach a row is
+  worked out against that row's own placement and content, and only those
+  Grants have a say in how much of it comes back.
+- **A caller that reads part of a resource may not replace all of it.** An
+  update replaces content wholesale, so a partial reader performing the ordinary
+  read-modify-write would silently drop every element their own policy withheld.
+  That is data loss produced by an authorization rule, so the write is refused
+  rather than answered. A caller with no read Grant at all is not blind in this
+  sense and is unaffected.
 
 ## 3. Audit
 
@@ -162,3 +195,20 @@ boundary already enforces.
   `id LIKE 'cli\_%'` are not the same check.
 - **FHIR logical ids disallow underscores.** A fixture id carrying one fails in a
   way that looks like an authorization bug.
+- **An update did not re-place a resource in the compartments it states.** The
+  route layer derived them and storage discarded them, so after an update the
+  patient a resource had moved away from went on reading it and the patient it
+  moved to could not. The projection is now replaced by every write that states
+  new content, and kept by a delete, which states none.
+- **`json_extract` does not traverse arrays.** A dotted path over FHIR needs a
+  hop that normalises what it finds to an array first, and `json_each` hands a
+  scalar element back as an SQL scalar rather than as JSON — which the next hop
+  reads as malformed and fails the whole query on, one odd row refusing every
+  row beside it. `json_quote` carries it back.
+- **A nested query inside an open cursor deadlocks this pool.** It holds one
+  connection, so a per-row query issued while rows are still open waits for a
+  connection only closing those rows can release. Collect first, then enrich.
+- **`gh auth token --user` is not enough to push as that user.** git tries every
+  configured credential helper in order and gh installs one bound to the active
+  account, so the helper list has to be cleared in the same command that sets
+  the transient one.

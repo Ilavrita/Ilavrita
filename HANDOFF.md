@@ -212,12 +212,30 @@ confined write against them and projects them into `fhir_resource_compartment`, 
 ever written before. A confined caller that collides with an id in another compartment is answered
 `403` rather than `409`, so a create cannot be used to probe which ids exist.
 
-**3. Access policies, audit, then search.** In that order, and the order is the point:
-search returns sets, so a policy model that cannot say "only `status=final`" becomes a bulk
-disclosure surface the moment the first real query runs. Audit lands beside policies because
-every route worth auditing already exists. The whole design is
-`docs/design/policy-audit-search-plan.md`, including the seven findings from this work that a
-reimplementation should not have to rediscover.
+**3. Access policies. Done.** A rule now narrows three ways and none of them can widen it. A
+**filter** (`POL-1`..`POL-5`) restricts which resources a Grant reaches by an element's value:
+`status = final`, `category.coding.code in (vital-signs, laboratory)`. It runs inside the query,
+never over rows already fetched, and the same compiled predicate is what a write is checked
+against — so a caller cannot write a resource its own filter would then hide from it. A
+**projection** (`POL-6`..`POL-8`) restricts how much of a resource comes back, decided per row
+against the Grants that actually reach that row, so a clinician holding one patient in full and
+another's status alone cannot read the second in full. A **subject set** (`POL-9`) names a roster
+in one rule instead of one rule per member.
+
+Two things fell out of it. A caller that reads part of a resource may not replace all of it: an
+update replaces content wholesale, so the ordinary read-modify-write would silently drop what
+their own policy withheld. And an update never re-placed a resource in the compartments it
+states — the route layer derived them and storage discarded them, so the patient a resource had
+moved away from went on reading it. Both are fixed and both have named regression tests.
+
+`docs/design/policy-audit-search-plan.md` carries the numbered rules, the deviations, and the
+findings a reimplementation should not have to rediscover.
+
+**3a. Audit, then search.** In that order. Audit lands beside policies because every route worth
+auditing already exists, and search comes last because it returns sets: it is the interaction
+that turns any remaining coarseness in the policy model into a bulk disclosure surface. The
+projection work is what search will inherit — `SRC-5`'s typed indexes are the same
+derive-on-write, read-through-a-predicate shape the compartment table now has.
 
 **4. Then the rest.** Binary and DocumentReference payloads over storage, subscriptions on the
 runtime's WebSockets, and the resource types that are on neither the non-clinical allowlist nor
