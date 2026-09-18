@@ -166,13 +166,14 @@ many times as there are tenants, and there is nothing tenant-specific about what
 an `Observation` is. A Project that writes its own `StructureDefinition` under
 one of those ids serves its own; the specification's is what is behind it.
 
-Two consequences worth knowing. The fallback answers a caller whose own Project
-holds no such row — which includes a confined caller who may not see one that is
-there, because an id must not be probeable. That is safe for the published
-specification and is why nothing confidential may be seeded into that store. And
-**nothing validates against them yet**: the definitions are readable and the
-validator still does not open them, so the section below is still the whole of
-what a write is checked against.
+The fallback is a decision rather than an inference. A canonical resource belongs
+to no Project, so there is no row for a compartment, a filter or a projection to
+be evaluated against, and it is answered only for a caller whose Grant narrows
+none of those. That matters because the Project's own store returns the same
+"not found" for a row that is not there and for one the caller may not see — an
+id must not be probeable — so reading the fallback off that answer would be
+handing resources out on a guess that is wrong exactly when it matters. A
+confined caller gets the 404 they would have got anyway.
 
 ## Validation is structural, and says so
 

@@ -108,6 +108,28 @@ func (s Scope) Allows(project ProjectID, kind Kind, resourceType ResourceType, a
 	})
 }
 
+// Admits reports whether the Scope authorizes this operation over every resource
+// of the type, with nothing narrowed.
+//
+// It is a different question from Allows, and a much narrower one. Allows
+// answers whether a decision was authorized at all; this answers whether the
+// authorization is unconditional — no compartment to be in, no filter to pass,
+// no elements withheld — so a caller holding it may be handed any resource of
+// that type without anything further being checked.
+//
+// It exists for the one case where storage has no row to decide against: a
+// resource that belongs to no Project, which no Grant's narrowing can be
+// evaluated over. Answering such a read from an unrestricted Grant is a
+// decision; answering it because a query found nothing is an inference, and a
+// wrong one whenever "found nothing" also means "may not see it".
+func (s Scope) Admits(project ProjectID, kind Kind, resourceType ResourceType, action Action) bool {
+	return slices.ContainsFunc(s.grants, func(g Grant) bool {
+		return g.Project == project && g.Kind == kind &&
+			g.Type == resourceType && g.Action == action &&
+			g.Compartment == nil && g.Filter == nil && g.Projection == nil
+	})
+}
+
 // Narrow returns the Grants matching one kind and action. It can only remove
 // Grants, never add them, which is what keeps a Scope from widening downstream.
 func (s Scope) Narrow(kind Kind, action Action) Scope {

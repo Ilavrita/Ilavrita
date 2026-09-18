@@ -96,7 +96,7 @@ func readResource(request *core.RequestEvent) error {
 
 	record, err := held.resources.Read(request.Request.Context(), held.scope, key)
 	if errors.Is(err, storage.ErrNotFound) {
-		return readCanonical(request, key, err)
+		return readCanonical(request, held, key, err)
 	}
 
 	if err != nil {
@@ -113,18 +113,24 @@ func readResource(request *core.RequestEvent) error {
 // StructureDefinition for a type serves that one. What is behind this is the
 // specification: the same bytes in every Project, belonging to none of them.
 //
-// Authorization already happened — begin decided it against this caller's Scope
-// for this type, and refused a caller holding no read of it at all. The original
-// failure is carried so a deployment holding no definitions answers the same 404
-// it always did.
+// It is answered only for a caller whose Grant narrows nothing. A canonical
+// resource belongs to no Project, so there is no row for a compartment, a filter
+// or a projection to be evaluated against, and a Grant carrying one cannot be
+// said to admit it. Asking that is the whole point: the Project's store returns
+// ErrNotFound both for a row that is not there and for one this caller may not
+// see — an id must not be probeable — so deciding from that answer would be
+// deciding from an inference that is wrong exactly when it matters.
 //
-// What is behind this fallback is load-bearing and narrow. A confined caller
-// reads ErrNotFound for a row they may not see as well as for one that is not
-// there — an id must not be probeable — so this answers both. That is safe for
-// the FHIR base definitions, which are the published specification and belong to
-// no compartment, and it is why nothing confidential may ever be seeded here.
-func readCanonical(request *core.RequestEvent, key storage.ResourceKey, absent error) error {
+// The original failure is carried, so a caller who is not admitted, and a
+// deployment holding no definitions, both answer the 404 they always did.
+func readCanonical(
+	request *core.RequestEvent, held granted, key storage.ResourceKey, absent error,
+) error {
 	if serving == nil || serving.definitions == nil {
+		return refuse(request, absent)
+	}
+
+	if !held.scope.Admits(held.project, storage.KindFHIR, key.Type, storage.ActionRead) {
 		return refuse(request, absent)
 	}
 

@@ -186,3 +186,38 @@ func TestSeedingAtStartupIsIdempotent(t *testing.T) {
 		t.Errorf("three starts left %+v", held)
 	}
 }
+
+// TestAConfinedCallerIsNotHandedTheDefinitions. A canonical resource belongs to
+// no Project, so there is no row for a compartment to be evaluated against and a
+// confined Grant cannot be said to admit it.
+//
+// What makes this worth asserting is that the Project's store answers ErrNotFound
+// both for a row that is not there and for one this caller may not see — an id
+// must not be probeable — so a fallback that read that answer would be handing
+// resources out on an inference rather than a decision. Today it would hand out
+// the published specification; the rule is what stops the next thing seeded
+// there being handed out the same way.
+func TestAConfinedCallerIsNotHandedTheDefinitions(t *testing.T) {
+	db := preparedDatabase(t)
+	seedProject(t, db, homeProject)
+	serveUnder(t, db, homeProject, confinedReadPolicy(t, homeProject))
+
+	serving.definitions = sqlite.NewCanonicalStore(db)
+
+	if err := seedDefinitions(t.Context(), serving.definitions); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+
+	routes := fhirRoutes(t)
+
+	// The definitions are there — an unrestricted caller reads them — and this
+	// caller does not get them.
+	if _, found, err := serving.definitions.Read(
+		t.Context(), "StructureDefinition", "Observation"); err != nil || !found {
+		t.Fatalf("the install holds no definition to withhold: %v (found=%v)", err, found)
+	}
+
+	assertStatus(t, call{
+		method: http.MethodGet, path: resourcePath("StructureDefinition", "Observation"),
+	}.send(t, routes), http.StatusNotFound)
+}
