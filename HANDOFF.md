@@ -12,12 +12,12 @@ most expensive mistake on this project so far.
 | --- | --- |
 | `GET /healthz`, `GET /version` | Working |
 | `GET /fhir/R4/metadata` | Working, R4-valid, generated from the routes actually served |
-| create, read, vread, update, delete, history-instance | Working, for 66 resource types: 38 non-clinical, 28 clinical |
+| create, read, vread, update, delete, history-instance | Working, for 126 resource types: 64 non-clinical, 62 clinical |
 | Everything else under `/fhir/R4` | `501` |
 | `POST /auth/login`, `POST /auth/logout`, `GET /auth/session` | Working |
 | `/admin/projects` and the surface beneath it | Working, for a Super Admin or the Project's own admin |
 
-**66 resource types are served** — 38 non-clinical and 28 clinical, out of R4's ~145. The two families are reached
+**126 resource types are served** — 64 non-clinical and 62 clinical, out of R4's 146. The two families are reached
 differently and that difference is the safety property: a non-clinical type may be granted
 outright, and a clinical one only through a compartment. A create is checked against the
 compartments the submitted resource itself declares, derived from its own references
@@ -146,17 +146,14 @@ None of these are visible from reading the code.
 
 ## 6. Known gaps
 
-- **No search.** The largest remaining piece and the PRD's own top risk (R-001).
-  `packages/search` is a doc comment. `storage` has no `Search` method.
-- **Compartment derivation reads top-level elements only.** `Appointment` and `Provenance` link
-  through a nested path (`participant.actor`, `target`), so this build cannot place one, so neither
-  is served: a clinical resource landing in no compartment is reachable by no confined grant.
-  `TestEveryPlaceableTypeIsOneThisBuildServes` keeps the two lists honest.
-- **AccessPolicy carries no filter and no field restriction.** "Share only `status=final`
-  Observations" and "share an Observation without its note" are both unrepresentable. A set of
-  compartments *is* expressible — `Compile` emits one Grant per rule — but at one rule per
-  compartment, so a clinic-wide role's roster is its row count. `docs/design/policy-audit-search-plan.md`
-  specifies all three, and why they land before search.
+- **Compartment derivation reads top-level elements only.** `Appointment` links through
+  `participant.actor`, `Person` through `link.target`, `Provenance` through `target` and
+  `agent.who`, so this build cannot place one, so none is served: a clinical resource landing in
+  no compartment is reachable by no confined grant. Twelve of the twenty undeclared R4 types are
+  there for this reason; `TestEveryPlaceableTypeIsOneThisBuildServes` keeps the two lists honest.
+- **Five R4 types are unclassified.** `Basic`, `BiologicallyDerivedProduct`, `DeviceMetric`,
+  `ResearchStudy` and `VerificationResult` are on neither list, so they are treated as carrying
+  patient data and are not served. That is the safe answer rather than the finished one.
 - **A compartment subject is created by naming it.** A `POST /Patient` mints an id no confined
   grant can name in advance, so it is refused; `PUT /Patient/{id}` under a grant naming that
   patient is how one is provisioned. Correct, and surprising the first time.
@@ -172,11 +169,10 @@ None of these are visible from reading the code.
 - **The control plane is a working subset, not the whole surface.** It creates Projects,
   invites identities, grants standing and registers client applications. AccessPolicy authoring,
   link management, credential rotation and every list endpoint are still store-only.
-- **Clinical resource types are not served** — Patient, Observation and everything else
-  `CarriesClinicalData` reports true for. Withheld because serving PHI-bearing types on a build
-  whose only principal comes from an environment variable is worse than serving none.
-- **`AccessPolicy` can only express compartment restrictions.** "Share only `status=final`
-  Observations" is not representable. Written up in `docs/design/authz-spec.md`.
+- **Attachments outside DocumentReference land in the row.** `Media.content`,
+  `DiagnosticReport.presentedForm` and `Communication.payload` carry bytes into the resource row,
+  bounded only by the 4 MiB one request body may be. `DocumentReference` is refused and sent to
+  `Binary` because R4 gave its attachment a url; the others have nowhere to be sent.
 - **Linked Projects resolve but nothing names a grantor.** `LinkStore` reads them and
   `BuildScope` compiles their Grants; a by-key route names no grantor, so the reach is exercised
   by tests and not yet by any request. The search route is what will name one.
@@ -300,10 +296,19 @@ subscriber connected to one of them, and a notification worked out on another ha
 tell — recorded as never delivered rather than retried, because retrying would not move it to the
 replica holding the socket. `rest-hook` is the channel that survives that.
 
-Every type this build advertises is already classified: 38 are non-clinical, so an unrestricted
-rule may cover them, and the other 28 all derive compartments, so a confined rule can reach them.
+**A socket does not outlive its session.** Every other route proves a token on each request; a
+socket is authorized once and then held, so the session it bound under is asked after again — on a
+timer, and before each ping. A logout closes it within thirty seconds and nothing is delivered
+over it in between. It holds no token to re-present and must not: a credential kept for the life
+of a connection is one a crash dump carries, so what it holds is which session it was.
+
+Every type this build advertises is already classified: 64 are non-clinical, so an unrestricted
+rule may cover them, and the other 62 all derive compartments, so a confined rule can reach them.
 `TestEveryAdvertisedClinicalTypeCanBePlaced` is what keeps that true. Classifying is therefore
-what it costs to advertise the *next* type, not a gap in the ones already served.
+what it costs to advertise the *next* type, not a gap in the ones already served — and the
+classification is the whole of the work: `TestInteractionLifecycle` runs all six interactions
+against every advertised type, so a type with a wrong compartment element fails the suite rather
+than reaching a deployment.
 
 **6. Second factors and the login throttle. Done.** An identity may enrol a TOTP factor at
 `POST /auth/mfa`; it is pending until a code proves it, so nothing can put a factor between a
