@@ -251,10 +251,13 @@ only when a page follows, `total` only when `_total=accurate` asked for one.
 Search is its own action. A Scope may let a clinician read any chart they are handed the id of
 and search only their own patients, so the read Grant is never compiled into a search.
 
-**4. Then the rest.** Binary and DocumentReference payloads over storage, subscriptions on the
-runtime's WebSockets, and the resource types that are on neither the non-clinical allowlist nor
-the compartment table — each needs classifying before it can be advertised, because a type no
-policy can authorize would publish an interaction nobody can perform.
+**4. Then the rest.** Binary and DocumentReference payloads over storage, and subscriptions on the
+runtime's WebSockets.
+
+Every type this build advertises is already classified: 38 are non-clinical, so an unrestricted
+rule may cover them, and the other 28 all derive compartments, so a confined rule can reach them.
+`TestEveryAdvertisedClinicalTypeCanBePlaced` is what keeps that true. Classifying is therefore
+what it costs to advertise the *next* type, not a gap in the ones already served.
 
 Still open from earlier: **MFA**, and a login throttle that is per process rather than per
 install. Search parameters are deliberately a short list — `packages/search/registry.go` is the
