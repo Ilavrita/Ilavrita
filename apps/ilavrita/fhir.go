@@ -72,6 +72,12 @@ var servedInteractions = []servedInteraction{
 	{fhir.InteractionSearchType, http.MethodPost, typeSearchPath, searchResourcesByPost},
 }
 
+// systemInteractions are the ones this build serves that are not about one
+// resource type. A transaction is the whole of that list.
+var systemInteractions = []servedInteraction{
+	{fhir.InteractionTransaction, http.MethodPost, "", performTransaction},
+}
+
 // validateOperation is served beside the interactions rather than among them.
 // CapabilityStatement declares an operation under `operation`, not `interaction`,
 // so a row in the table above would advertise it as something it is not.
@@ -122,6 +128,11 @@ func registerFHIRRoutes(routes *router.Router[*core.RequestEvent]) {
 	// which is what the bare /{resourceType} routes would otherwise make of it.
 	// They are registered per method rather than for any, because a literal path
 	// answering more methods than the pattern beside it is a routing conflict.
+	// The base path itself, which is where a transaction is submitted.
+	for _, served := range systemInteractions {
+		base.Route(served.method, served.path, audited(served.code, served.handler))
+	}
+
 	for _, method := range methodsOn(typePath) {
 		base.Route(method, systemHistoryPath, rejectUnimplemented)
 		base.Route(method, systemSearchPath, rejectUnimplemented)
@@ -185,11 +196,12 @@ func describeCapabilities(request *core.RequestEvent) error {
 	}
 
 	statement := fhir.NewCapabilityStatement(fhir.CapabilityConfig{
-		SoftwareVersion: version,
-		Published:       startedAt,
-		BaseURL:         base,
-		Interactions:    advertisedInteractions(),
-		Operations:      advertisedOperations(),
+		SoftwareVersion:    version,
+		Published:          startedAt,
+		BaseURL:            base,
+		Interactions:       advertisedInteractions(),
+		Operations:         advertisedOperations(),
+		SystemInteractions: advertisedSystemInteractions(),
 		TypeOperations: map[string][]fhir.OperationCapability{
 			string(codeSystemType): codeSystemOperations(),
 		},
@@ -207,6 +219,18 @@ func advertisedOperations() []fhir.OperationCapability {
 		Name:       validateOperationName,
 		Definition: "http://hl7.org/fhir/OperationDefinition/Resource-validate",
 	}}
+}
+
+// advertisedSystemInteractions names what this server answers that is not about
+// one type. It is read off the table the routes were registered from, the same
+// as every other advertised thing.
+func advertisedSystemInteractions() []fhir.Interaction {
+	codes := make([]fhir.Interaction, 0, len(systemInteractions))
+	for _, served := range systemInteractions {
+		codes = append(codes, served.code)
+	}
+
+	return codes
 }
 
 // codeSystemOperations are advertised on CodeSystem alone, because that is the

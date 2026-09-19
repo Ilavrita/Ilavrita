@@ -39,6 +39,11 @@ var auditedAs = map[fhir.Interaction]audit.Action{
 	fhir.InteractionInstanceHistory: audit.ActionHistory,
 	fhir.InteractionVersionRead:     audit.ActionHistory,
 	fhir.InteractionSearchType:      audit.ActionSearch,
+
+	// A transaction is recorded as the act it is, beside the record each of its
+	// entries writes for itself. One row saying "a transaction happened" would
+	// answer nothing an incident asks; the entries are what it did.
+	fhir.InteractionTransaction: audit.ActionWrite,
 }
 
 // answered is what each status means in the audit's own vocabulary. It is keyed

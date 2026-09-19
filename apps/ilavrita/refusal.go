@@ -99,6 +99,17 @@ var (
 		"That is not a page of history this server answers. _count is between 1 " +
 			"and 200, and _cursor is a version this server handed back."}
 
+	oversizedTransaction = refusal{http.StatusBadRequest, fhir.CodeTooCostly,
+		"That transaction holds more entries than this server performs in one commit."}
+
+	conditionalEntry = refusal{http.StatusBadRequest, fhir.CodeNotSupported,
+		"This server performs no conditional interaction, so a transaction " +
+			"entry may state no precondition."}
+
+	unreadableTransaction = refusal{http.StatusBadRequest, fhir.CodeInvalid,
+		"A transaction is a Bundle whose entries each create, update or delete " +
+			"one resource of a type this server serves."}
+
 	unnamedCode = refusal{http.StatusBadRequest, fhir.CodeInvalid,
 		"A lookup names both a system and a code."}
 
@@ -216,6 +227,13 @@ func translate(err error) refusal {
 		return unreadablePayload
 	case errors.Is(err, errInlineAttachment):
 		return inlineAttachment
+	case errors.Is(err, fhir.ErrPreconditionNotSupported):
+		return conditionalEntry
+	case errors.Is(err, errTooManyEntries):
+		return oversizedTransaction
+	case errors.Is(err, errEntryNotSupported), errors.Is(err, fhir.ErrNotABundle),
+		errors.Is(err, fhir.ErrMalformedEntry), errors.Is(err, fhir.ErrDuplicateFullURL):
+		return unreadableTransaction
 	case errors.Is(err, errNoCodeNamed):
 		return unnamedCode
 	case errors.Is(err, errSystemNotHeld):

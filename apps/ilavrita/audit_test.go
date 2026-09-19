@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"testing"
 
 	"github.com/Ilavrita/Ilavrita/packages/audit"
@@ -90,22 +91,20 @@ func auditingServer(t *testing.T) (http.Handler, *sql.DB) {
 // happened cannot answer the question an incident asks, and the interaction it
 // is missing is the one that will be asked about.
 func TestEverySignificantInteractionIsRecorded(t *testing.T) {
-	for _, served := range servedInteractions {
-		if _, audits := auditedAs[served.code]; !audits {
-			t.Errorf("the %s interaction is served but never recorded", served.code)
+	// Both tables: an interaction about one resource type and one about the
+	// server are served the same way and have to be recorded the same way.
+	served := append(slices.Clone(servedInteractions), systemInteractions...)
+
+	for _, held := range served {
+		if _, audits := auditedAs[held.code]; !audits {
+			t.Errorf("the %s interaction is served but never recorded", held.code)
 		}
 	}
 
 	for interaction := range auditedAs {
-		served := false
-
-		for _, candidate := range servedInteractions {
-			if candidate.code == interaction {
-				served = true
-			}
-		}
-
-		if !served {
+		if !slices.ContainsFunc(served, func(candidate servedInteraction) bool {
+			return candidate.code == interaction
+		}) {
 			t.Errorf("%s is recorded but this build does not serve it", interaction)
 		}
 	}
