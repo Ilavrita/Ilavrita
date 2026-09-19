@@ -25,6 +25,14 @@ var (
 // createResource mints a logical id and stores the submitted resource under it.
 // A body carrying its own id is refused: on this route the server assigns them.
 func createResource(request *core.RequestEvent) error {
+	// R4 makes a create conditional with this header. Nothing here performs a
+	// conditional interaction, and a header quietly dropped is a client that
+	// asked for "only if this is not already here", was given an unconditional
+	// create, and is told nothing about the duplicate it now holds.
+	if request.Request.Header.Get(ifNoneExistField) != "" {
+		return refuse(request, conditionalUnavailable)
+	}
+
 	if carriesRawPayload(request) {
 		return createPayload(request)
 	}

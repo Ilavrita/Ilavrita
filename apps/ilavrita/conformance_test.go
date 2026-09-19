@@ -397,6 +397,7 @@ type call struct {
 	path        string
 	body        string
 	ifMatch     string
+	ifNoneExist string
 	accept      string
 	contentType string
 	host        string
@@ -429,6 +430,10 @@ func (c call) send(t *testing.T, routes http.Handler) *httptest.ResponseRecorder
 
 	if c.ifMatch != "" {
 		sent.Header.Set(ifMatchField, c.ifMatch)
+	}
+
+	if c.ifNoneExist != "" {
+		sent.Header.Set(ifNoneExistField, c.ifNoneExist)
 	}
 
 	if c.accept != "" {

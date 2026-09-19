@@ -106,6 +106,10 @@ var (
 		"This server performs no conditional interaction, so a transaction " +
 			"entry may state no precondition."}
 
+	conditionalUnavailable = refusal{http.StatusBadRequest, fhir.CodeNotSupported,
+		"This server performs no conditional interaction. Search for the " +
+			"resource and decide for yourself whether to create it."}
+
 	unreadableTransaction = refusal{http.StatusBadRequest, fhir.CodeInvalid,
 		"A transaction is a Bundle whose entries each create, update or delete " +
 			"one resource of a type this server serves."}

@@ -335,6 +335,30 @@ func TestCreateRefusesABodyTheURLDisagreesWith(t *testing.T) {
 	}
 }
 
+// TestCreateRefusesAConditionOnItsOwnExistence. `If-None-Exist` is how R4 asks
+// for a create that does nothing if the resource is already there. This server
+// performs no conditional interaction, and a header quietly dropped is worse
+// than one refused: the client believes it was given idempotency and is holding
+// a duplicate it will never look for.
+func TestCreateRefusesAConditionOnItsOwnExistence(t *testing.T) {
+	routes := servingFHIR(t, everyAction)
+
+	answer := call{
+		method:      http.MethodPost,
+		path:        fhir.BasePath + "/Organization",
+		body:        submission("Organization"),
+		ifNoneExist: "name=the%20same%20one",
+	}.send(t, routes)
+
+	assertIssue(t, answer, http.StatusBadRequest, fhir.CodeNotSupported)
+
+	// And nothing was created, so the refusal is not a duplicate with an error
+	// page in front of it.
+	if found := searchedOrganizations(t, routes); found != 0 {
+		t.Errorf("a refused conditional create wrote %d Organization(s)", found)
+	}
+}
+
 // The version and the instant belong to the row. A client claiming them must
 // not have that claim stored, or a later read would contradict its own ETag.
 func TestSubmittedMetaNeverOverridesTheRow(t *testing.T) {

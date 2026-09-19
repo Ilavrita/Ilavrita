@@ -35,6 +35,7 @@ const (
 	locationField     = "Location"
 	lastModifiedField = "Last-Modified"
 	ifMatchField      = "If-Match"
+	ifNoneExistField  = "If-None-Exist"
 	authenticateField = "WWW-Authenticate"
 	weakPrefix        = "W/"
 )
