@@ -90,8 +90,9 @@ and an architecture that does not have to be rewritten to reach a clustered one.
 | Subscriptions | Working — `rest-hook`, and `websocket` within one process; queues are claimed, so replicas do not notify twice |
 | Resource validation, `$validate` | Against the R4 base definitions and required bindings — no profiles |
 | Terminology directory | `$lookup`, `$validate-code` — LOINC and SNOMED loaded by the deployment, never bundled |
-| Bundle batch and transaction | Not implemented |
-| Conditional create, update and delete | Not implemented |
+| Bundle transaction | Working — all-or-nothing, with `urn:uuid:` references resolved across entries |
+| Bundle batch | Not implemented |
+| Conditional create, update and delete | Not implemented — `If-None-Exist` is refused, never ignored |
 | Backup and restore | Working — `ilavrita backup`, `verify-backup`, `restore` |
 | Whole-system history | Not implemented |
 | PostgreSQL, SMART, Bulk Data, HL7v2, DICOM | Out of scope for v0.1 |

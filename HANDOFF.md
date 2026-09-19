@@ -13,7 +13,10 @@ most expensive mistake on this project so far.
 | `GET /healthz`, `GET /version` | Working |
 | `GET /fhir/R4/metadata` | Working, R4-valid, generated from the routes actually served |
 | create, read, vread, update, delete, history-instance | Working, for 126 resource types: 64 non-clinical, 62 clinical |
-| `POST /fhir/R4/{type}/$validate` | Working, structural only |
+| `GET /fhir/R4/{type}?...`, `POST /fhir/R4/{type}/_search` | Working, over a declared parameter set |
+| `POST /fhir/R4` with a `transaction` Bundle | Working, all-or-nothing |
+| `POST /fhir/R4/{type}/$validate` | Working, against the base definitions and required bindings |
+| `GET /fhir/R4/CodeSystem/$lookup`, `$validate-code` | Working, over releases the deployment loaded |
 | `ilavrita backup`, `verify-backup`, `restore` | Working |
 | Migrations, seeds and backfills | Idempotent, and recorded in `super_jobs` against the table |
 | Everything else under `/fhir/R4` | `501` |
@@ -170,8 +173,9 @@ None of these are visible from reading the code.
 - **LOINC and SNOMED are not bundled and cannot be.** SNOMED CT is licensed per country and per
   affiliate, so redistributing it in an AGPL repo is not an option; using it in a Member country
   (Germany is one) is free but must be registered with the National Release Center. A terminology
-  importer that loads a deployment'"'"'s own licensed copy is the shape that works, and it is not
-  built yet.
+  importer that loads a deployment's own licensed copy is built — `ilavrita terminology
+  import-loinc` and `import-snomed` — and a system nobody loaded answers `501`, not `404`: "I do
+  not hold that" and "that code does not exist" are different answers.
 - **A resource that nests past six levels of its own kind is unchecked there.** R4 lets an element
   hold its own kind and a snapshot cannot write that out, so the model expands it to a bound. Past
   it the content is not walked at all, because an element with no children in the model would have
@@ -354,6 +358,22 @@ deployment that configured no key holds no factors rather than storing them in t
 Login attempts are now counted across the install rather than within one process — three replicas
 would otherwise allow three times the guesses the limit states. The keys are digests: a table of
 who tried to log in and failed is a list of this install's users and where they were.
+
+**7. Bundle transaction. Done.** `POST /fhir/R4` performs a `transaction` Bundle as one act,
+inside the commit boundary the audit decorator already opens around the route — so an entry that
+fails takes every row, audit record and queued notification with it.
+
+Two things about it are worth knowing before changing it. **Every identity is settled before any
+entry is performed**: R4's order is deletes, then creates, then updates, so resolving references
+as the entries ran meant an entry created early could not name one updated late, which is the
+ordinary case. And **entries are given a throwaway slot for the resource they settle on**, so they
+do not overwrite the one the decorator uses for the transaction's own audit row — otherwise that
+row names whichever entry happened to run last and claims the transaction was about it.
+
+Every entry is decided and audited on its own. A Bundle is not a way to perform an interaction the
+caller could not have performed one at a time, and `TestEveryEntryIsDecidedOnItsOwn` is what keeps
+that true. Bundles are bounded at 200 entries because one commit holds this process's single
+pooled connection for its whole length.
 
 Search parameters are deliberately a short list — `packages/search/registry.go` is the
 whole of what this build answers, and adding one means adding a projection a write maintains and

@@ -46,7 +46,10 @@ single security and Project model, even though they ship in phases.
       seed and backfill is idempotent and recorded in `super_jobs` against the
       table it acted on. Rolling an install *back* to an earlier release is not
       written down
-- [ ] Bundle batch and transaction, with proven atomic rollback
+- [x] Bundle transaction — every entry happens or none does, entries decided
+      and audited one at a time, and `urn:uuid:` references resolved across
+      them before anything is written
+- [ ] Bundle batch — entries that succeed or fail independently
 - [x] Validation and `$validate` — every resource is checked against its own R4
       base definition, on the operation and on every write alike
 - [x] Terminology for required bindings — a code is checked against the value set
@@ -57,11 +60,12 @@ single security and Project model, even though they ship in phases.
       validator forbids the second
 - [ ] Single binary and container image
 
-**Bundle transaction is now the one that matters most.** A resource is checked
-against its own definition and its required bindings, so what this server keeps
-is a record a client can rely on. What it cannot yet do is write several
-resources as one act, which is what a clinical workflow needs on almost every
-real write.
+**Conditional interactions are now the one that matters most.** Several
+resources can be written as one act, and each is checked against its own
+definition and required bindings — so what this server keeps is a record a
+client can rely on. What it cannot yet do is let a client say *write this only
+if it is not already here*, which is how an ingestion pipeline stays idempotent
+and how a transaction entry names a resource by identifier rather than by id.
 
 ## Phase 2 — control plane and developer platform
 

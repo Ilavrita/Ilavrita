@@ -25,6 +25,7 @@ not belong in this build yet.
   `ETag`, `Last-Modified`, `Location` and `If-Match` honoured
 - Search, as `GET /{type}?...` and `POST /{type}/_search`, answering a
   `searchset` Bundle
+- `POST /fhir/R4`, performing a `transaction` Bundle as one act
 - Project isolation and authorization on every one of those interactions: each
   is decided against an `AccessPolicy` and bounded by a `Scope` the storage layer
   compiles into the query. A policy narrows by compartment, by an element's
@@ -67,11 +68,12 @@ Every other `/fhir/R4` route answers `501 Not Implemented` as an
 | History paging (`_count`, `_cursor`) | Working; see below |
 | History filtering (`_since`, `_at`, `_list`) | Ignored |
 | Type-level and system-level history | Not implemented |
-| Bundle batch and transaction | Not implemented |
-| Conditional create, update, delete | Not implemented |
-| Conditional read (`If-None-Match`, `If-Modified-Since`) | Not implemented |
+| Bundle transaction | Working: all-or-nothing; see below |
+| Bundle batch | Not implemented |
+| Conditional create, update, delete | Not implemented; `If-None-Exist` is refused, never ignored |
+| Conditional read (`If-None-Match`, `If-Modified-Since`) | Not implemented; the headers are ignored and the whole resource is returned |
 | Patch | Not implemented |
-| Validation and `$validate` | Against the base definitions; no profiles and no terminology; see below |
+| Validation and `$validate` | Against the base definitions and required bindings; no profiles; see below |
 | Clinical resource types | Served, reachable only through a compartment a policy names |
 | Authentication | Working: password, sessions, TOTP second factor with an administrator recovery path, per-install throttle; see below |
 | Audit trail | Working: every interaction and login, in the transaction that did it |
@@ -108,6 +110,52 @@ Observation, or a `Binary` naming no `securityContext`, is that case.
 A confined caller cannot **move** a resource out of the compartments it holds.
 Writing `subject: Patient/someone-else` under a grant naming `Patient/mine` is
 the same act as creating it there, and is refused the same way.
+
+## A transaction is one act
+
+`POST /fhir/R4` with a `transaction` Bundle performs every entry or none of
+them. The commit boundary is the one the audit decorator already opens around
+the route, so an entry that fails takes with it every row, audit record and
+queued notification the entries before it wrote.
+
+Entries run in R4's order — deletes, then creates, then updates — but every
+identity is settled before any row is written. Resolving references as the
+entries ran would mean an entry created early could not name one updated late,
+which is the ordinary case: a Bundle stating a Patient and an Observation about
+them usually states them in that order and updates the Patient. A `urn:uuid:`
+fullUrl is the placeholder; one no entry claims is left as written rather than
+rewritten to nothing, because a reference to an absolute URL outside the Bundle
+is a real reference.
+
+**Every entry is decided and audited on its own.** A Bundle is not a way to
+perform an interaction the caller could not have performed one at a time, and
+not a way to write without a trail: a create inside a transaction is checked
+against the same grants and produces the same audit row as the same create sent
+alone. The transaction itself is recorded too, as the act the entries belong to,
+naming no resource — a row naming whichever entry ran last would say the
+transaction was about that resource.
+
+A `PUT` at an identity nothing holds creates it, which is what `update` does on
+every other route here and what the CapabilityStatement declares as
+`updateCreate`.
+
+What a transaction does not do:
+
+- **`batch` is refused**, not performed as a transaction. Independent
+  success and failure per entry is a different promise, and answering it with
+  all-or-nothing would be a promise this server breaks
+- **An entry states no precondition.** R4 puts `ifMatch`, `ifNoneExist`,
+  `ifNoneMatch` and `ifModifiedSince` in the entry's own request; this build
+  performs no conditional interaction anywhere, so an entry stating one is
+  refused. Dropping it silently would answer a conditional write with an
+  unconditional one and say nothing about the difference
+- **`GET` entries are refused.** A transaction here writes; reading inside one
+  would return a resource the client would have to tell apart from the ones it
+  sent
+- **At most 200 entries.** One commit holds this process's single pooled
+  connection for its whole length, so an unbounded Bundle is every other request
+  in the process waiting behind it. A larger Bundle is refused with `400`, not
+  truncated
 
 ## Subscriptions reach one process
 

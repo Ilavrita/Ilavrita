@@ -271,6 +271,65 @@ paths:
         "501":
           $ref: "#/components/responses/NotImplemented"
 
+  /fhir/R4:
+    post:
+      tags: [FHIR]
+      summary: Bundle transaction
+      description: |
+        Performs every entry of a `transaction` Bundle as one act: all of them
+        happen, or none does. An entry that fails rolls away every row, audit
+        record and notification the entries before it wrote.
+
+        Entries are performed in R4's order — deletes, then creates, then
+        updates — but every identity is settled before any row is written, so an
+        entry may reference one another entry creates whichever order the two
+        were submitted in. A `urn:uuid:` fullUrl is the placeholder a reference
+        names; one no entry claims is left as it was rather than rewritten to
+        nothing.
+
+        Every entry is decided on its own against the caller's grants, and every
+        entry that wrote something is audited on its own. A Bundle is not a way
+        to perform an interaction the caller could not have performed one at a
+        time, nor a way to write without a trail.
+
+        A `PUT` at an identity nothing holds creates it, which is what `update`
+        does everywhere else here. `batch`, conditional references and per-entry
+        preconditions are not implemented and are refused rather than ignored.
+      operationId: performTransaction
+      requestBody:
+        required: true
+        content:
+          application/fhir+json:
+            schema:
+              $ref: "#/components/schemas/TransactionBundle"
+      responses:
+        "200":
+          description: |
+            Every entry was performed and the transaction committed. The answers
+            are in the order the entries were submitted, not the order they ran.
+          content:
+            application/fhir+json:
+              schema:
+                $ref: "#/components/schemas/TransactionResponseBundle"
+        "400":
+          $ref: "#/components/responses/Invalid"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "406":
+          $ref: "#/components/responses/NotAcceptable"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "413":
+          $ref: "#/components/responses/TooLarge"
+        "415":
+          $ref: "#/components/responses/UnsupportedMediaType"
+        "500":
+          $ref: "#/components/responses/InternalFailure"
+
   /fhir/R4/metadata:
     get:
       tags: [FHIR]
@@ -1374,6 +1433,95 @@ components:
             status:
               type: string
               description: The status the recorded interaction answered with.
+            etag:
+              type: string
+            lastModified:
+              type: string
+
+    TransactionBundle:
+      type: object
+      description: |
+        Several writes submitted as one act. At most 200 entries: one commit
+        holds this process's single pooled connection for its whole length, so
+        an unbounded Bundle is every other request waiting behind it.
+      required: [resourceType, type, entry]
+      properties:
+        resourceType:
+          type: string
+          const: Bundle
+        type:
+          type: string
+          const: transaction
+        entry:
+          type: array
+          maxItems: 200
+          items:
+            $ref: "#/components/schemas/TransactionEntry"
+
+    TransactionEntry:
+      type: object
+      required: [request]
+      properties:
+        fullUrl:
+          type: string
+          description: |
+            What other entries in this Bundle call this one. A `urn:uuid:` value
+            is a placeholder: references naming it are rewritten to the identity
+            the entry settled on, before any entry is performed.
+        resource:
+          $ref: "#/components/schemas/Resource"
+        request:
+          type: object
+          required: [method, url]
+          properties:
+            method:
+              type: string
+              enum: [POST, PUT, DELETE]
+            url:
+              type: string
+              description: |
+                `Type` for a create, `Type/id` for an update or a delete. A type
+                this deployment does not serve is refused.
+
+    TransactionResponseBundle:
+      type: object
+      description: |
+        What each entry did, in the order the entries were submitted.
+      required: [resourceType, type, entry]
+      properties:
+        resourceType:
+          type: string
+          const: Bundle
+        type:
+          type: string
+          const: transaction-response
+        entry:
+          type: array
+          items:
+            $ref: "#/components/schemas/TransactionResponseEntry"
+
+    TransactionResponseEntry:
+      type: object
+      description: |
+        The resource itself is not returned: a transaction of two hundred
+        entries would answer with two hundred resources the client already sent.
+      required: [response]
+      properties:
+        fullUrl:
+          type: string
+          description: |
+            Where the resource this entry wrote now lives. Absent for a delete,
+            which leaves nothing to read.
+        response:
+          type: object
+          required: [status]
+          properties:
+            status:
+              type: string
+              description: |
+                `201 Created` for a create and for an update that created the id
+                the client named, `200 OK` for an update that replaced one, and
+                `204 No Content` for a delete.
             etag:
               type: string
             lastModified:
