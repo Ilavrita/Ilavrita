@@ -114,8 +114,8 @@ func (r *Report) checkServerOwned(held map[string]any, at string) {
 //
 // These are rules about how JSON represents FHIR rather than about any
 // particular resource, which is exactly why they can be checked without an
-// element model: no StructureDefinition permits a null, an empty string or an
-// empty array anywhere.
+// element model: no StructureDefinition permits a null, an empty string, an
+// empty array or an empty object anywhere.
 func (r *Report) walk(held map[string]any, at string, depth int) {
 	if depth > maximumDepth {
 		r.note(SeverityError, at, "The body nests deeper than this server reads.")
@@ -157,6 +157,14 @@ func (r *Report) checkRepresentation(value any, where string, depth int) {
 			r.checkRepresentation(member, where+"["+strconv.Itoa(index)+"]", depth+1)
 		}
 	case map[string]any:
+		// An element written as {} is present and says nothing. R4 has no such
+		// value: an element with no content is absent. It matters most where the
+		// definition requires the element, because {} satisfies "is it there?"
+		// while carrying none of what being there was for.
+		if len(held) == 0 {
+			r.note(SeverityError, where, "An element with no content is absent, never an empty object.")
+		}
+
 		r.checkReference(held, where)
 		r.walk(held, where, depth+1)
 	}

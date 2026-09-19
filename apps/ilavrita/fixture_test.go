@@ -131,7 +131,51 @@ func valueOf(
 
 	_ = element
 
-	return encoded(filledUnder(model, named, "", depth+1))
+	return encoded(filledAtLeastOnce(model, named, depth))
+}
+
+// filledAtLeastOnce fills a complex type that requires nothing of its own.
+//
+// R4 has no empty object: an element written as {} is present and says nothing,
+// and the server refuses one. A datatype like CodeableConcept requires none of
+// its children, so filling only what is required would produce exactly that —
+// and the fixture would be proving the routes work on a body no client could
+// send.
+func filledAtLeastOnce(
+	model conformance.Model, named conformance.Structure, depth int,
+) map[string]json.RawMessage {
+	filled := filledUnder(model, named, "", depth+1)
+	if len(filled) > 0 {
+		return filled
+	}
+
+	// Nothing is required, so one optional element carries the content. A
+	// primitive, because a complex one would have the same problem one level
+	// down, and valueOf so a bound code comes from its own value set.
+	for _, name := range named.Names("") {
+		element, found := named.Element(name)
+		if !found || element.Choice || len(element.Types) == 0 {
+			continue
+		}
+
+		code := element.Types[0]
+		if _, known := primitiveFixtures[code]; !known {
+			continue
+		}
+
+		value := valueOf(model, named, name, element, code, depth+1)
+		if value == nil {
+			continue
+		}
+
+		if element.Repeats() {
+			value = json.RawMessage("[" + string(value) + "]")
+		}
+
+		return map[string]json.RawMessage{name: value}
+	}
+
+	return filled
 }
 
 // boundCode returns a code the element's own binding admits, and reports whether
