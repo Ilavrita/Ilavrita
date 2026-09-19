@@ -351,6 +351,8 @@ paths:
                 $ref: "#/components/schemas/CapabilityStatement"
         "400":
           $ref: "#/components/responses/Invalid"
+        "406":
+          $ref: "#/components/responses/NotAcceptable"
 
   /fhir/R4/{resourceType}:
     parameters:

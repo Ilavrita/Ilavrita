@@ -190,6 +190,13 @@ func methodsOn(path string) []string {
 // describeCapabilities publishes what this build actually supports. It names no
 // resource and touches no storage, so it answers before a client authenticates.
 func describeCapabilities(request *core.RequestEvent) error {
+	// This route answers in one representation like every other, and a client
+	// that asked for XML and is handed JSON under a 200 will parse it as XML
+	// and fail somewhere less obvious. nil because a GET carries no body.
+	if err := negotiate(request, nil); err != nil {
+		return refuse(request, err)
+	}
+
 	base, err := baseURL(request)
 	if err != nil {
 		return refuse(request, err)

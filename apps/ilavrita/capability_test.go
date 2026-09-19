@@ -269,3 +269,27 @@ func TestAnInteractionIsDeclaredOnce(t *testing.T) {
 		}
 	}
 }
+
+// TestTheStatementIsNegotiatedLikeEveryOtherRoute. The CapabilityStatement is
+// the one FHIR route reachable before a caller is identified, which made it easy
+// to leave outside content negotiation. A client that asked for XML and is
+// handed JSON under a 200 does not find out here; it finds out in its parser.
+func TestTheStatementIsNegotiatedLikeEveryOtherRoute(t *testing.T) {
+	routes := fhirRoutes(t)
+	path := fhir.BasePath + metadataPath
+
+	for _, asked := range []string{"application/xml", "application/fhir+xml", "text/plain"} {
+		answer := call{method: http.MethodGet, path: path, accept: asked}.send(t, routes)
+		assertIssue(t, answer, http.StatusNotAcceptable, fhir.CodeNotSupported)
+	}
+
+	// _format says the same thing the header does, and is refused the same way.
+	answer := call{method: http.MethodGet, path: path + "?_format=xml"}.send(t, routes)
+	assertIssue(t, answer, http.StatusNotAcceptable, fhir.CodeNotSupported)
+
+	// And what this server does serve is still served.
+	for _, asked := range []string{"", "*/*", "application/fhir+json", "application/json"} {
+		answer := call{method: http.MethodGet, path: path, accept: asked}.send(t, routes)
+		assertStatus(t, answer, http.StatusOK)
+	}
+}
