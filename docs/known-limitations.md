@@ -322,11 +322,35 @@ produced. `./scripts/conformance.sh` now runs the HL7 FHIR validator — the eng
 Inferno itself runs — over the bytes each handler actually returns, and fails on
 anything it calls an error.
 
-Two findings are accepted rather than fixed, each named in `scripts/conformance.py`
-with the reason: the validator cannot expand `urn:ietf:bcp:13`, so it rejects
-`application/fhir+json` in `CapabilityStatement.format` — R4's own declared value
-— and `org-1` fails because this build checks no FHIRPath invariant. The second
-is a real gap, left visible on purpose rather than hidden by a nicer fixture.
+**145 shapes, covering every type this server serves.** One read-back of each of
+the 126 declared types, the four whose routes do something particular with them
+— a `Binary` written as raw bytes, a `DocumentReference` whose attachment names
+one, a `Subscription` whose criteria was parsed, a `SearchParameter` that was
+compiled — every Bundle this server produces, and the refusal bodies a caller
+can provoke. The two types somebody originally picked were where both defects
+above were found; there was never a reason to think the other hundred and twenty
+were different, only that nobody had looked.
+
+Findings are accepted rather than fixed only with a reason, and the run prints
+how many each reason covers, because a class quietly absorbing findings is how a
+gate stops meaning anything:
+
+- **A media type cannot be verified.** R4 binds these to BCP-13, IANA's registry
+  rather than a list of codes, and neither this validator nor the public
+  terminology server resolves it
+- **FHIRPath invariants.** This build implements no FHIRPath engine, so it stores
+  resources that violate a `SHALL` constraint. Counted rather than listed: the
+  gap is one decision, not one per constraint
+- **One validator failure.** A `StructureDefinition` whose `type` names a URI it
+  cannot resolve makes the validator return a fatal issue with no text at all.
+  The same resource with a datatype name gets ordinary findings, so this is the
+  validator failing on the input rather than reporting something about it
+
+What the validator cannot judge is asserted in Go beside it: that every issue
+code this build can emit is one R4 defines — read from the source, so a code
+added later is covered the day it is written — that every search entry is marked
+a match and names somewhere a client can read it, that paging holds nothing
+twice, and that a history says which interaction wrote each version.
 
 Terminology is disabled for the run. A gate that reaches `tx.fhir.org` answers
 differently on a day that server is slow, and this build resolves no terminology
