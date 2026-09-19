@@ -7,6 +7,10 @@ import (
 	"github.com/Ilavrita/Ilavrita/packages/conformance"
 )
 
+// mimeTypeValueSet is R4's binding for a media type. It is matched by prefix
+// because the binding names a version and the canonical does not.
+const mimeTypeValueSet = "http://hl7.org/fhir/ValueSet/mimetypes"
+
 // fixtureDepth bounds how far a fixture fills required elements into required
 // elements. R4 does not nest requirements deeply, and a bound is what stops a
 // definition that pointed back at itself from building for ever.
@@ -107,6 +111,15 @@ func valueOf(
 		case "CodeableConcept":
 			return json.RawMessage(`{"coding":[` + coding(bound) + `]}`)
 		}
+	}
+
+	// A mime type cannot come from a value set. R4 binds these to BCP-13, which
+	// is IANA's registry rather than a list of codes, so nothing resolves it and
+	// the fixture would fall through to a plain token — leaving every fixture
+	// carrying a content type of "fixture", which is not a media type and not a
+	// body any client could send.
+	if strings.HasPrefix(element.Binding.ValueSet, mimeTypeValueSet) {
+		return json.RawMessage(`"text/plain"`)
 	}
 
 	if held, known := primitiveFixtures[code]; known {
