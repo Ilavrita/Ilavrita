@@ -54,10 +54,6 @@ single security and Project model, even though they ship in phases.
       base definition, on the operation and on every write alike
 - [x] Terminology for required bindings — a code is checked against the value set
       its element is bound to, from the specification's own bundled sets
-- [x] LOINC and SNOMED directory — `$lookup` and `$validate-code` over releases a
-      deployment loads from its own licensed copy. Nothing is bundled and nothing
-      is fetched: SNOMED's licence forbids the first and a local, deterministic
-      validator forbids the second
 - [ ] Single binary and container image
 
 **Conditional interactions are now the one that matters most.** Several

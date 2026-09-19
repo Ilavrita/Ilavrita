@@ -16,7 +16,6 @@ most expensive mistake on this project so far.
 | `GET /fhir/R4/{type}?...`, `POST /fhir/R4/{type}/_search` | Working, over a declared parameter set |
 | `POST /fhir/R4` with a `transaction` Bundle | Working, all-or-nothing |
 | `POST /fhir/R4/{type}/$validate` | Working, against the base definitions and required bindings |
-| `GET /fhir/R4/CodeSystem/$lookup`, `$validate-code` | Working, over releases the deployment loaded |
 | `ilavrita backup`, `verify-backup`, `restore` | Working |
 | Migrations, seeds and backfills | Idempotent, and recorded in `super_jobs` against the table |
 | Everything else under `/fhir/R4` | `501` |
@@ -175,15 +174,13 @@ None of these are visible from reading the code.
   and a code outside its required binding are all refused, on `$validate` and on every write alike.
   What is not checked is a profile constraining the base, a FHIRPath invariant, or whether a
   reference resolves.
-- **LOINC and SNOMED are not bundled and cannot be.** SNOMED CT is licensed per country and per
-  affiliate, so redistributing it in an AGPL repo is not an option. Using it in a Member country
-  (Germany is one) is free but must be registered with the National Release Center; that
-  registration was completed on 19 September 2026 and the LOINC licence has been reviewed, so
-  loading a release into *this* deployment is cleared. What the repository may ship is unchanged —
-  still nothing, because an AGPL repository redistributes to everyone. A terminology
-  importer that loads a deployment's own licensed copy is built — `ilavrita terminology
-  import-loinc` and `import-snomed` — and a system nobody loaded answers `501`, not `404`: "I do
-  not hold that" and "that code does not exist" are different answers.
+- **No LOINC or SNOMED, at all.** There was a directory — an importer that read a release a
+  deployment supplied, two tables it landed in, and `$lookup` / `$validate-code` over it — and it
+  was removed deliberately. It bought almost nothing: exactly one of R4's required bindings names
+  a LOINC or SNOMED value set, so it never made validation stricter, and against that it cost a
+  licensing question per deployment, an out-of-band release file to obtain and keep current, and
+  a code path that had to distinguish "this install holds no such system" from "no such code".
+  A code in one of those systems is carried and stored; nothing here resolves it or checks it.
 - **A resource that nests past six levels of its own kind is unchecked there.** R4 lets an element
   hold its own kind and a snapshot cannot write that out, so the model expands it to a bound. Past
   it the content is not walked at all, because an element with no children in the model would have

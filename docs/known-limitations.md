@@ -80,7 +80,6 @@ Every other `/fhir/R4` route answers `501 Not Implemented` as an
 | Binary payloads | Working: bytes kept outside the database, placed by `securityContext` |
 | DocumentReference | Working: the document is a `Binary` its attachment names; inlined bytes are refused |
 | Subscriptions | Working: `rest-hook`, and `websocket` within one process; see below |
-| Terminology directory | Working: `$lookup` and `$validate-code` over systems the deployment loads; see below |
 | Reindexing | Not implemented; the index is rebuilt once when an install first gains it |
 | Backup, restore | Working: `ilavrita backup`, `verify-backup` and `restore`; see below |
 | Structured logging, request correlation | Not implemented |
@@ -233,53 +232,31 @@ id must not be probeable — so reading the fallback off that answer would be
 handing resources out on a guess that is wrong exactly when it matters. A
 confined caller gets the 404 they would have got anyway.
 
-## LOINC and SNOMED are loaded, never shipped
+## There is no LOINC or SNOMED, and that is deliberate
 
-This project ships no LOINC or SNOMED CT content and cannot. SNOMED CT is
-licensed per country and per affiliate: free in a Member country, chargeable in a
-non-Member territory, and in either case registered with that country's National
-Release Center. An AGPL repository redistributes to everyone, so bundling it is
-not an option regardless of who is running it. LOINC has its own terms, which
-need reading before any decision to bundle.
+This build resolves no LOINC or SNOMED CT code. A resource may carry one — the
+code is stored and read back exactly as sent — but nothing here says what it
+means or whether it exists.
 
-As of 19 September 2026 both are cleared for *this* deployment: the SNOMED CT
-use is registered with the German National Release Center, and the LOINC licence
-has been reviewed. That clears loading a release here. It does not change what
-this repository may ship, which is still nothing — a licence one deployment holds
-says nothing about everyone who can clone an AGPL repository.
+There was a directory: an importer that read a release the deployment supplied,
+two tables it landed in, and `$lookup` and `$validate-code` served over it. It
+was removed, because it cost more than it bought.
 
-What ships is the reading of a release:
+What it bought was almost nothing. **Exactly one of R4's 332 required bindings
+names a LOINC or SNOMED value set**, so holding a release never made validation
+stricter — the value was the directory, not the checking. What it cost was a
+licensing question every deployment had to answer for itself (SNOMED CT is
+licensed per country and per affiliate, and LOINC has its own terms), a release
+file to obtain out of band and keep current, and a code path that had to tell
+"this install holds no such system" apart from "no such code" on every lookup.
 
-```bash
-ilavrita terminology import-loinc  --version 2.77 /path/to/Loinc.csv
-ilavrita terminology import-snomed --version "INT 20260101" \
-  sct2_Concept_Snapshot_INT.txt sct2_Description_Snapshot-en_INT.txt
-ilavrita terminology list
-```
+**The R4 value sets are untouched by this.** They are CC0, embedded in the build,
+seeded at startup, and are what a required binding is still checked against; see
+above. Removing LOINC and SNOMED removed a directory, not the validation.
 
-A release replaces the one before it rather than merging — a release states what
-a system is at a point in time, and a merge would leave codes from an older one
-beside it with nothing to say where they came from. The import is one
-transaction, so a file that could not be read leaves the install holding exactly
-what it held before: a code system half loaded answers "no such code" for
-everything it did not reach, which is worse than answering "I hold no such
-system".
-
-`GET /fhir/R4/CodeSystem/$lookup?system=…&code=…` resolves a code to its display,
-and `$validate-code` answers whether it is in the system. Both are served from
-what this install loaded and from nothing else. **A system nobody loaded is
-answered `501`, not `404`** — telling a client their code is wrong, when it is
-the install that is empty, sends them to fix something that is not broken.
-
-**Nothing here reaches a terminology server.** Validation and lookup are local
-and deterministic by decision: a write that failed because a third party was slow
-would make this server's answers depend on somebody else's uptime. The cost is
-that a LOINC or SNOMED code is unresolvable until a deployment loads a release.
-
-It changes almost nothing about validation, which is worth saying plainly:
-exactly one of R4's bindings names a LOINC or SNOMED value set. Their value here
-is the directory — resolving a code to what it means — not deciding whether a
-resource is valid.
+A deployment that needs to resolve these codes should reach a terminology server
+that is licensed to serve them. That is a different thing from what this server
+does, and pretending otherwise was the mess.
 
 ## An outside implementation judges what goes on the wire
 
@@ -305,10 +282,10 @@ with the reason: the validator cannot expand `urn:ietf:bcp:13`, so it rejects
 — and `org-1` fails because this build checks no FHIRPath invariant. The second
 is a real gap, left visible on purpose rather than hidden by a nicer fixture.
 
-Terminology is disabled for the run. This server's own terminology is local and
-deterministic, and a gate that reaches `tx.fhir.org` answers differently on a day
-that server is slow. The one check that would need it cannot be resolved by the
-public terminology server either.
+Terminology is disabled for the run. A gate that reaches `tx.fhir.org` answers
+differently on a day that server is slow, and this build resolves no terminology
+of its own to check against anyway. The one check that would need it cannot be
+resolved by the public terminology server either.
 
 **What this is not.** It validates representation, not behaviour, and none of
 Inferno's own test kits apply here: every one of them layers an implementation
