@@ -28,20 +28,47 @@ VALIDATOR = os.environ.get("ILAVRITA_VALIDATOR_URL", "http://localhost:4567")
 # stops meaning anything.
 ACCEPTED = [
     (
-        "not found in the value set 'MimeType'",
-        "The validator cannot expand urn:ietf:bcp:13; application/fhir+json is "
-        "R4's own declared format value.",
+        "ValueSet 'http://hl7.org/fhir/ValueSet/mimetypes",
+        "A media type is bound to BCP-13, IANA's registry rather than a list of "
+        "codes. Neither this validator nor the public terminology server can "
+        "resolve it, so every media type reads as unverifiable.",
     ),
     (
-        "The System URI could not be determined for the code 'application/fhir+json'",
-        "Same BCP-13 limitation, reported a second way.",
+        "Constraint failed:",
+        "A FHIRPath invariant. This build implements no FHIRPath engine, which "
+        "docs/known-limitations.md states, so it stores resources that violate "
+        "one. Counted rather than listed: the gap is one decision, not N.",
     ),
     (
-        "Constraint failed: org-1",
-        "This build checks no FHIRPath invariant, which docs/known-limitations.md "
-        "states. The fixture is left invalid on purpose so the gap stays visible.",
+        "must define two or more components",
+        "The same gap by another name: a composite SearchParameter's rule is an "
+        "invariant, and this build refuses composite parameters anyway.",
+    ),
+    (
+        "__validator_fatal_no_message__",
+        "The validator returns a fatal issue carrying no text at all for a "
+        "StructureDefinition whose type names a URI it cannot resolve. Given the "
+        "same resource with a datatype name it reports ordinary findings, so this "
+        "is the validator failing on the input rather than a defect in it.",
     ),
 ]
+
+
+def finding_text(issue):
+    """Return the text a finding is matched on.
+
+    A fatal with no text is the validator failing rather than reporting, and it
+    is matched by a name of its own so it cannot silently absorb a real finding
+    that merely happened to be empty.
+    """
+    text = issue.get("details", {}).get("text", "")
+    if text or issue.get("diagnostics"):
+        return text or issue.get("diagnostics", "")
+
+    if issue.get("severity") == "fatal":
+        return "__validator_fatal_no_message__"
+
+    return ""
 
 
 def validate(path, profile):
@@ -76,7 +103,7 @@ def describe(issue):
     """Return the element a finding is about and what it says."""
     where = (issue.get("expression") or issue.get("location") or ["?"])[0]
 
-    return where, issue.get("details", {}).get("text", "")
+    return where, finding_text(issue)
 
 
 def main(directory):
@@ -88,7 +115,7 @@ def main(directory):
     if not shapes:
         sys.exit(f"nothing was captured into {directory}")
 
-    defects, waived = [], 0
+    defects, waived = [], {}
 
     for held in shapes:
         label, profile, _ = held.rsplit(".", 2)
@@ -101,14 +128,18 @@ def main(directory):
             reason = accepted_for(text)
 
             if reason:
-                waived += 1
+                waived[reason] = waived.get(reason, 0) + 1
                 continue
 
             defects.append((label, where, text))
 
         print(f"  checked {label} against {profile}")
 
-    print(f"\n{len(shapes)} shape(s) validated, {waived} accepted finding(s)")
+    total = sum(waived.values())
+    print(f"\n{len(shapes)} shape(s) validated, {total} accepted finding(s)")
+
+    for reason, count in sorted(waived.items(), key=lambda held: -held[1]):
+        print(f"  {count:>3}  {reason}")
 
     if not defects:
         print("Every shape Ilavrita puts on the wire is valid FHIR R4")

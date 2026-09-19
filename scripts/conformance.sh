@@ -69,7 +69,8 @@ fi
 echo "==> Capturing the shapes the handlers produce"
 mkdir -p "$WORKDIR/wire"
 ILAVRITA_WIRE_DIR="$WORKDIR/wire" go test ./apps/ilavrita/ \
-  -run TestWireShapesAreCaptured -count=1 >/dev/null
+  -run 'TestWireShapesAreCaptured|TestEveryServedTypeIsCaptured|TestTheBespokeShapesAreCaptured' \
+  -count=1 >/dev/null
 
 echo "==> Capturing the shapes only a running server produces"
 go build -o "$WORKDIR/ilavrita" ./apps/ilavrita
