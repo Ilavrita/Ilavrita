@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/pocketbase/pocketbase"
+	"github.com/pocketbase/pocketbase/cmd"
 	"github.com/pocketbase/pocketbase/core"
 )
 
@@ -43,7 +44,13 @@ func main() {
 		return serve.Next()
 	})
 
-	if err := app.Start(); err != nil {
+	// Start would register PocketBase's own superuser command beside serve.
+	// Execute is the same thing without the system commands, so serve is added
+	// here and the command that mints a superuser is never registered at all.
+	// See superuser.go for why this server has no such account.
+	app.RootCmd.AddCommand(cmd.NewServeCommand(app, true))
+
+	if err := app.Execute(); err != nil {
 		log.Fatal(err)
 	}
 }

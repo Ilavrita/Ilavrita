@@ -161,6 +161,15 @@ func startServing(app core.App) error {
 		return terminate.Next()
 	})
 
+	// Before anything is answered: this install holds no PocketBase superuser.
+	// A failure here stops the server, because not being able to tell whether
+	// one exists is not a state to serve clinical data in.
+	if err := refuseSuperusers(context.Background(), app.DB(), db.DB()); err != nil {
+		_ = db.Close()
+
+		return err
+	}
+
 	serving = newBackend(db.DB(), app.DataDir())
 
 	if err := seedDefinitions(context.Background(), serving.definitions); err != nil {
