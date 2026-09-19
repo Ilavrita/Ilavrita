@@ -114,21 +114,6 @@ var (
 		"A transaction is a Bundle whose entries each create, update or delete " +
 			"one resource of a type this server serves."}
 
-	unnamedCode = refusal{http.StatusBadRequest, fhir.CodeInvalid,
-		"A lookup names both a system and a code."}
-
-	// A system nobody loaded is not a client error and not a missing resource.
-	// It is this install saying it cannot answer, which is what 501 is for —
-	// and it is deliberately not 404: telling a client their code is wrong,
-	// when it is the install that is empty, sends them to fix something that is
-	// not broken.
-	systemNotHeld = refusal{http.StatusNotImplemented, fhir.CodeNotSupported,
-		"This install holds no such code system. LOINC and SNOMED CT are licensed " +
-			"and are loaded by the deployment; see `ilavrita terminology list`."}
-
-	noSuchCode = refusal{http.StatusNotFound, fhir.CodeNotFound,
-		"That code system holds no such code."}
-
 	inlineAttachment = refusal{http.StatusBadRequest, fhir.CodeInvalid,
 		"A document's bytes are stored as a Binary and referenced by " +
 			"content.attachment.url, never carried in content.attachment.data."}
@@ -238,12 +223,6 @@ func translate(err error) refusal {
 	case errors.Is(err, errEntryNotSupported), errors.Is(err, fhir.ErrNotABundle),
 		errors.Is(err, fhir.ErrMalformedEntry), errors.Is(err, fhir.ErrDuplicateFullURL):
 		return unreadableTransaction
-	case errors.Is(err, errNoCodeNamed):
-		return unnamedCode
-	case errors.Is(err, errSystemNotHeld):
-		return systemNotHeld
-	case errors.Is(err, errNoSuchCode):
-		return noSuchCode
 	case errors.As(err, &errInvalidResource{}):
 		return invalidSubmission
 	case errors.Is(err, files.ErrTooLarge):

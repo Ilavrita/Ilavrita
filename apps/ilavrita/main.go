@@ -24,7 +24,6 @@ func main() {
 	app := pocketbase.New()
 
 	registerBackupCommands(app)
-	registerTerminologyCommands(app)
 
 	app.OnServe().BindFunc(func(serve *core.ServeEvent) error {
 		// PocketBase's installer prints a live 30-minute superuser token to stdout

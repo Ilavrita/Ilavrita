@@ -316,11 +316,6 @@ type CapabilityConfig struct {
 	// type, such as a transaction.
 	SystemInteractions []Interaction
 
-	// TypeOperations are the operations one type answers and the others do not,
-	// by type name. A statement naming $lookup on Patient would send a client at
-	// a route that is not there.
-	TypeOperations map[string][]OperationCapability
-
 	// SearchParameters answers what one type may be searched by. It is supplied
 	// rather than known here, because the registry of parameters and the routes
 	// that serve them are the caller's to keep in step; this package would only
@@ -382,8 +377,7 @@ func servedResources(config CapabilityConfig) []ResourceCapability {
 			held.SearchParam = config.SearchParameters(name)
 		}
 
-		held.Operation = append(slices.Clone(config.Operations),
-			config.TypeOperations[name]...)
+		held.Operation = slices.Clone(config.Operations)
 
 		resources = append(resources, held)
 	}
