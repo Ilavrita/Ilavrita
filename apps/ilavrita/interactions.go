@@ -280,42 +280,51 @@ func replaceResource(
 	content json.RawMessage,
 	expect storage.VersionID,
 ) error {
-	// Asked before the body is, because no body could be right. A caller who can
-	// only ever see part of a resource cannot state the whole of one, and
-	// telling them an element is missing would send them to invent the content
-	// that was withheld from them and be refused again for the real reason.
-	if held.scope.Withholds(key.Project, storage.KindFHIR, key.Type, storage.ActionRead) {
-		return refuse(request, sqlite.ErrPartialView)
-	}
-
-	compartments, err := fhir.Compartments(string(key.Type), key.ID, content)
-	if err != nil {
-		return refuse(request, err)
-	}
-
-	if err := checkSubmission(key, content); err != nil {
-		return refuse(request, err)
-	}
-
-	if err := checkSubscription(key, content); err != nil {
-		return refuse(request, err)
-	}
-
-	row, carried, err := splitPayload(key, content)
-	if err != nil {
-		return refuse(request, err)
-	}
-
-	record, err := held.written(request.Request.Context(), key, func(ctx context.Context) error {
-		return held.resources.Update(ctx, held.scope, storage.ResourceRecord{
-			Key: key, Content: row, Compartments: compartments,
-		}, expect)
-	}, held.afterWrite(key, carried))
+	record, err := held.replace(request.Request.Context(), key, content, expect)
 	if err != nil {
 		return refuse(request, err)
 	}
 
 	return respondResource(request, http.StatusOK, record)
+}
+
+// replace states a new version of one resource, and is the whole of what an
+// update is apart from answering. It is separate from the route for the same
+// reason create is: a Bundle performs the same act.
+func (g granted) replace(
+	ctx context.Context, key storage.ResourceKey, content json.RawMessage, expect storage.VersionID,
+) (storage.ResourceRecord, error) {
+	// Asked before the body is, because no body could be right. A caller who can
+	// only ever see part of a resource cannot state the whole of one, and
+	// telling them an element is missing would send them to invent the content
+	// that was withheld from them and be refused again for the real reason.
+	if g.scope.Withholds(key.Project, storage.KindFHIR, key.Type, storage.ActionRead) {
+		return storage.ResourceRecord{}, sqlite.ErrPartialView
+	}
+
+	compartments, err := fhir.Compartments(string(key.Type), key.ID, content)
+	if err != nil {
+		return storage.ResourceRecord{}, err
+	}
+
+	if err := checkSubmission(key, content); err != nil {
+		return storage.ResourceRecord{}, err
+	}
+
+	if err := checkSubscription(key, content); err != nil {
+		return storage.ResourceRecord{}, err
+	}
+
+	row, carried, err := splitPayload(key, content)
+	if err != nil {
+		return storage.ResourceRecord{}, err
+	}
+
+	return g.written(ctx, key, func(ctx context.Context) error {
+		return g.resources.Update(ctx, g.scope, storage.ResourceRecord{
+			Key: key, Content: row, Compartments: compartments,
+		}, expect)
+	}, g.afterWrite(key, carried))
 }
 
 // createResourceAt brings a logical id into existence, from nothing or over a
@@ -326,34 +335,47 @@ func createResourceAt(
 	key storage.ResourceKey,
 	content json.RawMessage,
 ) error {
-	compartments, err := fhir.Compartments(string(key.Type), key.ID, content)
-	if err != nil {
-		return refuse(request, err)
-	}
-
-	if err := checkSubmission(key, content); err != nil {
-		return refuse(request, err)
-	}
-
-	if err := checkSubscription(key, content); err != nil {
-		return refuse(request, err)
-	}
-
-	row, carried, err := splitPayload(key, content)
-	if err != nil {
-		return refuse(request, err)
-	}
-
-	record, err := held.written(request.Request.Context(), key, func(ctx context.Context) error {
-		return held.resources.Create(ctx, held.scope, storage.ResourceRecord{
-			Key: key, Content: row, Compartments: compartments,
-		})
-	}, held.afterWrite(key, carried))
+	record, err := held.create(request.Request.Context(), key, content)
 	if err != nil {
 		return refuse(request, err)
 	}
 
 	return respondCreated(request, record)
+}
+
+// create brings one resource into existence, and is the whole of what a create
+// is apart from answering.
+//
+// It is separate from the route so a Bundle can perform the same act without an
+// HTTP response to write into. One implementation: a second one written beside
+// it would eventually differ about what a create checks, and the difference
+// would be a resource a transaction stored that a POST would have refused.
+func (g granted) create(
+	ctx context.Context, key storage.ResourceKey, content json.RawMessage,
+) (storage.ResourceRecord, error) {
+	compartments, err := fhir.Compartments(string(key.Type), key.ID, content)
+	if err != nil {
+		return storage.ResourceRecord{}, err
+	}
+
+	if err := checkSubmission(key, content); err != nil {
+		return storage.ResourceRecord{}, err
+	}
+
+	if err := checkSubscription(key, content); err != nil {
+		return storage.ResourceRecord{}, err
+	}
+
+	row, carried, err := splitPayload(key, content)
+	if err != nil {
+		return storage.ResourceRecord{}, err
+	}
+
+	return g.written(ctx, key, func(ctx context.Context) error {
+		return g.resources.Create(ctx, g.scope, storage.ResourceRecord{
+			Key: key, Content: row, Compartments: compartments,
+		})
+	}, g.afterWrite(key, carried))
 }
 
 // written performs one write and reads the row back inside a single
@@ -429,24 +451,33 @@ func deleteResource(request *core.RequestEvent) error {
 		return refuse(request, err)
 	}
 
-	current, err := held.resources.Read(request.Request.Context(), held.scope, key)
-	if err != nil {
-		if claim.stated() {
-			return refuse(request, staleVersion)
-		}
-
-		return refuse(request, err)
-	}
-
-	if claim.disagrees(current.Version) {
-		return refuse(request, staleVersion)
-	}
-
-	if err := held.resources.Delete(request.Request.Context(), held.scope, key, claim.expected()); err != nil {
+	if err := held.remove(request.Request.Context(), key, claim); err != nil {
 		return refuse(request, err)
 	}
 
 	return request.NoContent(http.StatusNoContent)
+}
+
+// remove makes one resource a tombstone, and is the whole of what a delete is
+// apart from answering. It is separate from the route for the same reason create
+// and replace are: a Bundle performs the same act.
+func (g granted) remove(ctx context.Context, key storage.ResourceKey, claim precondition) error {
+	current, err := g.resources.Read(ctx, g.scope, key)
+	if err != nil {
+		// A precondition stated against a resource this caller cannot read is
+		// a stale one: answering "no such resource" would say whether it exists.
+		if claim.stated() {
+			return staleVersion
+		}
+
+		return err
+	}
+
+	if claim.disagrees(current.Version) {
+		return staleVersion
+	}
+
+	return g.resources.Delete(ctx, g.scope, key, claim.expected())
 }
 
 // listResourceHistory returns every version this Scope can see, newest first.
