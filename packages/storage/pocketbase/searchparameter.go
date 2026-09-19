@@ -103,7 +103,19 @@ func (s *ResourceStore) writeSearchParameters(
 	// Whatever this source used to define is no longer defined, so the rows it
 	// indexed answer a parameter nobody states. They go with it: a stale row is
 	// a match for a restriction that no longer exists.
-	return s.clearIndexedBy(ctx, key.Project, replaced)
+	if err := s.clearIndexedBy(ctx, key.Project, replaced); err != nil {
+		return err
+	}
+
+	// What it defines now is true of resources written from here on, and of
+	// nothing already stored. Every type it names is owed a walk.
+	for _, held := range defined {
+		if err := s.enqueueReindex(ctx, key.Project, held.Type, at); err != nil {
+			return err
+		}
+	}
+
+	return nil
 }
 
 // compiledFrom reads a stored SearchParameter, treating content nothing can

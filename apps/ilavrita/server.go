@@ -190,6 +190,10 @@ func startServing(app core.App) error {
 
 	go runNotifier(working, serving.notifier())
 
+	// A parameter a Project defines describes nothing already stored until the
+	// type is walked again. This is what walks it.
+	go runReindexer(working, serving.reindexer())
+
 	return nil
 }
 
@@ -295,4 +299,17 @@ func (b *backend) searchParameters(
 	}
 
 	return b.resources.CustomParameters(ctx, project)
+}
+
+// reindexer builds the worker that walks types whose index no longer matches
+// the parameters their Project defined.
+func (b *backend) reindexer() *reindexer {
+	worker, err := subscription.MintWorkerID(rand.Reader)
+	if err != nil {
+		// A process that cannot draw one would claim rows as the empty worker,
+		// which every other process would answer to as well.
+		report(err)
+	}
+
+	return &reindexer{store: b.resources, worker: string(worker)}
 }

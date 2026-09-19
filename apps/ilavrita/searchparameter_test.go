@@ -4,8 +4,10 @@ import (
 	"encoding/json"
 	"net/http"
 	"testing"
+	"time"
 
 	"github.com/Ilavrita/Ilavrita/packages/fhir"
+	sqlite "github.com/Ilavrita/Ilavrita/packages/storage/pocketbase"
 )
 
 // definedParameter posts one SearchParameter and returns its id.
@@ -156,5 +158,100 @@ func TestASearchParameterThisBuildCannotApplyIsRefused(t *testing.T) {
 		if _ = named; t.Failed() {
 			t.Logf("while checking %s", named)
 		}
+	}
+}
+
+// TestAResourceWrittenBeforeAParameterIsFoundAfterAReindex.
+//
+// The index is built on write, so a parameter defined today describes nothing
+// written yesterday. A search by it answers an empty page — which is exactly
+// what a correct search looks like, so nobody would find out. The backlog is
+// what closes that, and this is the whole of it: write, define, walk, find.
+func TestAResourceWrittenBeforeAParameterIsFoundAfterAReindex(t *testing.T) {
+	db := preparedDatabase(t)
+	seedProject(t, db, homeProject)
+	serveProject(t, db, homeProject, everyAction)
+
+	routes := fhirRoutes(t)
+	store := sqlite.NewResourceStore(db)
+
+	// Written first, so nothing indexed it by a parameter that did not exist.
+	existing := organizationWith(t, routes, `"telecom":[{"system":"phone","value":"555-0100"}]`)
+
+	definedParameter(t, routes, "phone", "token", "Organization.telecom")
+
+	// The code is answered the moment it is defined, and finds nothing: the
+	// definition is in force, the index has not caught up.
+	if found := matchedIDs(t, routes, "phone=555-0100"); len(found) != 0 {
+		t.Fatalf("found %v before anything walked the type", found)
+	}
+
+	pending, err := store.PendingReindexes(t.Context())
+	if err != nil {
+		t.Fatalf("read the backlog: %v", err)
+	}
+
+	if pending != 1 {
+		t.Fatalf("the backlog holds %d type(s), want 1", pending)
+	}
+
+	(&reindexer{store: store, worker: "a-test-worker"}).pass(t.Context())
+
+	found := matchedIDs(t, routes, "phone=555-0100")
+	if len(found) != 1 || found[0] != existing {
+		t.Errorf("after the walk found %v, want [%s]", found, existing)
+	}
+
+	// And the debt is settled, so the next pass does not walk it again.
+	if pending, err = store.PendingReindexes(t.Context()); err != nil || pending != 0 {
+		t.Errorf("the backlog holds %d type(s) after the walk (%v)", pending, err)
+	}
+}
+
+// TestAWalkedTypeIsClaimedByOneWorker. Two replicas share the backlog, and a
+// type walked twice at once is the same rows written twice — wasted, and a
+// second transaction waiting on the first for this process's one connection.
+func TestAWalkedTypeIsClaimedByOneWorker(t *testing.T) {
+	db := preparedDatabase(t)
+	seedProject(t, db, homeProject)
+	serveProject(t, db, homeProject, everyAction)
+
+	routes := fhirRoutes(t)
+	store := sqlite.NewResourceStore(db)
+
+	organizationWith(t, routes, `"telecom":[{"system":"phone","value":"555-0100"}]`)
+	definedParameter(t, routes, "phone", "token", "Organization.telecom")
+
+	at := time.Now().UTC()
+
+	first, err := store.ClaimReindex(t.Context(), "one", at.Add(time.Minute), at, 10)
+	if err != nil {
+		t.Fatalf("the first claim: %v", err)
+	}
+
+	if len(first) != 1 {
+		t.Fatalf("the first worker claimed %d, want 1", len(first))
+	}
+
+	second, err := store.ClaimReindex(t.Context(), "two", at.Add(time.Minute), at, 10)
+	if err != nil {
+		t.Fatalf("the second claim: %v", err)
+	}
+
+	if len(second) != 0 {
+		t.Errorf("a second worker claimed %d type(s) already being walked", len(second))
+	}
+
+	// A claim that expires is work returned rather than work lost: the replica
+	// holding it may be gone, and an index half rebuilt is not one to leave.
+	later := at.Add(2 * time.Minute)
+
+	resumed, err := store.ClaimReindex(t.Context(), "two", later.Add(time.Minute), later, 10)
+	if err != nil {
+		t.Fatalf("the claim after it expired: %v", err)
+	}
+
+	if len(resumed) != 1 {
+		t.Errorf("an expired claim left %d type(s) claimable, want 1", len(resumed))
 	}
 }

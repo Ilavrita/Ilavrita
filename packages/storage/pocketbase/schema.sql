@@ -1274,6 +1274,35 @@ END;
 -- ===========================================================================
 
 -- ===========================================================================
+-- Reindex backlog. Types whose index no longer matches the parameters.
+-- ===========================================================================
+
+-- A parameter defined today says nothing about resources written yesterday: the
+-- index is built on write, so everything already stored is invisible to a new
+-- parameter until it is walked again.
+--
+-- One row per Project and type rather than per resource. Defining three
+-- parameters on Organization is one reindex of Organization, and a row that is
+-- already there is left alone — the work is "make this type's index match the
+-- parameters", which is the same work however many times it is asked for.
+--
+-- Claimed the way the subscription backlog is claimed, so several replicas
+-- share the work without two of them walking the same type at once.
+
+-- tenant: project_id
+CREATE TABLE IF NOT EXISTS reindex_backlog (
+  project_id    TEXT NOT NULL REFERENCES projects (id) ON DELETE RESTRICT ON UPDATE RESTRICT,
+  res_type      TEXT NOT NULL,
+  at            BIGINT NOT NULL,
+  claimed_by    TEXT,
+  claimed_until BIGINT,
+
+  PRIMARY KEY (project_id, res_type),
+
+  CHECK (res_type <> '')
+);
+
+-- ===========================================================================
 -- Custom search parameters. What a Project added to the built-in registry.
 -- ===========================================================================
 
