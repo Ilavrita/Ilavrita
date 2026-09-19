@@ -242,6 +242,12 @@ Release Center. An AGPL repository redistributes to everyone, so bundling it is
 not an option regardless of who is running it. LOINC has its own terms, which
 need reading before any decision to bundle.
 
+As of 19 September 2026 both are cleared for *this* deployment: the SNOMED CT
+use is registered with the German National Release Center, and the LOINC licence
+has been reviewed. That clears loading a release here. It does not change what
+this repository may ship, which is still nothing — a licence one deployment holds
+says nothing about everyone who can clone an AGPL repository.
+
 What ships is the reading of a release:
 
 ```bash
@@ -274,6 +280,40 @@ It changes almost nothing about validation, which is worth saying plainly:
 exactly one of R4's bindings names a LOINC or SNOMED value set. Their value here
 is the directory — resolving a code to what it means — not deciding whether a
 resource is valid.
+
+## An outside implementation judges what goes on the wire
+
+The Go suite checks this server against its own reading of R4 — the reading that
+wrote the server. It cannot catch the two of them being wrong the same way, and
+twice it did not:
+
+- `Bundle.entry.response.lastModified` carried an HTTP-date where R4 declares an
+  `instant`. Both spellings name the same moment; only one is the datatype. The
+  `Last-Modified` *header* beside it is an HTTP-date and always was correct
+- An element written as `{}` was stored. R4 has no empty object — an element with
+  no content is absent — and `Observation.code`, which is required, was being
+  satisfied by one
+
+Both passed every test here, because the tests asserted the values the server
+produced. `./scripts/conformance.sh` now runs the HL7 FHIR validator — the engine
+Inferno itself runs — over the bytes each handler actually returns, and fails on
+anything it calls an error.
+
+Two findings are accepted rather than fixed, each named in `scripts/conformance.py`
+with the reason: the validator cannot expand `urn:ietf:bcp:13`, so it rejects
+`application/fhir+json` in `CapabilityStatement.format` — R4's own declared value
+— and `org-1` fails because this build checks no FHIRPath invariant. The second
+is a real gap, left visible on purpose rather than hidden by a nicer fixture.
+
+Terminology is disabled for the run. This server's own terminology is local and
+deterministic, and a gate that reaches `tx.fhir.org` answers differently on a day
+that server is slow. The one check that would need it cannot be resolved by the
+public terminology server either.
+
+**What this is not.** It validates representation, not behaviour, and none of
+Inferno's own test kits apply here: every one of them layers an implementation
+guide — US Core, SMART App Launch, Da Vinci, CARIN — on top of R4, and this build
+implements none of those.
 
 ## Validation checks a resource against its own definition
 

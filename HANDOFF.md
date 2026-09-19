@@ -117,8 +117,13 @@ gofmt -l apps packages
 go build ./... && go vet ./... && go test ./...
 golangci-lint run
 ./scripts/verify-openapi.sh   # fails on drift in BOTH directions
+./scripts/conformance.sh      # the HL7 validator over what the handlers return
 make ci-local                 # the workflows, via act
 ```
+
+`conformance.sh` needs Docker and is the one gate that does. It is also the only
+one that is not this project marking its own homework, which is why it found two
+defects a green suite had been reporting as correct.
 
 ## 5. Traps that cost real time
 
@@ -171,8 +176,11 @@ None of these are visible from reading the code.
   What is not checked is a profile constraining the base, a FHIRPath invariant, or whether a
   reference resolves.
 - **LOINC and SNOMED are not bundled and cannot be.** SNOMED CT is licensed per country and per
-  affiliate, so redistributing it in an AGPL repo is not an option; using it in a Member country
-  (Germany is one) is free but must be registered with the National Release Center. A terminology
+  affiliate, so redistributing it in an AGPL repo is not an option. Using it in a Member country
+  (Germany is one) is free but must be registered with the National Release Center; that
+  registration was completed on 19 September 2026 and the LOINC licence has been reviewed, so
+  loading a release into *this* deployment is cleared. What the repository may ship is unchanged —
+  still nothing, because an AGPL repository redistributes to everyone. A terminology
   importer that loads a deployment's own licensed copy is built — `ilavrita terminology
   import-loinc` and `import-snomed` — and a system nobody loaded answers `501`, not `404`: "I do
   not hold that" and "that code does not exist" are different answers.
@@ -188,6 +196,14 @@ None of these are visible from reading the code.
 - **The control plane is a working subset, not the whole surface.** It creates Projects,
   invites identities, grants standing and registers client applications. AccessPolicy authoring,
   link management, credential rotation and every list endpoint are still store-only.
+- **A fresh install cannot be brought into use through its own API.** `project.Bootstrapper`
+  mints and spends the single-use claim token that makes the first Super Admin, and it is
+  constructed in exactly one place: `packages/storage/pocketbase/project_store_test.go`. No route
+  and no CLI command reaches it. Every `/admin` route resolves standing first and `POST
+  /auth/login` needs an identity that already exists, so there is no order in which a new install
+  can be made usable from outside the process. This is why no external conformance tool can be
+  pointed at a running server for anything but the unauthenticated routes, and why
+  `scripts/conformance.sh` captures the authenticated shapes through the Go suite instead.
 - **Attachments outside DocumentReference land in the row.** `Media.content`,
   `DiagnosticReport.presentedForm` and `Communication.payload` carry bytes into the resource row,
   bounded only by the 4 MiB one request body may be. `DocumentReference` is refused and sent to
@@ -374,6 +390,19 @@ Every entry is decided and audited on its own. A Bundle is not a way to perform 
 caller could not have performed one at a time, and `TestEveryEntryIsDecidedOnItsOwn` is what keeps
 that true. Bundles are bounded at 200 entries because one commit holds this process's single
 pooled connection for its whole length.
+
+**8. Conformance against an outside implementation. Done.** `./scripts/conformance.sh` runs the
+HL7 FHIR validator — the engine Inferno runs — over the bytes each handler returns, and fails on
+anything it calls an error. It found two defects immediately, both of which every test here had
+been asserting as correct: a `lastModified` written as an HTTP-date where R4 declares an
+`instant`, and an element written as `{}` where R4 has no empty object.
+
+That is the lesson worth keeping: a suite written by whoever wrote the server cannot catch the
+two of them being wrong together. Ask something that did not.
+
+Two findings are accepted rather than fixed and both are named with a reason in
+`scripts/conformance.py`; one of them, `org-1`, is the real gap that this build checks no
+FHIRPath invariant, and the fixture is left invalid so it stays visible.
 
 Search parameters are deliberately a short list — `packages/search/registry.go` is the
 whole of what this build answers, and adding one means adding a projection a write maintains and

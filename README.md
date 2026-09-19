@@ -88,7 +88,8 @@ and an architecture that does not have to be rewritten to reach a clustered one.
 | Authentication | Working — password, sessions, TOTP second factor with an administrator recovery path, per-install throttle |
 | Binary payloads | Working — bytes stored outside the database |
 | Subscriptions | Working — `rest-hook`, and `websocket` within one process; queues are claimed, so replicas do not notify twice |
-| Resource validation, `$validate` | Against the R4 base definitions and required bindings — no profiles |
+| Resource validation, `$validate` | Against the R4 base definitions and required bindings — no profiles, no FHIRPath invariants |
+| FHIR R4 representation | Checked against the HL7 validator by `scripts/conformance.sh`, not only against our own tests |
 | Terminology directory | `$lookup`, `$validate-code` — LOINC and SNOMED loaded by the deployment, never bundled |
 | Bundle transaction | Working — all-or-nothing, with `urn:uuid:` references resolved across entries |
 | Bundle batch | Not implemented |
