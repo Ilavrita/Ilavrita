@@ -302,6 +302,11 @@ type CapabilityConfig struct {
 	// an operation is a route with its own definition, not one of the six.
 	Operations []OperationCapability
 
+	// TypeOperations are the operations one type answers and the others do not,
+	// by type name. A statement naming $lookup on Patient would send a client at
+	// a route that is not there.
+	TypeOperations map[string][]OperationCapability
+
 	// SearchParameters answers what one type may be searched by. It is supplied
 	// rather than known here, because the registry of parameters and the routes
 	// that serve them are the caller's to keep in step; this package would only
@@ -359,7 +364,8 @@ func servedResources(config CapabilityConfig) []ResourceCapability {
 			held.SearchParam = config.SearchParameters(name)
 		}
 
-		held.Operation = slices.Clone(config.Operations)
+		held.Operation = append(slices.Clone(config.Operations),
+			config.TypeOperations[name]...)
 
 		resources = append(resources, held)
 	}

@@ -88,3 +88,23 @@ func NewOperationOutcome(severity IssueSeverity, code IssueCode, diagnostics str
 		}},
 	}
 }
+
+// Parameters is the resource an operation answers with when its result is not a
+// resource of its own. R4 uses it for `$lookup`, `$validate-code` and most
+// other operations that return a handful of named values.
+type Parameters struct {
+	ResourceType string      `json:"resourceType"`
+	Parameter    []Parameter `json:"parameter,omitempty"`
+}
+
+// Parameter is one named value.
+//
+// The value fields are a choice, written as R4 writes them — `valueString`,
+// `valueBoolean` — and exactly one is present. ValueBoolean is a pointer because
+// false and absent are different answers: a `$validate-code` that found the code
+// is not one that answered nothing.
+type Parameter struct {
+	Name         string `json:"name"`
+	ValueString  string `json:"valueString,omitempty"`
+	ValueBoolean *bool  `json:"valueBoolean,omitempty"`
+}

@@ -110,6 +110,13 @@ func registerFHIRRoutes(routes *router.Router[*core.RequestEvent]) {
 	// a logical id, and for the one method it answers.
 	base.Route(validateOperation.method, validateOperation.path, validateOperation.handler)
 
+	// The code system operations. They are served whether or not a system is
+	// loaded, because what they answer then — "this install holds no such
+	// system" — is an answer and a useful one.
+	for _, served := range terminologyOperations {
+		base.Route(served.method, served.path, served.handler)
+	}
+
 	// Whole-system interactions. Each names an interaction rather than a
 	// resource type, so it answers "not supported" rather than "no such type" —
 	// which is what the bare /{resourceType} routes would otherwise make of it.
@@ -178,11 +185,14 @@ func describeCapabilities(request *core.RequestEvent) error {
 	}
 
 	statement := fhir.NewCapabilityStatement(fhir.CapabilityConfig{
-		SoftwareVersion:  version,
-		Published:        startedAt,
-		BaseURL:          base,
-		Interactions:     advertisedInteractions(),
-		Operations:       advertisedOperations(),
+		SoftwareVersion: version,
+		Published:       startedAt,
+		BaseURL:         base,
+		Interactions:    advertisedInteractions(),
+		Operations:      advertisedOperations(),
+		TypeOperations: map[string][]fhir.OperationCapability{
+			string(codeSystemType): codeSystemOperations(),
+		},
 		SearchParameters: advertisedSearchParameters,
 	})
 
@@ -197,6 +207,21 @@ func advertisedOperations() []fhir.OperationCapability {
 		Name:       validateOperationName,
 		Definition: "http://hl7.org/fhir/OperationDefinition/Resource-validate",
 	}}
+}
+
+// codeSystemOperations are advertised on CodeSystem alone, because that is the
+// only type they are served on.
+func codeSystemOperations() []fhir.OperationCapability {
+	return []fhir.OperationCapability{
+		{
+			Name:       lookupOperationName,
+			Definition: "http://hl7.org/fhir/OperationDefinition/CodeSystem-lookup",
+		},
+		{
+			Name:       validateCodeOperation,
+			Definition: "http://hl7.org/fhir/OperationDefinition/CodeSystem-validate-code",
+		},
+	}
 }
 
 // advertisedInteractions reads the codes off the table the routes were
@@ -295,6 +320,28 @@ func beginReading(
 	}
 
 	return permit(request, storage.ResourceType(resourceType), actions)
+}
+
+// beginOn is beginReading for a route whose type is the route's own rather than
+// the URL's. An operation served on one type names it in its path, so there is
+// no path value to read it from — and reading one that is not there would make
+// every such route answer as an unknown type.
+func beginOn(
+	request *core.RequestEvent, resourceType storage.ResourceType, actions []storage.Action,
+) (granted, error) {
+	if err := negotiate(request, bodyMediaTypes); err != nil {
+		return granted{}, err
+	}
+
+	if !fhir.ServesResourceType(string(resourceType)) {
+		return granted{}, unknownResourceType
+	}
+
+	if _, err := baseURL(request); err != nil {
+		return granted{}, err
+	}
+
+	return permit(request, resourceType, actions)
 }
 
 // permit builds one Scope per action the interaction performs, and refuses the

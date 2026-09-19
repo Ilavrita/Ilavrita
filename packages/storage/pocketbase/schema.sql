@@ -464,6 +464,50 @@ CREATE TABLE IF NOT EXISTS canonical_seed (
 );
 
 -- ===========================================================================
+-- Terminology. Code systems a deployment supplies for itself.
+-- ===========================================================================
+
+-- Nothing here is shipped. LOINC and SNOMED CT are licensed — SNOMED per
+-- country and per affiliate — so a release is something an install loads from
+-- its own copy. These tables are where it lands.
+--
+-- Like the canonical resources, terminology belongs to no Project: a code means
+-- the same thing in every one of them.
+
+-- tenant-exempt: a code system is the same for every Project
+CREATE TABLE IF NOT EXISTS terminology_system (
+  system      TEXT NOT NULL,
+  version     TEXT NOT NULL,
+  held        BIGINT NOT NULL,
+  source      TEXT NOT NULL,
+  imported_at BIGINT NOT NULL,
+
+  PRIMARY KEY (system),
+
+  CHECK (system <> '' AND version <> ''),
+  CHECK (held >= 0)
+);
+
+-- tenant-exempt: as above
+CREATE TABLE IF NOT EXISTS terminology_concept (
+  system  TEXT NOT NULL,
+  code    TEXT NOT NULL,
+  display TEXT NOT NULL DEFAULT '',
+  active  INTEGER NOT NULL DEFAULT 1 CHECK (active IN (0, 1)),
+
+  PRIMARY KEY (system, code),
+
+  CHECK (system <> '' AND code <> ''),
+
+  FOREIGN KEY (system) REFERENCES terminology_system (system)
+    ON DELETE CASCADE ON UPDATE RESTRICT
+);
+
+-- Looking a display up by what it says, which is what a directory search is.
+CREATE INDEX IF NOT EXISTS ix_terminology_concept_display
+  ON terminology_concept (system, display, code);
+
+-- ===========================================================================
 -- Platform resources. Same document shape as FHIR resources, separate tables.
 -- ===========================================================================
 

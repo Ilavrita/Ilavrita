@@ -50,8 +50,11 @@ single security and Project model, even though they ship in phases.
 - [x] Validation and `$validate` — every resource is checked against its own R4
       base definition, on the operation and on every write alike
 - [x] Terminology for required bindings — a code is checked against the value set
-      its element is bound to, from the specification's own bundled sets. LOINC
-      and SNOMED are not bundled and cannot be: SNOMED's licence forbids it
+      its element is bound to, from the specification's own bundled sets
+- [x] LOINC and SNOMED directory — `$lookup` and `$validate-code` over releases a
+      deployment loads from its own licensed copy. Nothing is bundled and nothing
+      is fetched: SNOMED's licence forbids the first and a local, deterministic
+      validator forbids the second
 - [ ] Single binary and container image
 
 **Bundle transaction is now the one that matters most.** A resource is checked

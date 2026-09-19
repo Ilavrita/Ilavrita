@@ -89,6 +89,7 @@ and an architecture that does not have to be rewritten to reach a clustered one.
 | Binary payloads | Working — bytes stored outside the database |
 | Subscriptions | Working — `rest-hook`, and `websocket` within one process; queues are claimed, so replicas do not notify twice |
 | Resource validation, `$validate` | Against the R4 base definitions and required bindings — no profiles |
+| Terminology directory | `$lookup`, `$validate-code` — LOINC and SNOMED loaded by the deployment, never bundled |
 | Bundle batch and transaction | Not implemented |
 | Conditional create, update and delete | Not implemented |
 | Backup and restore | Working — `ilavrita backup`, `verify-backup`, `restore` |

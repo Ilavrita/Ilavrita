@@ -57,6 +57,12 @@ type backend struct {
 	// through a Scope: what a caller may read is decided before this is reached.
 	definitions *sqlite.CanonicalStore
 
+	// terminology holds the code systems this deployment loaded for itself.
+	// A backend wired without one holds none, which is what an install that has
+	// imported nothing has — and is answered as such rather than as a code
+	// nobody has heard of.
+	terminology *sqlite.TerminologyStore
+
 	// factors holds the second factor an identity proved. A backend wired
 	// without one requires none, which is what a deployment that configured no
 	// sealing key can honestly offer.
@@ -227,6 +233,7 @@ func newBackend(db *sql.DB, dataDir string) *backend {
 		audits:        sqlite.NewAuditStore(db),
 		factors:       sqlite.NewFactorStore(db, sealingKey()),
 		definitions:   sqlite.NewCanonicalStore(db),
+		terminology:   sqlite.NewTerminologyStore(db),
 		payloads:      files.NewDisk(filepath.Join(dataDir, payloadDirectory)),
 		notifications: sqlite.NewSubscriptionStore(db),
 		sockets:       newHub(),
