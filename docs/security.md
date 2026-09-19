@@ -48,6 +48,15 @@ FHIR routes, carry their own policy and are deny-by-default. PocketBase's own
 REST API and admin console are disabled unless a deployment opts back in, and are
 not part of the product contract (FR-029).
 
+**One way to be an administrator. Enforced.** There is no PocketBase superuser.
+Such an account would sit outside the authorization model entirely — no Project,
+no Membership, no Grant, nothing narrowed by a compartment and nothing written to
+the audit trail — and the console it unlocks can archive the whole data directory,
+every Project's record with it. The command that mints one is not registered, a
+test refuses any source that calls `app.Start` and would re-register it, and every
+`_superusers` row is deleted at startup on every start. Administering this install
+is Super Admin, decided per request inside the model like everything else.
+
 **Audit. Enforced.** Every interaction and every login records Project, actor,
 action, target, timestamp and outcome, written in the transaction that performed
 the thing it records — so an action this server could not account for is one it

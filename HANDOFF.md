@@ -93,6 +93,14 @@ search. Separate tables make that unrepresentable.
 Holding it anywhere else is a constraint violation. Bootstrap is a single-use token, never
 an env var and never first-signup-wins.
 
+**There is no PocketBase superuser, and the binary cannot make one.** Such an account holds no
+Project, no Membership and no Grant, so it sits outside every control this project has, and the
+console it unlocks can archive the whole data directory. `main` calls PocketBase's `Execute`
+rather than `Start`, so the `superuser` command is never registered, and `refuseSuperusers`
+deletes every `_superusers` row at startup — on *every* start, because that table is reachable by
+an older binary, a second PocketBase run against the same directory, or a restored archive. Two
+tests hold it: one plants rows and starts, one refuses any source file that calls `app.Start`.
+
 ## 4. How to verify anything here
 
 **A passing test suite proves nothing on its own.** Mutate the code and confirm the tests

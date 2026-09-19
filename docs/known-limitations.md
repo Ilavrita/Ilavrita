@@ -534,6 +534,31 @@ local development.
 
 They are not a supported interface. Anything built against them will break.
 
+**There is no PocketBase superuser, and this build cannot make one.** A
+superuser is not one of this server's principals: it holds no Project, no
+Membership and no Grant, so nothing it does is narrowed by a compartment, a
+filter or a projection, and nothing it does reaches the audit trail. The console
+it unlocks can take a backup of the whole data directory, and that archive
+carries every Project's clinical record out with it — which is the whole of the
+isolation model, undone by one account outside it.
+
+Two things hold that, because either alone is a door. The command that mints one
+is never registered, which is why `main` calls PocketBase's `Execute` rather than
+`Start` and why a test refuses any source file that calls `app.Start`. And every
+row in `_superusers` is deleted at startup, before the server answers anything —
+on every start, not once, because the table is reachable by things that are not
+this process: an older binary, a second PocketBase run against the same
+directory, a restored archive. A start that removed one says so in the log and
+records it in `super_jobs`.
+
+Administering this install is Super Admin, which is a standing inside the model:
+decided per request, bounded by the same Scope compilation as everything else,
+and recorded like any other interaction.
+
+A start that cannot read `_superusers` is a failure, not a warning. Not being
+able to tell whether the account exists is not a state to serve clinical data
+in.
+
 ## Cross-origin requests
 
 The FHIR surface sends no CORS headers and answers no preflight, so no browser
