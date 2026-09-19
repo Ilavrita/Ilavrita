@@ -3,10 +3,12 @@ package main
 import (
 	"encoding/json"
 	"net/http"
+	"net/http/httptest"
 	"net/url"
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/Ilavrita/Ilavrita/packages/fhir"
 	"github.com/Ilavrita/Ilavrita/packages/storage"
@@ -242,5 +244,60 @@ func TestAHistoryPageIsBoundedEvenWhenNobodyAsks(t *testing.T) {
 	// is refused rather than quietly turned into the default.
 	if _, err := storage.NewVersionWindow(0, ""); err == nil {
 		t.Error("a count of zero was accepted")
+	}
+}
+
+// TestALastModifiedIsAnInstantNotAnHTTPDate. Bundle.entry.response.lastModified
+// is R4's instant datatype; the Last-Modified header beside it is an HTTP-date.
+// They name the same moment in different alphabets, and this server wrote the
+// header's spelling into the JSON — which every other FHIR implementation is
+// right to refuse, because the datatype says what it says.
+func TestALastModifiedIsAnInstantNotAnHTTPDate(t *testing.T) {
+	routes := servingFHIR(t, everyAction)
+
+	id := assertCreate(t, routes, "Organization")
+
+	// Both Bundles that carry one: the history of a resource, and what a
+	// transaction answers for each entry it performed.
+	answers := map[string]*httptest.ResponseRecorder{
+		"history": call{
+			method: http.MethodGet,
+			path:   resourcePath("Organization", id) + "/_history",
+		}.send(t, routes),
+		"transaction": submitting(t, routes, transactionOf(
+			entryOf("", "POST", "Organization", valid("Organization", nil)))),
+	}
+
+	for named, answer := range answers {
+		assertStatus(t, answer, http.StatusOK)
+
+		var held fhir.Bundle
+		if err := json.Unmarshal(answer.Body.Bytes(), &held); err != nil {
+			t.Fatalf("%s: decode: %v", named, err)
+		}
+
+		if len(held.Entry) == 0 {
+			t.Fatalf("%s answered no entries", named)
+		}
+
+		for index, entry := range held.Entry {
+			if entry.Response == nil || entry.Response.LastModified == "" {
+				t.Errorf("%s entry %d says when nothing happened", named, index)
+
+				continue
+			}
+
+			stated := entry.Response.LastModified
+
+			if _, err := time.Parse(fhirInstant, stated); err != nil {
+				t.Errorf("%s entry %d holds %q, which is not an instant: %v",
+					named, index, stated, err)
+			}
+
+			// And it is not the header's spelling, which is what it was.
+			if _, err := time.Parse(http.TimeFormat, stated); err == nil {
+				t.Errorf("%s entry %d holds an HTTP-date, %q", named, index, stated)
+			}
+		}
 	}
 }

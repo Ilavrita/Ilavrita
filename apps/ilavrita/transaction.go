@@ -313,7 +313,7 @@ func answeredEntry(base string, record storage.ResourceRecord, status int) fhir.
 		Response: &fhir.EntryResponse{
 			Status:       statusLine(status),
 			ETag:         weakETag(record.Version),
-			LastModified: httpDate(record.LastUpdated),
+			LastModified: instantOf(record.LastUpdated),
 		},
 	}
 }

@@ -338,6 +338,17 @@ func httpDate(instant time.Time) string {
 	return instant.UTC().Format(http.TimeFormat)
 }
 
+// instantOf writes a moment the way R4's instant datatype spells one, which is
+// not how an HTTP header spells it.
+//
+// Bundle.entry.response.lastModified is an instant; the Last-Modified header
+// beside it is an HTTP-date. They name the same moment in different alphabets,
+// and a client holding the JSON to its own datatype is right to refuse an
+// HTTP-date there.
+func instantOf(moment time.Time) string {
+	return moment.UTC().Format(fhirInstant)
+}
+
 // versionedLocation always names the version, never the bare resource. Ilavrita
 // versions every record, so the unversioned form R4 allows never applies.
 func versionedLocation(base string, key storage.ResourceKey, version storage.VersionID) string {
@@ -408,7 +419,7 @@ func historyEntry(base string, record storage.ResourceRecord, verb fhir.HTTPVerb
 		Response: &fhir.EntryResponse{
 			Status:       entryStatus(verb),
 			ETag:         weakETag(record.Version),
-			LastModified: httpDate(record.LastUpdated),
+			LastModified: instantOf(record.LastUpdated),
 		},
 	}
 
