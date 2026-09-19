@@ -36,8 +36,15 @@ single security and Project model, even though they ship in phases.
       the bytes made durable before the row that names them commits.
       `DocumentReference` refuses inlined bytes and sends a client to `Binary`.
       The S3-compatible store is not in
-- [ ] Reindexing — an install gaining the index backfills once; there is no
-      operator-triggered reindex
+- [x] Custom search parameters — a Project stores a `SearchParameter` and
+      searches by it, with no restart and no operator step. Only what this build
+      can actually apply: token, string, reference and date, over an expression
+      naming one element. Anything else is refused rather than stored and
+      silently unanswered
+- [x] Reindexing — a definition enqueues the types it names, and a claimed
+      worker outside every request walks them, so a parameter is true of what
+      was already stored. An operator-triggered reindex of a type nobody
+      redefined is not in
 - [x] Backup and restore — `ilavrita backup`, `verify-backup` and `restore`, with
       the database snapshot and the payloads taken in an order that makes the
       archive consistent

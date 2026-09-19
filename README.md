@@ -90,6 +90,7 @@ and an architecture that does not have to be rewritten to reach a clustered one.
 | Subscriptions | Working — `rest-hook`, and `websocket` within one process; queues are claimed, so replicas do not notify twice |
 | Resource validation, `$validate` | Against the R4 base definitions and required bindings — no profiles, no FHIRPath invariants |
 | FHIR R4 representation | Checked against the HL7 validator by `scripts/conformance.sh`, not only against our own tests |
+| Search parameters | Built-in set, plus any a Project defines with a `SearchParameter`; new ones backfill in the background |
 | LOINC and SNOMED | Not resolved — a code is stored and read back, never looked up or checked |
 | Bundle transaction | Working — all-or-nothing, with `urn:uuid:` references resolved across entries |
 | Bundle batch | Not implemented |

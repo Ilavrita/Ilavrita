@@ -13,7 +13,8 @@ most expensive mistake on this project so far.
 | `GET /healthz`, `GET /version` | Working |
 | `GET /fhir/R4/metadata` | Working, R4-valid, generated from the routes actually served |
 | create, read, vread, update, delete, history-instance | Working, for 126 resource types: 64 non-clinical, 62 clinical |
-| `GET /fhir/R4/{type}?...`, `POST /fhir/R4/{type}/_search` | Working, over a declared parameter set |
+| `GET /fhir/R4/{type}?...`, `POST /fhir/R4/{type}/_search` | Working, over the built-ins plus what the Project defined |
+| `SearchParameter` written by a Project | Working: compiled, indexed, and backfilled by a claimed worker |
 | `POST /fhir/R4` with a `transaction` Bundle | Working, all-or-nothing |
 | `POST /fhir/R4/{type}/$validate` | Working, against the base definitions and required bindings |
 | `ilavrita backup`, `verify-backup`, `restore` | Working |
@@ -408,6 +409,26 @@ two of them being wrong together. Ask something that did not.
 Two findings are accepted rather than fixed and both are named with a reason in
 `scripts/conformance.py`; one of them, `org-1`, is the real gap that this build checks no
 FHIRPath invariant, and the fixture is left invalid so it stays visible.
+
+**9. Custom search parameters and reindexing. Done.** A `SearchParameter` stored in a Project is
+compiled into the same shape the built-in registry produces, projected into `search_parameter` in
+the transaction that writes the resource, and read back by every seam that decides what a
+parameter means — what a write projects, what a query may name, what the statement advertises,
+what a subscription may watch. They read one set, so a Project cannot have a parameter it can
+search by but not index.
+
+Two things are worth knowing before changing it. **The expression is not FHIRPath.** There is no
+engine here, so only an expression naming one element compiles and everything else is refused —
+approximating would produce a parameter that matched something other than what it says, and an
+empty page is what a correct search looks like. **A token's halves come from the datatype**, not
+from the definition, so a `CodeableConcept` is read one level in at its `coding`.
+
+Reindexing is a backlog, not part of the write: a Project's whole Organization table is not work
+to do inside the request that defined the parameter, because one pooled connection per process
+means that request is every other request waiting. Defining enqueues one row per type — one row,
+however many parameters name it — and `reindexer` claims and walks it. The claim has a lease, so a
+replica that dies returns the work; rebuilding an index that is already right changes nothing,
+which is what makes that safe.
 
 Search parameters are deliberately a short list — `packages/search/registry.go` is the
 whole of what this build answers, and adding one means adding a projection a write maintains and

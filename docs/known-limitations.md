@@ -80,7 +80,8 @@ Every other `/fhir/R4` route answers `501 Not Implemented` as an
 | Binary payloads | Working: bytes kept outside the database, placed by `securityContext` |
 | DocumentReference | Working: the document is a `Binary` its attachment names; inlined bytes are refused |
 | Subscriptions | Working: `rest-hook`, and `websocket` within one process; see below |
-| Reindexing | Not implemented; the index is rebuilt once when an install first gains it |
+| Custom search parameters | Working: a Project stores a `SearchParameter` and searches by it; see below |
+| Reindexing | Working for a type whose parameters changed; no operator-triggered reindex |
 | Backup, restore | Working: `ilavrita backup`, `verify-backup` and `restore`; see below |
 | Structured logging, request correlation | Not implemented |
 
@@ -257,6 +258,51 @@ above. Removing LOINC and SNOMED removed a directory, not the validation.
 A deployment that needs to resolve these codes should reach a terminology server
 that is licensed to serve them. That is a different thing from what this server
 does, and pretending otherwise was the mess.
+
+## A Project defines its own search parameters
+
+A `SearchParameter` stored in a Project changes what that Project can search
+by — no restart, no operator step, and no effect on any other Project. The
+built-in registry is the floor every Project stands on and none of them can
+move: a custom code that shadows a built-in is refused, because shadowing one
+would change what an existing query means for everyone in that Project.
+
+**Only what this build can actually apply.** R4 states where a parameter reads
+from as a FHIRPath expression and there is no FHIRPath engine here, so an
+expression naming one element — `Organization.telecom` — is compiled and
+anything else is refused. `Patient.name.where(use='official')`, a union, an
+index, a function: refused, not approximated. The same goes for `number`,
+`quantity`, `uri` and `composite`, which this build does not index.
+
+That refusal is the point. A parameter that quietly matched something other than
+what it says would come back looking answered, and an empty page is exactly what
+a correct search looks like — nobody would find out.
+
+A `SearchParameter` that names no element at all claims nothing, so it is stored
+and defines nothing. R4 allows one, and documenting a parameter is not the same
+as asking this server to answer it.
+
+**A token's two halves are read from the datatype**, not from the definition: a
+`ContactPoint` pairs `value` with `system`, a `CodeableConcept` is read one level
+in at its `coding`. A definition that paired one coding's system with another's
+code is one nobody could tell was wrong.
+
+**A new parameter is true of what was already stored, shortly.** The index is
+built on write, so a parameter defined today describes nothing written
+yesterday. Defining one enqueues the types it names, and a worker outside every
+request claims a type and walks it — claimed, so several replicas share the work
+without two of them rebuilding the same index; claimed with a lease, so a
+replica that dies mid-walk returns the work instead of stranding it. Until that
+pass runs, a search by the new code is accepted and finds only what has been
+written since. Rebuilding an index that is already right costs time and changes
+nothing, which is what makes the retry safe.
+
+Removing the `SearchParameter` removes what it defined and the rows it indexed.
+A stale row is a match for a restriction that no longer exists.
+
+The statement at `GET /fhir/R4/metadata` advertises what *the caller* may search
+by, so an identified caller sees their own Project's additions. A request
+nothing identified names no Project, so it is told the built-ins.
 
 ## An outside implementation judges what goes on the wire
 
