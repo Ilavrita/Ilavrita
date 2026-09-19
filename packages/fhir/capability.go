@@ -20,6 +20,11 @@ const (
 	InteractionDelete          Interaction = "delete"
 	InteractionInstanceHistory Interaction = "history-instance"
 	InteractionSearchType      Interaction = "search-type"
+
+	// InteractionTransaction is several interactions submitted as one act, all
+	// of which happen or none of which do. R4 declares it on the server rather
+	// than on a type, because a transaction is not about one.
+	InteractionTransaction Interaction = "transaction"
 )
 
 // servedResourceTypes is the closed list of R4 types this build serves. Storage
@@ -258,6 +263,11 @@ type SearchParamCapability struct {
 type RestCapability struct {
 	Mode     string               `json:"mode"`
 	Resource []ResourceCapability `json:"resource,omitempty"`
+
+	// Interaction is what the server answers that is not about one type. R4
+	// keeps these apart from a resource's own, because a transaction is not an
+	// interaction on a Patient.
+	Interaction []ResourceInteraction `json:"interaction,omitempty"`
 }
 
 // ImplementationDetail describes this particular deployment. R4 requires it
@@ -302,6 +312,10 @@ type CapabilityConfig struct {
 	// an operation is a route with its own definition, not one of the six.
 	Operations []OperationCapability
 
+	// SystemInteractions are what the server answers that is not about one
+	// type, such as a transaction.
+	SystemInteractions []Interaction
+
 	// TypeOperations are the operations one type answers and the others do not,
 	// by type name. A statement naming $lookup on Patient would send a client at
 	// a route that is not there.
@@ -331,10 +345,14 @@ func NewCapabilityStatement(config CapabilityConfig) CapabilityStatement {
 		},
 		Implementation: ImplementationDetail{
 			Description: "Ilavrita server. The interactions and search parameters below are " +
-				"implemented; transactions and conditional operations answer 501.",
+				"implemented; a batch and any conditional interaction are refused.",
 			URL: config.BaseURL,
 		},
-		Rest: []RestCapability{{Mode: "server", Resource: servedResources(config)}},
+		Rest: []RestCapability{{
+			Mode:        "server",
+			Resource:    servedResources(config),
+			Interaction: declared(config.SystemInteractions),
+		}},
 	}
 }
 

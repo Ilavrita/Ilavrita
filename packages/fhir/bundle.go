@@ -68,10 +68,42 @@ type BundleEntry struct {
 	Response *EntryResponse  `json:"response,omitempty"`
 }
 
-// EntryRequest records the interaction that produced a version.
+// EntryRequest is one entry's interaction: the one that produced a version, in
+// a history Bundle, or the one a transaction entry asks for.
 type EntryRequest struct {
 	Method HTTPVerb `json:"method"`
 	URL    string   `json:"url"`
+
+	// The preconditions R4 lets a transaction entry state. This server honours
+	// none of them, and reads them only so an entry stating one can be refused:
+	// a client that asked for ifNoneExist and was quietly given a duplicate has
+	// no way to find out it did not get what it asked for.
+	//
+	// A history Bundle never sets them, so omitempty leaves what it answers
+	// with unchanged.
+	IfMatch         string `json:"ifMatch,omitempty"`
+	IfNoneExist     string `json:"ifNoneExist,omitempty"`
+	IfNoneMatch     string `json:"ifNoneMatch,omitempty"`
+	IfModifiedSince string `json:"ifModifiedSince,omitempty"`
+}
+
+// Precondition names the precondition an entry states, or the empty string if
+// it states none.
+func (r EntryRequest) Precondition() string {
+	for _, stated := range []struct {
+		name, value string
+	}{
+		{"ifMatch", r.IfMatch},
+		{"ifNoneExist", r.IfNoneExist},
+		{"ifNoneMatch", r.IfNoneMatch},
+		{"ifModifiedSince", r.IfModifiedSince},
+	} {
+		if stated.value != "" {
+			return stated.name
+		}
+	}
+
+	return ""
 }
 
 // EntryResponse records what that interaction answered.
