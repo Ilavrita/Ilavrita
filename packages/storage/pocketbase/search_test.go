@@ -42,7 +42,7 @@ func page(
 		t.Fatalf("parse %q: %v", query, err)
 	}
 
-	plan, err := search.Parse(storage.ResourceType(resourceType), values)
+	plan, err := search.Parse(nil, storage.ResourceType(resourceType), values)
 	if err != nil {
 		t.Fatalf("plan %q: %v", query, err)
 	}
@@ -350,7 +350,7 @@ func TestASearchIsNarrowedByAGrantsFilterAndProjection(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	plan, err := search.Parse("Observation", values)
+	plan, err := search.Parse(nil, "Observation", values)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -429,7 +429,7 @@ func TestASearchRefusesAGrantItCannotCompile(t *testing.T) {
 	grant.Filter = &storage.Filter{}
 
 	values, _ := url.ParseQuery("status=final")
-	plan, _ := search.Parse("Observation", values)
+	plan, _ := search.Parse(nil, "Observation", values)
 
 	if _, err := store.Search(t.Context(), storage.NewScope(grant), plan); !errors.Is(err, ErrUncompilableFilter) {
 		t.Errorf("err = %v, want %v", err, ErrUncompilableFilter)

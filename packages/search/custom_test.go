@@ -219,3 +219,24 @@ func TestSomethingThatIsNotASearchParameterIsRefused(t *testing.T) {
 		}
 	}
 }
+
+// TestAParameterNamingNoElementIndexesNothing. R4 lets a SearchParameter
+// document a parameter without stating where it reads from, and one that states
+// nothing claims nothing — so it is stored and defines nothing, rather than
+// refused for a type this build would not have indexed anyway.
+func TestAParameterNamingNoElementIndexesNothing(t *testing.T) {
+	for _, kind := range []string{"token", "composite", "quantity"} {
+		body := strings.Replace(
+			searchParameter("custom", kind, "Patient.address", "Patient"),
+			`"expression":"Patient.address"`, `"expression":""`, 1)
+
+		held, err := ReadSearchParameter([]byte(body))
+		if err != nil {
+			t.Errorf("a %s parameter naming no element was refused: %v", kind, err)
+		}
+
+		if len(held) != 0 {
+			t.Errorf("a %s parameter naming no element defined %d", kind, len(held))
+		}
+	}
+}

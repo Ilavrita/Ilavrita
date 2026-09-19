@@ -6,6 +6,7 @@ import (
 	"errors"
 	"time"
 
+	"github.com/Ilavrita/Ilavrita/packages/search"
 	"github.com/Ilavrita/Ilavrita/packages/storage"
 	"github.com/Ilavrita/Ilavrita/packages/subscription"
 )
@@ -24,12 +25,12 @@ var errSubscriptionsUnavailable = errors.New("ilavrita: this deployment cannot h
 // Everything about it is checked here rather than when it would first fire. A
 // subscription accepted and then silently never matching is worse than one
 // refused: somebody is relying on it, and nothing will tell them.
-func checkSubscription(key storage.ResourceKey, content []byte) error {
+func checkSubscription(custom search.Custom, key storage.ResourceKey, content []byte) error {
 	if key.Type != subscriptionType {
 		return nil
 	}
 
-	_, err := subscription.Read(key.ID, content)
+	_, err := subscription.Read(custom, key.ID, content)
 
 	return err
 }

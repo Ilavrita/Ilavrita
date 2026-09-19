@@ -103,7 +103,7 @@ var implemented = map[storage.ResourceType][]declaration{
 // It panics on a malformed declaration, which is a programming error in the
 // table above rather than anything a request can reach: a registry that built
 // half its parameters would refuse queries this build means to serve.
-func Supported(resourceType storage.ResourceType) []Parameter {
+func Supported(custom Custom, resourceType storage.ResourceType) []Parameter {
 	declared := append(slices.Clone(universal), implemented[resourceType]...)
 	built := make([]Parameter, 0, len(declared))
 
@@ -117,7 +117,7 @@ func Supported(resourceType storage.ResourceType) []Parameter {
 		built = append(built, parameter)
 	}
 
-	return built
+	return append(built, custom.For(resourceType)...)
 }
 
 // build turns one declaration into the parameter it describes.
@@ -142,8 +142,8 @@ func build(entry declaration) (Parameter, error) {
 
 // Find returns the parameter one query names, if this build implements it for
 // this type.
-func Find(resourceType storage.ResourceType, name string) (Parameter, bool) {
-	for _, parameter := range Supported(resourceType) {
+func Find(custom Custom, resourceType storage.ResourceType, name string) (Parameter, bool) {
+	for _, parameter := range Supported(custom, resourceType) {
 		if parameter.name == name {
 			return parameter, true
 		}
@@ -155,8 +155,8 @@ func Find(resourceType storage.ResourceType, name string) (Parameter, bool) {
 // Indexed returns the parameters a write has to project for one resource type,
 // which is every supported parameter the store does not already hold a column
 // for.
-func Indexed(resourceType storage.ResourceType) []Parameter {
-	supported := Supported(resourceType)
+func Indexed(custom Custom, resourceType storage.ResourceType) []Parameter {
+	supported := Supported(custom, resourceType)
 	projected := make([]Parameter, 0, len(supported))
 
 	for _, parameter := range supported {

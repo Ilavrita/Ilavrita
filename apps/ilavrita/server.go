@@ -207,9 +207,10 @@ func (b *backend) notifier() *notifier {
 	}
 
 	return &notifier{
-		worker:   worker,
-		queue:    b.notifications,
-		searches: b.resources,
+		worker:     worker,
+		queue:      b.notifications,
+		searches:   b.resources,
+		parameters: b.searchParameters,
 		channels: map[subscription.Channel]deliverer{
 			subscription.ChannelRestHook:  newRestHook(),
 			subscription.ChannelWebSocket: b.sockets,
@@ -275,4 +276,23 @@ func seedDefinitions(ctx context.Context, store *sqlite.CanonicalStore) error {
 	}
 
 	return nil
+}
+
+// searchParameters returns what one Project added to the built-in registry.
+//
+// Every seam that decides what a parameter means reads this: what a write
+// projects, what a query may name, what the statement advertises and what a
+// subscription may watch. They read the same set so a Project cannot have a
+// parameter it can search by but not index, or watch but not search.
+//
+// A backend wired without a store holds none, which is what a Project that
+// defined none has, and is the answer every test that wires no store gets.
+func (b *backend) searchParameters(
+	ctx context.Context, project storage.ProjectID,
+) (search.Custom, error) {
+	if b == nil || b.resources == nil {
+		return nil, nil
+	}
+
+	return b.resources.CustomParameters(ctx, project)
 }

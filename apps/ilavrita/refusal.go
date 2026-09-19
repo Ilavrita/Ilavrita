@@ -106,6 +106,10 @@ var (
 		"This server performs no conditional interaction, so a transaction " +
 			"entry may state no precondition."}
 
+	unusableParameter = refusal{http.StatusBadRequest, fhir.CodeNotSupported,
+		"This server cannot search by that SearchParameter. It indexes token, " +
+			"string, reference and date, over an expression naming one element."}
+
 	conditionalUnavailable = refusal{http.StatusBadRequest, fhir.CodeNotSupported,
 		"This server performs no conditional interaction. Search for the " +
 			"resource and decide for yourself whether to create it."}
@@ -223,6 +227,14 @@ func translate(err error) refusal {
 	case errors.Is(err, errEntryNotSupported), errors.Is(err, fhir.ErrNotABundle),
 		errors.Is(err, fhir.ErrMalformedEntry), errors.Is(err, fhir.ErrDuplicateFullURL):
 		return unreadableTransaction
+	case errors.Is(err, search.ErrNotASearchParameter),
+		errors.Is(err, search.ErrParameterIncomplete),
+		errors.Is(err, search.ErrParameterKindUnsupported),
+		errors.Is(err, search.ErrParameterExpression),
+		errors.Is(err, search.ErrParameterBase),
+		errors.Is(err, search.ErrParameterReserved),
+		errors.Is(err, search.ErrParameterElement):
+		return unusableParameter
 	case errors.As(err, &errInvalidResource{}):
 		return invalidSubmission
 	case errors.Is(err, files.ErrTooLarge):

@@ -135,6 +135,13 @@ func ReadSearchParameter(content []byte) ([]Defined, error) {
 		return nil, nil
 	}
 
+	// A SearchParameter that names no element indexes nothing, and R4 allows
+	// one: it documents a parameter without claiming this server answers it.
+	// Nothing was stated, so there is nothing to refuse.
+	if strings.TrimSpace(held.Expression) == "" {
+		return nil, nil
+	}
+
 	kind, indexed := kindsByType[held.Type]
 	if !indexed {
 		return nil, fmt.Errorf("%w: %q", ErrParameterKindUnsupported, held.Type)
@@ -169,7 +176,7 @@ func compileFor(
 		return Defined{}, fmt.Errorf("%w: %s", ErrParameterBase, base)
 	}
 
-	if _, reserved := Find(resourceType, held.Code); reserved {
+	if _, reserved := Find(nil, resourceType, held.Code); reserved {
 		return Defined{}, fmt.Errorf("%w: %s", ErrParameterReserved, held.Code)
 	}
 
@@ -273,6 +280,53 @@ func parameterFor(kind Kind, code, element, datatype string) (Parameter, error) 
 		return Reference(code, element)
 	case KindDate:
 		return Date(code, element)
+	default:
+		return Parameter{}, fmt.Errorf("%w: %q", ErrUnknownKind, string(kind))
+	}
+}
+
+// Custom holds the parameters Projects defined for themselves, compiled and
+// keyed by the type each one reads from.
+//
+// A nil Custom is a Project that defined none, which is every Project until one
+// does. So a caller with no Project to hand passes nil and gets exactly the
+// built-in parameters, which is what makes this safe to thread through code
+// that has no business knowing about custom parameters at all.
+type Custom map[storage.ResourceType][]Parameter
+
+// Add records one compiled definition.
+func (c Custom) Add(defined Defined) {
+	c[defined.Type] = append(c[defined.Type], defined.Parameter)
+}
+
+// For returns what one type gained, in a stable order so two calls compile the
+// same query.
+func (c Custom) For(resourceType storage.ResourceType) []Parameter {
+	held := slices.Clone(c[resourceType])
+
+	slices.SortFunc(held, func(a, b Parameter) int {
+		return strings.Compare(a.name, b.name)
+	})
+
+	return held
+}
+
+// Rebuild returns the parameter a store kept, from the parts it kept.
+//
+// The store keeps the compiled shape rather than the SearchParameter resource,
+// so reading one back does not mean reading the element model again on every
+// request — and a definition that compiled once cannot stop compiling because
+// the model moved underneath it.
+func Rebuild(code string, kind Kind, path, codeMember, systemMember string) (Parameter, error) {
+	switch kind {
+	case KindToken:
+		return Token(code, path, codeMember, systemMember)
+	case KindString:
+		return Text(code, path)
+	case KindReference:
+		return Reference(code, path)
+	case KindDate:
+		return Date(code, path)
 	default:
 		return Parameter{}, fmt.Errorf("%w: %q", ErrUnknownKind, string(kind))
 	}

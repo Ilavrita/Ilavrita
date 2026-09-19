@@ -35,7 +35,7 @@ func TestTheSpecificationValidatesAgainstItself(t *testing.T) {
 	for _, resource := range held {
 		kinds[resource.Type]++
 
-		report := validate.Resource(storage.ResourceType(resource.Type), resource.Content)
+		report := validate.Resource(nil, storage.ResourceType(resource.Type), resource.Content)
 		if report.OK() {
 			continue
 		}

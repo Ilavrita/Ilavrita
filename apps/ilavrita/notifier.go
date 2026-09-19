@@ -42,6 +42,12 @@ type notifier struct {
 	resolve  authz.Resolvers
 	now      func() time.Time
 
+	// parameters is what a Project added to the built-in registry. A criteria
+	// may name one, so reading a subscription means reading them too: a parser
+	// without them refuses a criteria the Project's own search accepts, and the
+	// subscription would silently never match.
+	parameters func(context.Context, storage.ProjectID) (search.Custom, error)
+
 	// channels is how each kind of subscriber is reached. One per channel, so
 	// a subscription can never be delivered by a channel it did not ask for.
 	channels map[subscription.Channel]deliverer
@@ -116,8 +122,13 @@ func (n *notifier) owed(ctx context.Context, written subscription.Written) error
 		return err
 	}
 
+	custom, err := n.customFor(ctx, written.Project)
+	if err != nil {
+		return err
+	}
+
 	for _, watcher := range watchers {
-		held, err := subscription.Read(watcher.ID, watcher.Content)
+		held, err := subscription.Read(custom, watcher.ID, watcher.Content)
 		if err != nil {
 			// Written through a route that checks it, so this is a row somebody
 			// changed underneath us. It is reported and skipped rather than
@@ -186,7 +197,12 @@ func (n *notifier) matches(
 		return storage.ResourceRecord{}, false, err
 	}
 
-	plan, err := narrowedToOne(held, written.Key.ID)
+	custom, err := n.customFor(ctx, written.Project)
+	if err != nil {
+		return storage.ResourceRecord{}, false, err
+	}
+
+	plan, err := narrowedToOne(custom, held, written.Key.ID)
 	if err != nil {
 		return storage.ResourceRecord{}, false, err
 	}
@@ -206,7 +222,9 @@ func (n *notifier) matches(
 // narrowedToOne is the subscription's criteria asked of one resource. It is
 // built by re-reading the criteria rather than by editing a parsed one, so what
 // the match runs is what a search of the same string would run.
-func narrowedToOne(held subscription.Subscription, id storage.LogicalID) (search.Query, error) {
+func narrowedToOne(
+	custom search.Custom, held subscription.Subscription, id storage.LogicalID,
+) (search.Query, error) {
 	_, stated, _ := cutCriteria(held.Stated())
 
 	values, err := url.ParseQuery(stated)
@@ -216,7 +234,7 @@ func narrowedToOne(held subscription.Subscription, id storage.LogicalID) (search
 
 	values.Set("_id", string(id))
 
-	return search.Parse(held.Watching(), values)
+	return search.Parse(custom, held.Watching(), values)
 }
 
 // cutCriteria splits "Type?query" the way the subscription itself reads it.
@@ -334,6 +352,11 @@ func (n *notifier) deliverable(
 		return subscription.Subscription{}, storage.ResourceRecord{}, false, err
 	}
 
+	custom, err := n.customFor(ctx, delivery.Project)
+	if err != nil {
+		return subscription.Subscription{}, storage.ResourceRecord{}, false, err
+	}
+
 	var held subscription.Subscription
 
 	for _, watcher := range watchers {
@@ -341,7 +364,7 @@ func (n *notifier) deliverable(
 			continue
 		}
 
-		held, err = subscription.Read(watcher.ID, watcher.Content)
+		held, err = subscription.Read(custom, watcher.ID, watcher.Content)
 		if err != nil {
 			return subscription.Subscription{}, storage.ResourceRecord{}, false, nil
 		}
@@ -359,4 +382,16 @@ func (n *notifier) deliverable(
 	}
 
 	return held, record, matched, nil
+}
+
+// customFor reads what one Project added to the registry, or nothing when this
+// notifier was wired without a way to ask.
+func (n *notifier) customFor(
+	ctx context.Context, project storage.ProjectID,
+) (search.Custom, error) {
+	if n.parameters == nil {
+		return nil, nil
+	}
+
+	return n.parameters(ctx, project)
 }

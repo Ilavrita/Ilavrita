@@ -148,8 +148,19 @@ func registerFHIRRoutes(routes *router.Router[*core.RequestEvent]) {
 // advertisedSearchParameters is what one type may actually be searched by. It
 // reads the same registry the query parser reads, so a statement cannot name a
 // parameter a search would refuse.
-func advertisedSearchParameters(resourceType string) []fhir.SearchParamCapability {
-	supported := search.Supported(storage.ResourceType(resourceType))
+func advertisedSearchParameters(
+	custom search.Custom,
+) func(string) []fhir.SearchParamCapability {
+	return func(resourceType string) []fhir.SearchParamCapability {
+		return declaredParameters(custom, resourceType)
+	}
+}
+
+// declaredParameters is what one type may be searched by, for one caller.
+func declaredParameters(
+	custom search.Custom, resourceType string,
+) []fhir.SearchParamCapability {
+	supported := search.Supported(custom, storage.ResourceType(resourceType))
 	declared := make([]fhir.SearchParamCapability, 0, len(supported))
 
 	for _, parameter := range supported {
@@ -190,6 +201,14 @@ func describeCapabilities(request *core.RequestEvent) error {
 		return refuse(request, err)
 	}
 
+	// What this caller may search by includes what their own Project defined. A
+	// request nothing identified names no Project, so it is told the built-ins:
+	// there is no Project whose additions it could mean.
+	custom, err := callerParameters(request)
+	if err != nil {
+		return refuse(request, err)
+	}
+
 	base, err := baseURL(request)
 	if err != nil {
 		return refuse(request, err)
@@ -202,7 +221,7 @@ func describeCapabilities(request *core.RequestEvent) error {
 		Interactions:       advertisedInteractions(),
 		Operations:         advertisedOperations(),
 		SystemInteractions: advertisedSystemInteractions(),
-		SearchParameters:   advertisedSearchParameters,
+		SearchParameters:   advertisedSearchParameters(custom),
 	})
 
 	return respondFHIR(request, http.StatusOK, statement)
@@ -289,6 +308,12 @@ type granted struct {
 	notifications subscription.Queue
 	standing      subscription.Owner
 
+	// custom is what this caller's Project added to the built-in registry, read
+	// once per request. Every seam that decides what a parameter means reads
+	// this same set, so a search and the write behind it cannot disagree about
+	// what a code refers to.
+	custom search.Custom
+
 	searches     search.Repository
 	versions     storage.VersionStore
 	transactions storage.Transactor
@@ -354,6 +379,13 @@ func permit(request *core.RequestEvent, resourceType storage.ResourceType, actio
 	}
 
 	held.scope = storage.NewScope(grants...)
+
+	custom, err := serving.searchParameters(request.Request.Context(), held.project)
+	if err != nil {
+		return granted{}, err
+	}
+
+	held.custom = custom
 
 	// Who a Subscription written here would deliver as. It is read from the
 	// session rather than from the body, because a client that could state it
@@ -477,4 +509,21 @@ func mediaType(value string) string {
 
 func carriesBody(method string) bool {
 	return method == http.MethodPost || method == http.MethodPut
+}
+
+// callerParameters reads what the requesting caller's own Project added to the
+// registry, for a route that answers before anything is authorized.
+func callerParameters(request *core.RequestEvent) (search.Custom, error) {
+	// This route answers before anything is wired, which is what lets a client
+	// read the statement from a server it has not authenticated to.
+	if serving == nil {
+		return nil, nil
+	}
+
+	session, found, err := serving.session(request)
+	if err != nil || !found {
+		return nil, nil
+	}
+
+	return serving.searchParameters(request.Request.Context(), session.Project())
 }

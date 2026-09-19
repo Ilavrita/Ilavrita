@@ -27,7 +27,12 @@ func (s *ResourceStore) writeSearchIndex(
 		return fmt.Errorf("pocketbase: clear the search index: %w", err)
 	}
 
-	entries, err := search.Extract(key.Type, content)
+	custom, err := s.CustomParameters(ctx, key.Project)
+	if err != nil {
+		return err
+	}
+
+	entries, err := search.Extract(custom, key.Type, content)
 	if err != nil {
 		return fmt.Errorf("pocketbase: index %s/%s: %w", key.Type, key.ID, err)
 	}

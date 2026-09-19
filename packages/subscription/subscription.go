@@ -136,13 +136,13 @@ type resource struct {
 // Everything is checked when the Subscription is written rather than when it
 // would first fire. A subscription accepted and then silently never matching is
 // worse than one refused: somebody is relying on it, and nothing will tell them.
-func Read(id storage.LogicalID, content []byte) (Subscription, error) {
+func Read(custom search.Custom, id storage.LogicalID, content []byte) (Subscription, error) {
 	var held resource
 	if err := json.Unmarshal(content, &held); err != nil {
 		return Subscription{}, fmt.Errorf("%w: %w", ErrMalformedCriteria, err)
 	}
 
-	watching, criteria, err := readCriteria(held.Criteria)
+	watching, criteria, err := readCriteria(custom, held.Criteria)
 	if err != nil {
 		return Subscription{}, err
 	}
@@ -175,7 +175,7 @@ func Read(id storage.LogicalID, content []byte) (Subscription, error) {
 
 // readCriteria splits "Type?query" and checks the query against the search this
 // build actually implements.
-func readCriteria(stated string) (storage.ResourceType, search.Query, error) {
+func readCriteria(custom search.Custom, stated string) (storage.ResourceType, search.Query, error) {
 	if stated == "" {
 		return "", search.Query{}, fmt.Errorf("%w: it names nothing", ErrMalformedCriteria)
 	}
@@ -209,7 +209,7 @@ func readCriteria(stated string) (storage.ResourceType, search.Query, error) {
 		}
 	}
 
-	plan, err := search.Parse(watching, values)
+	plan, err := search.Parse(custom, watching, values)
 	if err != nil {
 		return "", search.Query{}, fmt.Errorf("%w: %w", ErrMalformedCriteria, err)
 	}

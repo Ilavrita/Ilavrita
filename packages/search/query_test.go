@@ -16,7 +16,7 @@ func parsed(t *testing.T, resourceType, query string) search.Query {
 		t.Fatalf("parse %q: %v", query, err)
 	}
 
-	held, err := search.Parse(storageType(resourceType), values)
+	held, err := search.Parse(nil, storageType(resourceType), values)
 	if err != nil {
 		t.Fatalf("read %q: %v", query, err)
 	}
@@ -32,7 +32,7 @@ func refused(t *testing.T, resourceType, query string) error {
 		t.Fatalf("parse %q: %v", query, err)
 	}
 
-	_, err = search.Parse(storageType(resourceType), values)
+	_, err = search.Parse(nil, storageType(resourceType), values)
 
 	return err
 }

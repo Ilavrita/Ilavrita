@@ -10,7 +10,7 @@ import (
 func extracted(t *testing.T, resourceType, body string) []search.Entry {
 	t.Helper()
 
-	entries, err := search.Extract(storageType(resourceType), []byte(body))
+	entries, err := search.Extract(nil, storageType(resourceType), []byte(body))
 	if err != nil {
 		t.Fatalf("extract %s: %v", resourceType, err)
 	}
@@ -188,7 +188,7 @@ func TestARepeatedValueIsIndexedOnce(t *testing.T) {
 // must not be treated as one carrying nothing, because nothing is what a
 // search would then find it under.
 func TestMalformedContentIsAnErrorRatherThanNoEntries(t *testing.T) {
-	if _, err := search.Extract("Observation", []byte("not json")); err == nil {
+	if _, err := search.Extract(nil, "Observation", []byte("not json")); err == nil {
 		t.Error("unreadable content extracted no entries instead of failing")
 	}
 }

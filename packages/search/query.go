@@ -108,10 +108,14 @@ func (c Criterion) Values() []Value { return slices.Clone(c.values) }
 // knows how, and nothing here knows that.
 type Query struct {
 	resourceType storage.ResourceType
-	criteria     []Criterion
-	count        int
-	cursor       storage.LogicalID
-	total        bool
+
+	// custom is what this Project added, carried so the parameters a query may
+	// name are the ones its own Project defined rather than a global list.
+	custom   Custom
+	criteria []Criterion
+	count    int
+	cursor   storage.LogicalID
+	total    bool
 }
 
 // Type returns the resource type being searched.
@@ -133,8 +137,8 @@ func (q Query) Cursor() storage.LogicalID { return q.cursor }
 func (q Query) CountsTotal() bool { return q.total }
 
 // Parse reads one query and refuses everything this build cannot apply.
-func Parse(resourceType storage.ResourceType, asked url.Values) (Query, error) {
-	query := Query{resourceType: resourceType, count: DefaultCount}
+func Parse(custom Custom, resourceType storage.ResourceType, asked url.Values) (Query, error) {
+	query := Query{custom: custom, resourceType: resourceType, count: DefaultCount}
 
 	names := make([]string, 0, len(asked))
 	for name := range asked {
@@ -170,7 +174,7 @@ func (q *Query) read(name string, raw []string) error {
 		return fmt.Errorf("%w: %s", ErrUnsupportedModifier, name)
 	}
 
-	parameter, implemented := Find(q.resourceType, name)
+	parameter, implemented := Find(q.custom, q.resourceType, name)
 	if !implemented {
 		return fmt.Errorf("%w: %s on %s", ErrUnknownParameter, name, q.resourceType)
 	}

@@ -17,7 +17,7 @@ func sound(criteria, channel, endpoint, status string) string {
 func read(t *testing.T, body string) subscription.Subscription {
 	t.Helper()
 
-	held, err := subscription.Read("sub-1", []byte(body))
+	held, err := subscription.Read(nil, "sub-1", []byte(body))
 	if err != nil {
 		t.Fatalf("read %s: %v", body, err)
 	}
@@ -62,7 +62,7 @@ func TestACriteriaThisServerCannotRunIsRefused(t *testing.T) {
 	}
 
 	for name, criteria := range refused {
-		_, err := subscription.Read("sub-1",
+		_, err := subscription.Read(nil, "sub-1",
 			[]byte(sound(criteria, "rest-hook", "https://example.test/hook", "active")))
 		if !errors.Is(err, subscription.ErrMalformedCriteria) {
 			t.Errorf("%s (%q): err = %v, want %v", name, criteria, err, subscription.ErrMalformedCriteria)
@@ -85,7 +85,7 @@ func TestACriteriaNamingOnlyATypeMatchesEveryOne(t *testing.T) {
 // notify somebody this server has no way of reaching.
 func TestAChannelThisBuildCannotDeliverOnIsRefused(t *testing.T) {
 	for _, channel := range []string{"email", "sms", "message", "", "webhook"} {
-		_, err := subscription.Read("sub-1",
+		_, err := subscription.Read(nil, "sub-1",
 			[]byte(sound("Observation", channel, "https://example.test/hook", "active")))
 		if !errors.Is(err, subscription.ErrUnknownChannel) {
 			t.Errorf("%q: err = %v, want %v", channel, err, subscription.ErrUnknownChannel)
@@ -106,7 +106,7 @@ func TestAnEndpointThisServerWouldNotCallIsRefused(t *testing.T) {
 		"nothing at all": "",
 		"not a url":      "://",
 	} {
-		_, err := subscription.Read("sub-1",
+		_, err := subscription.Read(nil, "sub-1",
 			[]byte(sound("Observation", "rest-hook", endpoint, "active")))
 		if !errors.Is(err, subscription.ErrMalformedEndpoint) {
 			t.Errorf("%s (%q): err = %v, want %v", name, endpoint, err, subscription.ErrMalformedEndpoint)
@@ -144,7 +144,7 @@ func TestOnlyAnActiveSubscriptionDelivers(t *testing.T) {
 // TestAStatusOutsideTheEnumIsRefused rather than read as the nearest one.
 func TestAStatusOutsideTheEnumIsRefused(t *testing.T) {
 	for _, status := range []string{"", "on", "enabled", "ACTIVE"} {
-		_, err := subscription.Read("sub-1",
+		_, err := subscription.Read(nil, "sub-1",
 			[]byte(sound("Observation", "rest-hook", "https://example.test/hook", status)))
 		if !errors.Is(err, subscription.ErrUnknownStatus) {
 			t.Errorf("%q: err = %v, want %v", status, err, subscription.ErrUnknownStatus)

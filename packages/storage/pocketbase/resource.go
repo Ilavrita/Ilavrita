@@ -694,7 +694,7 @@ func (s *ResourceStore) create(ctx context.Context, scope storage.Scope, record 
 
 	switch {
 	case err == nil:
-		if err := s.writeProjections(ctx, key, record); err != nil {
+		if err := s.writeProjections(ctx, key, record, stamp); err != nil {
 			return err
 		}
 
@@ -712,10 +712,19 @@ func (s *ResourceStore) create(ctx context.Context, scope storage.Scope, record 
 // moment, and one maintained without the other is the decorative predicate this
 // store has already been bitten by once.
 func (s *ResourceStore) writeProjections(
-	ctx context.Context, key storage.ResourceKey, record storage.ResourceRecord,
+	ctx context.Context, key storage.ResourceKey, record storage.ResourceRecord, at time.Time,
 ) error {
 	if err := s.writeCompartments(ctx, key, record.Compartments); err != nil {
 		return err
+	}
+
+	// What a SearchParameter defines is derived from the same content at the
+	// same moment as everything else derived here, and has to be written before
+	// the index is: this resource can define a parameter that indexes itself.
+	if key.Type == searchParameterType {
+		if err := s.writeSearchParameters(ctx, key, record.Content, at); err != nil {
+			return err
+		}
 	}
 
 	return s.writeSearchIndex(ctx, key, record.Content)
@@ -780,10 +789,9 @@ func (s *ResourceStore) recreate(
 
 	// The previous owner's projections must not describe the new resource; the
 	// history rows they produced stay behind the old epoch.
-	if err := s.writeProjections(ctx, key, record); err != nil {
+	if err := s.writeProjections(ctx, key, record, stamp); err != nil {
 		return err
 	}
-
 	return s.writeVersion(ctx, key, seq, epoch, stamp, record.Content)
 }
 
@@ -899,10 +907,20 @@ func (s *ResourceStore) mutate(
 	// before the version is appended and the history copy records where this
 	// version landed. A delete states nothing: its tombstone keeps the placement
 	// it had, so the row stays attributable to whoever could reach it.
-	if change.action == storage.ActionWrite {
+	switch {
+	case change.action == storage.ActionWrite:
 		if err := s.writeProjections(ctx, key, storage.ResourceRecord{
 			Key: key, Content: change.content, Compartments: change.compartments,
-		}); err != nil {
+		}, change.stamp); err != nil {
+			return err
+		}
+
+	case key.Type == searchParameterType:
+		// A tombstone keeps its placement, which is what the branch above is
+		// about. A definition is not a placement: it is a claim about what
+		// searches answer, and a deleted resource claims nothing. Left behind,
+		// it would keep a code accepted and keep matching whatever it indexed.
+		if err := s.writeSearchParameters(ctx, key, nil, change.stamp); err != nil {
 			return err
 		}
 	}

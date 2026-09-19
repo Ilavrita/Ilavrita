@@ -6,6 +6,7 @@ import (
 	"net/http"
 
 	"github.com/Ilavrita/Ilavrita/packages/fhir"
+	"github.com/Ilavrita/Ilavrita/packages/search"
 	"github.com/Ilavrita/Ilavrita/packages/storage"
 	"github.com/Ilavrita/Ilavrita/packages/validate"
 	"github.com/pocketbase/pocketbase/core"
@@ -30,8 +31,8 @@ func (e errInvalidResource) Error() string { return "ilavrita: " + e.report.Erro
 // It runs on both a create and an update, on the content as the client sent it:
 // a rule checked only on the way in is one PUT away from being no rule at all,
 // and a Binary's payload is legitimately part of the body at this point.
-func checkSubmission(key storage.ResourceKey, content json.RawMessage) error {
-	report := validate.Resource(key.Type, content)
+func checkSubmission(custom search.Custom, key storage.ResourceKey, content json.RawMessage) error {
+	report := validate.Resource(custom, key.Type, content)
 	if report.OK() {
 		return nil
 	}
@@ -65,7 +66,7 @@ func validateResource(request *core.RequestEvent) error {
 	}
 
 	return request.JSON(http.StatusOK,
-		validate.Resource(held.resourceType, content).Outcome())
+		validate.Resource(held.custom, held.resourceType, content).Outcome())
 }
 
 // invalidResource renders a refused submission as the outcome that says which
@@ -77,4 +78,24 @@ func invalidResource(err error) (fhir.OperationOutcome, bool) {
 	}
 
 	return invalid.report.Outcome(), true
+}
+
+// searchParameterType is the resource a Project defines a parameter with.
+const searchParameterType storage.ResourceType = "SearchParameter"
+
+// checkSearchParameter refuses one this server could store but could not apply.
+//
+// A SearchParameter stating where it reads from is a claim that searching by
+// that code will work. Storing it and indexing nothing would answer that claim
+// with an empty page — and an empty page is what a correct search looks like,
+// so nobody would find out. One that states no element claims nothing and is
+// stored like any other resource.
+func checkSearchParameter(key storage.ResourceKey, content []byte) error {
+	if key.Type != searchParameterType {
+		return nil
+	}
+
+	_, err := search.ReadSearchParameter(content)
+
+	return err
 }

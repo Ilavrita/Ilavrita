@@ -331,7 +331,7 @@ func TestNoParameterIsAnsweredWithoutBeingAdvertised(t *testing.T) {
 			named[parameter.Name] = true
 		}
 
-		for _, parameter := range advertisedSearchParameters(resource.Type) {
+		for _, parameter := range declaredParameters(nil, resource.Type) {
 			if !named[parameter.Name] {
 				t.Errorf("%s answers %s without advertising it", resource.Type, parameter.Name)
 			}
@@ -346,7 +346,7 @@ func TestNoParameterIsAnsweredWithoutBeingAdvertised(t *testing.T) {
 // table is well formed for every type this build serves.
 func TestEveryDeclaredParameterBuilds(t *testing.T) {
 	for _, name := range fhir.ServedResourceTypes() {
-		parameters := advertisedSearchParameters(name)
+		parameters := declaredParameters(nil, name)
 		if len(parameters) < 2 {
 			t.Errorf("%s declares %d parameters, want at least the universal ones", name, len(parameters))
 		}

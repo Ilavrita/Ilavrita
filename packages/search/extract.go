@@ -38,7 +38,7 @@ type Entry struct {
 // a parameter's author should not have to know which. A value it cannot read is
 // left out rather than guessed at: an index entry nobody can justify would make
 // a search return a resource that does not match it.
-func Extract(resourceType storage.ResourceType, content []byte) ([]Entry, error) {
+func Extract(custom Custom, resourceType storage.ResourceType, content []byte) ([]Entry, error) {
 	if len(content) == 0 {
 		return nil, nil
 	}
@@ -50,7 +50,7 @@ func Extract(resourceType storage.ResourceType, content []byte) ([]Entry, error)
 
 	var entries []Entry
 
-	for _, parameter := range Indexed(resourceType) {
+	for _, parameter := range Indexed(custom, resourceType) {
 		for _, held := range walk([]any{resource}, parameter.Path()) {
 			entry, indexable := entryFor(parameter, held)
 			if !indexable {

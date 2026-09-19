@@ -22,7 +22,7 @@ func hooked(t *testing.T, endpoint, payload string) subscription.Subscription {
 		body += `,"payload":"` + payload + `"`
 	}
 
-	held, err := subscription.Read("sub-1", []byte(body+`}}`))
+	held, err := subscription.Read(nil, "sub-1", []byte(body+`}}`))
 	if err != nil {
 		t.Fatalf("read the subscription: %v", err)
 	}

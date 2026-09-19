@@ -34,7 +34,7 @@ const maximumDepth = 64
 // The type is what the route decided it is, and the content is what the client
 // sent. A body that is not a JSON object at all is one error and nothing
 // further: everything below reads members, and there are none.
-func Resource(resourceType storage.ResourceType, content []byte) Report {
+func Resource(custom search.Custom, resourceType storage.ResourceType, content []byte) Report {
 	var report Report
 
 	var held map[string]any
@@ -56,7 +56,7 @@ func Resource(resourceType storage.ResourceType, content []byte) Report {
 	report.checkIdentifier(held, string(resourceType))
 	report.checkServerOwned(held, string(resourceType))
 	report.walk(held, string(resourceType), 0)
-	report.checkIndexedElements(resourceType, content)
+	report.checkIndexedElements(custom, resourceType, content)
 
 	// And against what the type's own definition says it may hold. A build that
 	// cannot read its own definitions checks the rules above and no further,
@@ -210,8 +210,8 @@ func (r *Report) checkReference(held map[string]any, where string) {
 // made by the same table a query is compiled from. Checking it here means a
 // resource is refused for a malformed date rather than stored and then quietly
 // missing from every search for it.
-func (r *Report) checkIndexedElements(resourceType storage.ResourceType, content []byte) {
-	for _, parameter := range search.Supported(resourceType) {
+func (r *Report) checkIndexedElements(custom search.Custom, resourceType storage.ResourceType, content []byte) {
+	for _, parameter := range search.Supported(custom, resourceType) {
 		if parameter.Kind() != search.KindDate || !parameter.Projects() {
 			continue
 		}

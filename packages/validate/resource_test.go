@@ -32,7 +32,7 @@ func an(extra string) string {
 // same element, so a case meaning to prove that an undeclared element is
 // refused would pass on a cardinality complaint at the same path.
 func faultedAs(body, where, because string) bool {
-	for _, issue := range validate.Resource("Observation", []byte(body)).Issues() {
+	for _, issue := range validate.Resource(nil, "Observation", []byte(body)).Issues() {
 		if issue.Severity != validate.SeverityError || issue.Expression != where {
 			continue
 		}
@@ -49,7 +49,7 @@ func faultedAs(body, where, because string) bool {
 func checked(body string) []string {
 	var where []string
 
-	for _, issue := range validate.Resource("Observation", []byte(body)).Issues() {
+	for _, issue := range validate.Resource(nil, "Observation", []byte(body)).Issues() {
 		if issue.Severity == validate.SeverityError {
 			where = append(where, issue.Expression)
 		}
@@ -177,7 +177,7 @@ func TestAnIndexedDateIsADate(t *testing.T) {
 // and stamps its own, so the resource is stored correctly either way; what the
 // client needs to know is that what they sent was not kept.
 func TestServerOwnedMembersAreAWarningAndNotAnError(t *testing.T) {
-	report := validate.Resource("Observation",
+	report := validate.Resource(nil, "Observation",
 		[]byte(an(`"meta":{"versionId":"7","lastUpdated":"2020-01-01T00:00:00Z"}`)))
 
 	if !report.OK() {
@@ -199,7 +199,7 @@ func TestABodyThatIsNotAResourceIsOneIssue(t *testing.T) {
 		"another type":   `{"resourceType":"Patient"}`,
 		"no type at all": `{"status":"final"}`,
 	} {
-		report := validate.Resource("Observation", []byte(body))
+		report := validate.Resource(nil, "Observation", []byte(body))
 
 		if report.OK() {
 			t.Errorf("%s validated", described)
@@ -216,7 +216,7 @@ func TestABodyThatIsNotAResourceIsOneIssue(t *testing.T) {
 func TestABodyNestedBeyondReadingIsRefused(t *testing.T) {
 	body := an(`"a":` + strings.Repeat(`{"a":`, 200) + `"deep"` + strings.Repeat(`}`, 200))
 
-	if report := validate.Resource("Observation", []byte(body)); report.OK() {
+	if report := validate.Resource(nil, "Observation", []byte(body)); report.OK() {
 		t.Error("a body nested two hundred deep validated")
 	}
 }
@@ -224,7 +224,7 @@ func TestABodyNestedBeyondReadingIsRefused(t *testing.T) {
 // TestACleanReportStillCarriesAnIssue. An OperationOutcome with no issue in it
 // is not a valid OperationOutcome, so a validation that found nothing says so.
 func TestACleanReportStillCarriesAnIssue(t *testing.T) {
-	outcome := validate.Resource("Observation", []byte(an(""))).Outcome()
+	outcome := validate.Resource(nil, "Observation", []byte(an(""))).Outcome()
 
 	if len(outcome.Issue) != 1 || outcome.Issue[0].Severity != "information" {
 		t.Errorf("a clean report rendered as %+v", outcome)
@@ -234,7 +234,7 @@ func TestACleanReportStillCarriesAnIssue(t *testing.T) {
 // TestAnOutcomeSaysWhereEachIssueIs, because an issue a client cannot locate is
 // one they have to find by reading the whole body back.
 func TestAnOutcomeSaysWhereEachIssueIs(t *testing.T) {
-	outcome := validate.Resource("Observation", []byte(an(`"note":null,"performer":[]`))).Outcome()
+	outcome := validate.Resource(nil, "Observation", []byte(an(`"note":null,"performer":[]`))).Outcome()
 
 	if len(outcome.Issue) == 0 {
 		t.Fatal("a resource with two faults in it validated")
@@ -346,7 +346,7 @@ func TestAChoiceIsWrittenOnce(t *testing.T) {
 // knows, not what a client did wrong, so a type it has none for is held to the
 // rules that need none and nothing else.
 func TestATypeWithNoDefinitionIsCheckedNoFurther(t *testing.T) {
-	report := validate.Resource("SomethingNobodyDefined",
+	report := validate.Resource(nil, "SomethingNobodyDefined",
 		[]byte(`{"resourceType":"SomethingNobodyDefined","anything":"at all"}`))
 
 	if !report.OK() {
@@ -376,7 +376,7 @@ func TestNestingPastTheBoundIsUncheckedRatherThanRefused(t *testing.T) {
 
 	body = `{"resourceType":"Questionnaire","status":"active","item":[` + body + `]}`
 
-	report := validate.Resource("Questionnaire", []byte(body))
+	report := validate.Resource(nil, "Questionnaire", []byte(body))
 	if !report.OK() {
 		t.Errorf("a questionnaire nested %d deep was refused: %v", depth, report.Issues())
 	}
@@ -386,7 +386,7 @@ func TestNestingPastTheBoundIsUncheckedRatherThanRefused(t *testing.T) {
 	shallow := `{"resourceType":"Questionnaire","status":"active",` +
 		`"item":[{"linkId":"held","type":"group","notAnItemMember":1}]}`
 
-	if validate.Resource("Questionnaire", []byte(shallow)).OK() {
+	if validate.Resource(nil, "Questionnaire", []byte(shallow)).OK() {
 		t.Error("an element nobody declared was accepted inside an item")
 	}
 }
@@ -411,7 +411,7 @@ func TestACodeIsCheckedAgainstTheSetItIsBoundTo(t *testing.T) {
 			`{"resourceType":"Patient","link":[{"other":{"reference":"Patient/p2"},"type":"sideways"}]}`,
 			"Patient.link[0].type"},
 	} {
-		report := validate.Resource(held.resourceType, []byte(held.body))
+		report := validate.Resource(nil, held.resourceType, []byte(held.body))
 
 		if report.OK() {
 			t.Errorf("%s was accepted", described)
@@ -449,7 +449,7 @@ func TestACodeFromTheSetIsAccepted(t *testing.T) {
 		"a gender":         {"Patient", `{"resourceType":"Patient","gender":"other"}`},
 		"a boolean beside": {"Patient", `{"resourceType":"Patient","active":true,"gender":"male"}`},
 	} {
-		if report := validate.Resource(held.resourceType, []byte(held.body)); !report.OK() {
+		if report := validate.Resource(nil, held.resourceType, []byte(held.body)); !report.OK() {
 			t.Errorf("%s was refused: %v", described, report.Issues())
 		}
 	}
@@ -464,7 +464,7 @@ func TestOnlyARequiredBindingIsARule(t *testing.T) {
 	// example-bound too — both hold whatever coding a deployment uses.
 	body := an(`"category":[{"coding":[{"system":"http://example.test/local","code":"our-own"}]}]`)
 
-	if report := validate.Resource("Observation", []byte(body)); !report.OK() {
+	if report := validate.Resource(nil, "Observation", []byte(body)); !report.OK() {
 		t.Errorf("a code outside an example binding was refused: %v", report.Issues())
 	}
 }
@@ -488,7 +488,7 @@ func TestASetThisBuildCannotResolveDecidesNothing(t *testing.T) {
 	body := `{"resourceType":"DocumentReference","status":"current",` +
 		`"content":[{"attachment":{"contentType":"application/x-invented","url":"Binary/b1"}}]}`
 
-	if report := validate.Resource("DocumentReference", []byte(body)); !report.OK() {
+	if report := validate.Resource(nil, "DocumentReference", []byte(body)); !report.OK() {
 		t.Errorf("a media type was judged against a set this build does not hold: %v",
 			report.Issues())
 	}

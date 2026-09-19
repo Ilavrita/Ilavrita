@@ -315,11 +315,15 @@ func (g granted) replace(
 		return storage.ResourceRecord{}, err
 	}
 
-	if err := checkSubmission(key, content); err != nil {
+	if err := checkSubmission(g.custom, key, content); err != nil {
 		return storage.ResourceRecord{}, err
 	}
 
-	if err := checkSubscription(key, content); err != nil {
+	if err := checkSubscription(g.custom, key, content); err != nil {
+		return storage.ResourceRecord{}, err
+	}
+
+	if err := checkSearchParameter(key, content); err != nil {
 		return storage.ResourceRecord{}, err
 	}
 
@@ -366,11 +370,15 @@ func (g granted) create(
 		return storage.ResourceRecord{}, err
 	}
 
-	if err := checkSubmission(key, content); err != nil {
+	if err := checkSubmission(g.custom, key, content); err != nil {
 		return storage.ResourceRecord{}, err
 	}
 
-	if err := checkSubscription(key, content); err != nil {
+	if err := checkSubscription(g.custom, key, content); err != nil {
+		return storage.ResourceRecord{}, err
+	}
+
+	if err := checkSearchParameter(key, content); err != nil {
 		return storage.ResourceRecord{}, err
 	}
 

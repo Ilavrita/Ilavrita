@@ -1273,6 +1273,52 @@ END;
 -- with no writer is decorative, so the projection and the reader land together.
 -- ===========================================================================
 
+-- ===========================================================================
+-- Custom search parameters. What a Project added to the built-in registry.
+-- ===========================================================================
+
+-- A SearchParameter resource a Project stored, compiled into the shape the
+-- index and the query compiler both read. It is a projection of that resource,
+-- maintained in the transaction that writes it, exactly as fhir_search_index is
+-- a projection of the resource it indexes: a definition kept anywhere else is
+-- one a write can skip.
+--
+-- Per Project, because a parameter one tenant defined must not change what
+-- another tenant's query means. The built-in registry is the floor every
+-- Project stands on and none of them can move: a custom code that shadowed one
+-- is refused when it is compiled, not here.
+
+-- tenant: project_id
+CREATE TABLE IF NOT EXISTS search_parameter (
+  project_id    TEXT NOT NULL REFERENCES projects (id) ON DELETE RESTRICT ON UPDATE RESTRICT,
+  res_type      TEXT NOT NULL,
+  code          TEXT NOT NULL,
+  kind          TEXT NOT NULL CHECK (kind IN ('token', 'string', 'reference', 'date')),
+
+  -- The dotted element path a write projects from, with the type stripped.
+  path          TEXT NOT NULL,
+
+  -- A token's two halves, within the element the path names. Empty when the
+  -- element is itself the code.
+  code_member   TEXT NOT NULL DEFAULT '',
+  system_member TEXT NOT NULL DEFAULT '',
+
+  -- The SearchParameter resource this was compiled from, so removing that
+  -- resource removes what it defined and nothing else.
+  source_id     TEXT NOT NULL,
+
+  defined_at    BIGINT NOT NULL,
+
+  PRIMARY KEY (project_id, res_type, code),
+
+  CHECK (res_type <> '' AND code <> '' AND path <> '' AND source_id <> '')
+);
+
+-- Removing one source's definitions, which is what a delete or a replacement
+-- does before writing what the resource now says.
+CREATE INDEX IF NOT EXISTS ix_search_parameter_source
+  ON search_parameter (project_id, source_id);
+
 -- One row per indexed value. A resource carrying three categories has three
 -- token rows for that parameter, and a search naming any of them finds it.
 

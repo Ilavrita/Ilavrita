@@ -83,7 +83,7 @@ func answerGranted(request *core.RequestEvent, held granted, asked url.Values) e
 		return refuse(request, err)
 	}
 
-	plan, err := search.Parse(held.resourceType, asked)
+	plan, err := search.Parse(held.custom, held.resourceType, asked)
 	if err != nil {
 		return refuse(request, err)
 	}
