@@ -292,10 +292,20 @@ func audienceMatches(request *core.RequestEvent, stated string) error {
 // granted; nothing downstream narrows by them, and authz.Narrow ignores them
 // because they name no resource type.
 var sessionScopes = []string{
-	"openid", "fhirUser", "profile", "launch",
-	"launch/patient", "launch/encounter",
+	"launch", "launch/patient", "launch/encounter",
 	"online_access", "offline_access",
 }
+
+// identityScopes ask for an OpenID Connect identity token, and this build issues
+// none.
+//
+// They are refused by name rather than granted, because granting them is a
+// promise: a client that asked for openid and was told it received it will look
+// for an id_token in the response and find nothing. That is the silent
+// widening this surface refuses everywhere else — a scope quietly honoured in
+// name only is worse than one plainly refused, because only one of them is
+// visible to the app that depended on it.
+var identityScopes = []string{"openid", "fhirUser", "profile"}
 
 // sortScopes separates what this server would grant from what it refuses.
 //
@@ -309,6 +319,15 @@ func sortScopes(stated string) ([]string, []refusedScope) {
 	)
 
 	for _, one := range strings.Fields(stated) {
+		if slices.Contains(identityScopes, one) {
+			refused = append(refused, refusedScope{
+				Scope:  one,
+				Reason: "this server issues no identity token",
+			})
+
+			continue
+		}
+
 		if slices.Contains(sessionScopes, one) {
 			grantable = append(grantable, one)
 
