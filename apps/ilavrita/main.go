@@ -39,6 +39,7 @@ func main() {
 		registerOperationalRoutes(serve.Router)
 		registerAuthRoutes(serve.Router)
 		registerControlRoutes(serve.Router)
+		registerOAuthRoutes(serve.Router)
 		registerFHIRRoutes(serve.Router)
 
 		return serve.Next()

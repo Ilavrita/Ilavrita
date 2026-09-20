@@ -34,7 +34,10 @@ type backend struct {
 	sessions     sessionResolver
 	memberships  *sqlite.MembershipStore
 	applications *sqlite.ClientApplicationStore
-	resolvers    authz.Resolvers
+
+	// codes holds the approvals a person gave, waiting to be redeemed once.
+	codes     *sqlite.AuthorizationCodeStore
+	resolvers authz.Resolvers
 
 	// sockets holds the subscribers connected to this process. A deployment
 	// running several replicas has each subscriber on one of them, which is
@@ -247,6 +250,7 @@ func newBackend(db *sql.DB, dataDir string) *backend {
 		sessions:      sqlite.NewSessionStore(db),
 		memberships:   sqlite.NewMembershipStore(db),
 		applications:  sqlite.NewClientApplicationStore(db),
+		codes:         sqlite.NewAuthorizationCodeStore(db),
 		audits:        sqlite.NewAuditStore(db),
 		factors:       sqlite.NewFactorStore(db, sealingKey()),
 		definitions:   sqlite.NewCanonicalStore(db),

@@ -151,6 +151,7 @@ func allRoutes(t *testing.T) http.Handler {
 		})
 
 	registerAuthRoutes(routes)
+	registerOAuthRoutes(routes)
 	registerFHIRRoutes(routes)
 
 	mux, err := routes.BuildMux()
