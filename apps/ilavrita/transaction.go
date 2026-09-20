@@ -141,9 +141,9 @@ func performEntries(request *core.RequestEvent, submitted fhir.SubmittedBundle) 
 // resolved against.
 func settleIdentities(
 	request *core.RequestEvent, submitted fhir.SubmittedBundle,
-) (map[string]string, []storage.ResourceKey, error) {
+) (map[string]string, []settledEntry, error) {
 	assigned := map[string]string{}
-	identities := make([]storage.ResourceKey, len(submitted.Entry))
+	identities := make([]settledEntry, len(submitted.Entry))
 
 	for index, entry := range submitted.Entry {
 		resourceType, id, err := addressedBy(entry.Request.URL)
@@ -151,9 +151,24 @@ func settleIdentities(
 			return nil, nil, fmt.Errorf("entry %d: %w", index, err)
 		}
 
+		var alreadyThere bool
+
 		if entry.Request.Method == fhir.VerbPost {
-			if id, err = mintLogicalID(); err != nil {
-				return nil, nil, err
+			// A create saying "unless one already matches" settles on what
+			// matches, so every other entry's reference to it points at the
+			// resource that is there rather than one about to be made beside it.
+			held, matched, err := matchedByEntryCondition(request, resourceType, entry)
+			if err != nil {
+				return nil, nil, fmt.Errorf("entry %d: %w", index, err)
+			}
+
+			switch {
+			case matched:
+				id, alreadyThere = held, true
+			default:
+				if id, err = mintLogicalID(); err != nil {
+					return nil, nil, err
+				}
 			}
 		}
 
@@ -167,7 +182,7 @@ func settleIdentities(
 			return nil, nil, fmt.Errorf("entry %d: %w", index, err)
 		}
 
-		identities[index] = key
+		identities[index] = settledEntry{key: key, alreadyThere: alreadyThere}
 
 		if entry.FullURL != "" {
 			assigned[entry.FullURL] = string(resourceType) + "/" + string(id)
@@ -193,8 +208,10 @@ func performEntry(
 	entry fhir.SubmittedEntry,
 	base string,
 	assigned map[string]string,
-	key storage.ResourceKey,
+	settled settledEntry,
 ) (fhir.BundleEntry, error) {
+	key := settled.key
+
 	// Every entry is decided on its own. A Bundle is not a way to perform an
 	// interaction the caller could not have performed one at a time.
 	held, err := permittedFor(request, key.Type, entry.Request.Method)
@@ -207,7 +224,25 @@ func performEntry(
 		return fhir.BundleEntry{}, err
 	}
 
+	// A reference written as a search names the resource it identifies. It is
+	// resolved after the placeholders, so an entry may identify one this bundle
+	// is not creating and name one it is.
+	if content, err = resolveConditionalReferences(request, content); err != nil {
+		return fhir.BundleEntry{}, err
+	}
+
 	ctx := request.Request.Context()
+
+	// A conditional create that matched wrote nothing, and answers with what is
+	// already there: the client asked for the resource to exist, and it does.
+	if settled.alreadyThere {
+		record, err := held.resources.Read(ctx, held.scope, key)
+		if err != nil {
+			return fhir.BundleEntry{}, err
+		}
+
+		return answeredEntry(base, record, http.StatusOK), nil
+	}
 
 	switch entry.Request.Method {
 	case fhir.VerbPost:

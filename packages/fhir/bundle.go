@@ -74,10 +74,13 @@ type EntryRequest struct {
 	Method HTTPVerb `json:"method"`
 	URL    string   `json:"url"`
 
-	// The preconditions R4 lets a transaction entry state. This server honours
-	// none of them, and reads them only so an entry stating one can be refused:
-	// a client that asked for ifNoneExist and was quietly given a duplicate has
-	// no way to find out it did not get what it asked for.
+	// The preconditions R4 lets a transaction entry state.
+	//
+	// ifNoneExist is honoured: it is the conditional create, and an entry
+	// stating one settles on whatever already matches. The rest are read only
+	// so an entry stating one is refused — a client that asked for a version to
+	// still be current, and had that dropped, has no way to find out it wrote
+	// over somebody else's change.
 	//
 	// A history Bundle never sets them, so omitempty leaves what it answers
 	// with unchanged.
@@ -94,7 +97,6 @@ func (r EntryRequest) Precondition() string {
 		name, value string
 	}{
 		{"ifMatch", r.IfMatch},
-		{"ifNoneExist", r.IfNoneExist},
 		{"ifNoneMatch", r.IfNoneMatch},
 		{"ifModifiedSince", r.IfModifiedSince},
 	} {

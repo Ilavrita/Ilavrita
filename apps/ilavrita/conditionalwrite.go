@@ -48,15 +48,23 @@ func matchedByCondition(
 		return nil, errUnconditioned
 	}
 
-	// Searching is its own action. A caller who may write a type and not search
-	// it cannot name one by a condition, because naming it is reading it.
-	held, err := permit(request, storage.ResourceType(
-		request.Request.PathValue(resourceTypeParameter)), searchActions)
+	return matchedInType(request, storage.ResourceType(
+		request.Request.PathValue(resourceTypeParameter)), asked)
+}
+
+// matchedInType runs a condition against one type.
+//
+// Searching is its own action. A caller who may write a type and not search it
+// cannot name one by a condition, because naming it is reading it.
+func matchedInType(
+	request *core.RequestEvent, resourceType storage.ResourceType, asked url.Values,
+) ([]storage.ResourceRecord, error) {
+	held, err := permit(request, resourceType, searchActions)
 	if err != nil {
 		return nil, err
 	}
 
-	plan, err := search.Parse(held.custom, held.resourceType, asked)
+	plan, err := search.Parse(held.custom, resourceType, asked)
 	if err != nil {
 		return nil, err
 	}

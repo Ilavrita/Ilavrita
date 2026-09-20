@@ -424,3 +424,89 @@ func TestATransactionEntryStatesNoPrecondition(t *testing.T) {
 		t.Errorf("a refused transaction wrote %d Organization(s)", found)
 	}
 }
+
+// TestATransactionEntryCreatesOnlyWhatIsNotThere.
+//
+// `ifNoneExist` inside a bundle is the conditional create, and it settles
+// before anything is written: an entry that matched has an identity, so every
+// other entry referring to it points at the resource that is there rather than
+// one made beside it.
+func TestATransactionEntryCreatesOnlyWhatIsNotThere(t *testing.T) {
+	routes := servingFHIR(t, everyAction)
+
+	organization := `{"resourceType":"Organization","name":"the only one",` +
+		`"identifier":[{"system":"http://example.test/ids","value":"once"}]}`
+	condition := "identifier=http://example.test/ids|once"
+
+	bundle := `{"resourceType":"Bundle","type":"transaction","entry":[` +
+		`{"fullUrl":"urn:uuid:org","resource":` + organization +
+		`,"request":{"method":"POST","url":"Organization","ifNoneExist":"` + condition + `"}}` +
+		`]}`
+
+	assertStatus(t, submitting(t, routes, bundle), http.StatusOK)
+	assertStatus(t, submitting(t, routes, bundle), http.StatusOK)
+
+	if found := searchedOrganizations(t, routes); found != 1 {
+		t.Errorf("%d Organizations exist after the same bundle twice", found)
+	}
+}
+
+// TestATransactionResolvesAReferenceWrittenAsASearch.
+//
+// A bundle from another system points at resources by the identifiers that
+// system knows, never by the ids this one minted. R4 writes that as
+// `Patient?identifier=…`, and it is resolved before anything is stored: a
+// reference to a search is one no reader could follow.
+func TestATransactionResolvesAReferenceWrittenAsASearch(t *testing.T) {
+	routes := servingFHIR(t, everyAction)
+
+	// The organization the reference will identify.
+	existing := namedOrganization(t, routes, "target", "the one referred to")
+
+	bundle := transactionOf(entryOf("", "POST", "Organization",
+		`{"resourceType":"Organization","name":"the one referring",`+
+			`"partOf":{"reference":"Organization?identifier=http://example.test/ids|target"}}`))
+
+	answer := submitting(t, routes, bundle)
+	assertStatus(t, answer, http.StatusOK)
+
+	entries := responseBundle(t, answer).Entry
+	if len(entries) != 1 || entries[0].Response == nil {
+		t.Fatalf("the transaction answered %s", answer.Body)
+	}
+
+	id := lastSegmentOf(entries[0].FullURL)
+
+	read := call{method: http.MethodGet, path: resourcePath("Organization", id)}.send(t, routes)
+	assertStatus(t, read, http.StatusOK)
+
+	if !strings.Contains(read.Body.String(), `"reference":"Organization/`+existing+`"`) {
+		t.Errorf("the reference was stored as %s", read.Body)
+	}
+}
+
+// TestAConditionalReferenceMatchingNothingFailsTheTransaction, because the
+// entry said "the resource this identifies" and there is none: storing it would
+// store a reference to a search.
+func TestAConditionalReferenceMatchingNothingFailsTheTransaction(t *testing.T) {
+	routes := servingFHIR(t, everyAction)
+
+	answer := submitting(t, routes, transactionOf(entryOf("", "POST", "Organization",
+		`{"resourceType":"Organization","name":"the one referring",`+
+			`"partOf":{"reference":"Organization?identifier=http://example.test/ids|nobody"}}`)))
+
+	if answer.Code < 400 {
+		t.Errorf("a reference matching nothing answered %d", answer.Code)
+	}
+
+	if found := searchedOrganizations(t, routes); found != 0 {
+		t.Errorf("a failed transaction wrote %d Organization(s)", found)
+	}
+}
+
+// lastSegmentOf reads the id off a full URL.
+func lastSegmentOf(held string) string {
+	parts := strings.Split(strings.TrimSuffix(held, "/"), "/")
+
+	return parts[len(parts)-1]
+}
