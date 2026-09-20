@@ -93,6 +93,7 @@ and an architecture that does not have to be rewritten to reach a clustered one.
 | Reference integrity | `$validate` reports a relative reference that leads nowhere; writes do not refuse one, because R4 permits it |
 | FHIR R4 representation | Checked against the HL7 validator by `scripts/conformance.sh`, not only against our own tests |
 | Search parameters | Built-in set, plus any a Project defines with a `SearchParameter`; new ones backfill in the background |
+| Search modifiers | `:missing`, `:exact`, `:contains`, `:not` — every other one is refused by name |
 | LOINC and SNOMED | Not resolved — a code is stored and read back, never looked up or checked |
 | Bundle transaction | Working — all-or-nothing, with `urn:uuid:` references resolved across entries |
 | Bundle batch | Working — every entry settles on its own, inside a savepoint |

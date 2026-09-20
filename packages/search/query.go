@@ -94,8 +94,21 @@ func (v Value) Compare() Comparison { return v.compare }
 // repeating a parameter versus comma-separating its values.
 type Criterion struct {
 	parameter Parameter
+	modifier  Modifier
 	values    []Value
+
+	// missing is what :missing asked: true for an element that is not there.
+	// It is read only when the modifier is :missing, where there are no values
+	// because the question is about the element rather than about a value.
+	missing bool
 }
+
+// Modifier returns how the criterion narrows, empty when it narrows the
+// ordinary way.
+func (c Criterion) Modifier() Modifier { return c.modifier }
+
+// Missing reports what a :missing criterion asked for.
+func (c Criterion) Missing() bool { return c.missing }
 
 // Parameter returns what is being matched.
 func (c Criterion) Parameter() Parameter { return c.parameter }
@@ -167,16 +180,34 @@ func (q *Query) read(name string, raw []string) error {
 		return q.readTotal(raw)
 	}
 
-	// A modifier, a chain or a reverse chain. Each is a different search from
-	// the one the bare name means, so answering the bare one would answer a
-	// question nobody asked.
-	if strings.ContainsAny(name, ":.") {
+	// A chain or a reverse chain is a different search from the one the bare
+	// name means, so answering the bare one would answer a question nobody
+	// asked.
+	if strings.Contains(name, ".") || strings.HasPrefix(name, "_has") {
 		return fmt.Errorf("%w: %s", ErrUnsupportedModifier, name)
+	}
+
+	name, modifier, _ := strings.Cut(name, ":")
+
+	held, known := modifiers[Modifier(modifier)]
+	if !known {
+		return fmt.Errorf("%w: %s", ErrUnsupportedModifier, modifier)
 	}
 
 	parameter, implemented := Find(q.custom, q.resourceType, name)
 	if !implemented {
 		return fmt.Errorf("%w: %s on %s", ErrUnknownParameter, name, q.resourceType)
+	}
+
+	if !held.appliesTo(parameter.Kind()) {
+		return fmt.Errorf("%w: :%s does not narrow a %s parameter",
+			ErrUnsupportedModifier, modifier, parameter.Kind())
+	}
+
+	// :missing asks whether the element is there at all, so what follows the
+	// equals sign is a yes or a no rather than a value to match.
+	if held.name == ModifierMissing {
+		return q.addMissing(parameter, raw)
 	}
 
 	for _, stated := range raw {
@@ -185,7 +216,31 @@ func (q *Query) read(name string, raw []string) error {
 			return err
 		}
 
-		q.criteria = append(q.criteria, Criterion{parameter: parameter, values: values})
+		q.criteria = append(q.criteria, Criterion{
+			parameter: parameter, modifier: held.name, values: values,
+		})
+	}
+
+	return nil
+}
+
+// addMissing records a criterion asking whether an element is present.
+func (q *Query) addMissing(parameter Parameter, raw []string) error {
+	for _, stated := range raw {
+		var absent bool
+
+		switch stated {
+		case "true":
+			absent = true
+		case "false":
+		default:
+			return fmt.Errorf("%w: :missing is true or false, and %q is neither",
+				ErrMalformedValue, stated)
+		}
+
+		q.criteria = append(q.criteria, Criterion{
+			parameter: parameter, modifier: ModifierMissing, missing: absent,
+		})
 	}
 
 	return nil
@@ -361,4 +416,61 @@ func (q Query) Narrowed(count int) Query {
 	}
 
 	return q
+}
+
+// Modifier is how a criterion narrows, beyond what its value says.
+//
+// R4 defines more than this build applies. The ones it does not are refused by
+// name rather than ignored: `name:contains=ward` and `name=ward` are different
+// searches, and answering the second when the first was asked would come back
+// looking answered.
+type Modifier string
+
+// The modifiers this build applies.
+const (
+	// ModifierNone is the bare parameter.
+	ModifierNone Modifier = ""
+
+	// ModifierMissing asks whether the element is there at all, which no value
+	// can ask: a resource that never stated a gender and one that stated an
+	// unknown gender are different facts.
+	ModifierMissing Modifier = "missing"
+
+	// ModifierExact matches a string whole and case-sensitively, where the bare
+	// parameter matches a case-folded prefix.
+	ModifierExact Modifier = "exact"
+
+	// ModifierContains matches a string anywhere in the value. It is the one
+	// modifier here that cannot use an index, which is why R4 marks it optional
+	// and why a search naming it is bounded like every other.
+	ModifierContains Modifier = "contains"
+
+	// ModifierNot excludes what the value names, rather than requiring it.
+	ModifierNot Modifier = "not"
+)
+
+// modifier is one modifier and what it may narrow.
+type modifier struct {
+	name  Modifier
+	kinds []Kind
+}
+
+// appliesTo reports whether this modifier means anything for a kind.
+func (m modifier) appliesTo(kind Kind) bool {
+	return len(m.kinds) == 0 || slices.Contains(m.kinds, kind)
+}
+
+// modifiers is what this build applies. A modifier R4 defines and this build
+// does not is absent, so it is refused by name.
+//
+// The absent ones are absent for a reason rather than for want of typing.
+// `:above` and `:below` walk a code system's hierarchy, `:in` and `:not-in`
+// resolve a value set, and `:text` and `:of-type` match parts of an element
+// this build does not project. Each needs something to be built first.
+var modifiers = map[Modifier]modifier{
+	ModifierNone:     {name: ModifierNone},
+	ModifierMissing:  {name: ModifierMissing},
+	ModifierExact:    {name: ModifierExact, kinds: []Kind{KindString}},
+	ModifierContains: {name: ModifierContains, kinds: []Kind{KindString}},
+	ModifierNot:      {name: ModifierNot, kinds: []Kind{KindToken, KindReference}},
 }

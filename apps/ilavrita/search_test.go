@@ -152,7 +152,7 @@ func TestAParameterThisServerDoesNotImplementIsRefusedOverHTTP(t *testing.T) {
 	seedOrganizations(t, routes, "Ward Clinic")
 
 	for _, query := range []string{
-		"?colour=blue", "?name:exact=Ward", "?_sort=name", "?_include=Organization:endpoint",
+		"?colour=blue", "?name:above=Ward", "?_sort=name", "?_include=Organization:endpoint",
 		"?_count=0", "?_count=9999",
 	} {
 		answer := call{method: http.MethodGet, path: fhir.BasePath + "/Organization" + query}.send(t, routes)

@@ -1390,7 +1390,8 @@ CREATE TABLE IF NOT EXISTS fhir_search_index (
       AND folded IS NULL AND lower IS NULL AND upper IS NULL)
     OR (kind = 'string'
       AND folded IS NOT NULL AND folded <> ''
-      AND code IS NULL AND system IS NULL AND lower IS NULL AND upper IS NULL)
+      AND code IS NOT NULL AND code <> ''
+      AND system IS NULL AND lower IS NULL AND upper IS NULL)
     OR (kind = 'date'
       AND lower IS NOT NULL AND upper IS NOT NULL AND upper >= lower
       AND code IS NULL AND system IS NULL AND folded IS NULL)

@@ -233,6 +233,14 @@ func schemaMigrations() []schemaMigration {
 		},
 		{
 			job: SuperJob{
+				Name: "migrate.fhir_search_index.string_value",
+				Kind: JobMigration, Subject: stringValueTable,
+			},
+			rebuild: rebuildStringValues,
+			applied: "the value as written beside the value folded, so :exact can read one",
+		},
+		{
+			job: SuperJob{
 				Name: "migrate.subscription_queues.claims",
 				Kind: JobMigration, Subject: "subscription_backlog",
 			},
@@ -880,4 +888,82 @@ func assertNoViolations(ctx context.Context, tx *sql.Tx) error {
 	}
 
 	return nil
+}
+
+// stringValueTable is the index, whose string rows gained the value as written
+// beside the value folded.
+const stringValueTable = "fhir_search_index"
+
+// newStringArm is what the constraint says once a string row carries the value
+// as written. It is matched on the declaration itself because a CHECK is not a
+// column: nothing in the catalogue reports one, and the text is the only thing
+// that says.
+//
+// The new requirement is matched rather than the old one it replaced. The old
+// text — "code IS NULL AND system IS NULL" — also appears in the arm for dates,
+// which is true of every database including the ones already migrated: matching
+// it would rebuild the index on every start, emptying and re-deriving the whole
+// of it each time.
+const newStringArm = "AND code IS NOT NULL AND code <> ''"
+
+// rebuildStringValues widens the index so a string row keeps the value as it
+// was written.
+//
+// A prefix match reads the folded value, because a search should not have to
+// know how a name was capitalised. `:exact` is about exactly that, so it reads
+// the value as written — and the old constraint said a string row had none.
+//
+// The rows are dropped rather than carried across. The index is derived from
+// content the rows already hold, so it can be rebuilt; carrying it would mean
+// carrying rows the new constraint refuses, which is the state this is for.
+func rebuildStringValues(ctx context.Context, db *sql.DB) (bool, error) {
+	declared, err := hasTable(ctx, db, stringValueTable)
+	if err != nil || !declared {
+		return false, err
+	}
+
+	current, err := declarationContains(ctx, db, stringValueTable, newStringArm)
+	if err != nil || current {
+		return false, err
+	}
+
+	if _, err := db.ExecContext(ctx, "DELETE FROM "+stringValueTable); err != nil {
+		return false, fmt.Errorf("pocketbase: empty the search index: %w", err)
+	}
+
+	plan, err := planRebuild(ctx, db, stringValueTable)
+	if err != nil {
+		return false, err
+	}
+
+	if err := performRebuild(ctx, db, plan); err != nil {
+		return false, err
+	}
+
+	// Emptied above, so every searchable value has to be derived again.
+	if err := backfillSearchIndex(ctx, db); err != nil {
+		return false, err
+	}
+
+	return true, nil
+}
+
+// declarationContains reports whether a table's own declaration holds a
+// fragment, which is how a constraint is recognised: the catalogue lists
+// columns and indexes and says nothing about a CHECK.
+func declarationContains(
+	ctx context.Context, db *sql.DB, table, fragment string,
+) (bool, error) {
+	var declaration string
+
+	switch err := db.QueryRowContext(ctx,
+		"SELECT sql FROM sqlite_master WHERE type = 'table' AND name = ?",
+		table).Scan(&declaration); {
+	case errors.Is(err, sql.ErrNoRows):
+		return false, nil
+	case err != nil:
+		return false, fmt.Errorf("pocketbase: read the declaration of %s: %w", table, err)
+	}
+
+	return strings.Contains(declaration, fragment), nil
 }

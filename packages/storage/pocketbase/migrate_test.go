@@ -468,3 +468,115 @@ func TestASystemScopedClientApplicationDocumentRefusesToServe(t *testing.T) {
 		t.Error("the current schema accepted a system-scoped ClientApplication document")
 	}
 }
+
+// oldStringIndex is the search index as a database written before :exact
+// declares it: a string row carried the folded value and no other.
+const oldStringIndex = `CREATE TABLE fhir_search_index (
+  project_id TEXT NOT NULL,
+  res_type   TEXT NOT NULL,
+  res_id     TEXT NOT NULL,
+  param      TEXT NOT NULL,
+  kind       TEXT NOT NULL CHECK (kind IN ('token', 'string', 'reference', 'date')),
+  code       TEXT,
+  system     TEXT,
+  folded     TEXT,
+  lower      BIGINT,
+  upper      BIGINT,
+  PRIMARY KEY (project_id, res_type, res_id, param, kind, code, system, folded, lower, upper),
+  CHECK (
+    (kind = 'token' AND code IS NOT NULL AND folded IS NULL AND lower IS NULL AND upper IS NULL)
+    OR (kind = 'reference'
+      AND code IS NOT NULL AND system IS NULL AND folded IS NULL
+      AND lower IS NULL AND upper IS NULL)
+    OR (kind = 'string'
+      AND folded IS NOT NULL AND folded <> ''
+      AND code IS NULL AND system IS NULL AND lower IS NULL AND upper IS NULL)
+    OR (kind = 'date'
+      AND lower IS NOT NULL AND upper IS NOT NULL
+      AND code IS NULL AND system IS NULL AND folded IS NULL)
+  )
+)`
+
+// TestAnIndexBuiltBeforeExactIsRebuiltRatherThanCarried.
+//
+// A string row used to carry the folded value and no other, and the constraint
+// said so. Carrying those rows across would mean carrying rows the new
+// constraint refuses — which is the state this migration is for — so they are
+// dropped and derived again from the content the resources already hold.
+func TestAnIndexBuiltBeforeExactIsRebuiltRatherThanCarried(t *testing.T) {
+	db := legacyDatabase(t)
+	seedLegacyRows(t, db)
+
+	// The legacy fixture already declares one, in whatever shape it holds.
+	if _, err := db.ExecContext(t.Context(), "DROP TABLE IF EXISTS fhir_search_index"); err != nil {
+		t.Fatalf("drop the declared index: %v", err)
+	}
+
+	if _, err := db.ExecContext(t.Context(), oldStringIndex); err != nil {
+		t.Fatalf("declare the old index: %v", err)
+	}
+
+	// A row in the old shape, which the new constraint would refuse.
+	if _, err := db.ExecContext(t.Context(),
+		"INSERT INTO fhir_search_index (project_id, res_type, res_id, param, kind,"+
+			" code, system, folded, lower, upper)"+
+			" VALUES ('prj_a', 'Organization', 'org-1', 'name', 'string',"+
+			" NULL, NULL, 'a folded name', NULL, NULL)"); err != nil {
+		t.Fatalf("plant an old row: %v", err)
+	}
+
+	if err := PrepareSchema(t.Context(), db); err != nil {
+		t.Fatalf("PrepareSchema: %v", err)
+	}
+
+	// The constraint is adopted rather than merely declared, which is the whole
+	// of what a rebuild is for: SQLite has no ALTER TABLE ADD CONSTRAINT, so
+	// without one the new rule would reach only databases created after it.
+	var declaration string
+
+	if err := db.QueryRowContext(t.Context(),
+		"SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'fhir_search_index'",
+	).Scan(&declaration); err != nil {
+		t.Fatalf("read the declaration: %v", err)
+	}
+
+	if !strings.Contains(declaration, newStringArm) {
+		t.Errorf("the index does not require the value as written: %s", declaration)
+	}
+
+	// The rows that could not satisfy it are gone, rather than carried across
+	// into a table that refuses them.
+	var carried int
+
+	if err := db.QueryRowContext(t.Context(),
+		"SELECT COUNT(*) FROM fhir_search_index").Scan(&carried); err != nil {
+		t.Fatalf("count what survived: %v", err)
+	}
+
+	if carried != 0 {
+		t.Errorf("%d row(s) were carried across", carried)
+	}
+
+	// Running it again changes nothing, which is what every migration here has
+	// to be able to do — and matters more for this one than for most, because
+	// what it does when it fires is empty the search index and derive the whole
+	// of it again. A detection that answered yes on an already-migrated
+	// database would do that on every start.
+	for range 3 {
+		if err := PrepareSchema(t.Context(), db); err != nil {
+			t.Fatalf("PrepareSchema again: %v", err)
+		}
+	}
+
+	var recorded int
+
+	if err := db.QueryRowContext(t.Context(),
+		"SELECT COUNT(*) FROM super_jobs WHERE name = 'migrate.fhir_search_index.string_value'",
+	).Scan(&recorded); err != nil {
+		t.Fatalf("count the runs: %v", err)
+	}
+
+	if recorded != 1 {
+		t.Errorf("the migration ran %d times, want once", recorded)
+	}
+}

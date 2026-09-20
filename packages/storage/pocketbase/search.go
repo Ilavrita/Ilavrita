@@ -33,6 +33,13 @@ const (
 	indexPredicate = "EXISTS (SELECT 1 FROM fhir_search_index i" +
 		" WHERE i.project_id = ? AND i.res_type = r.res_type AND i.res_id = r.res_id" +
 		" AND i.param = ? AND ("
+
+	// Whether the element is there at all, which no value can ask: a resource
+	// that never stated a gender and one that stated an unknown gender are
+	// different facts about a person.
+	presencePredicate = "EXISTS (SELECT 1 FROM fhir_search_index i" +
+		" WHERE i.project_id = ? AND i.res_type = r.res_type AND i.res_id = r.res_id" +
+		" AND i.param = ?)"
 )
 
 var _ search.Repository = (*ResourceStore)(nil)
@@ -234,6 +241,22 @@ func criterionPredicate(
 ) (string, []any, error) {
 	parameter := criterion.Parameter()
 
+	// :missing asks about the element rather than about a value, and a
+	// parameter answered from the row itself is never missing: the column is
+	// always there, and what it holds is the answer.
+	if criterion.Modifier() == search.ModifierMissing {
+		if !parameter.Projects() {
+			return "", nil, fmt.Errorf("%w: :missing on %s", ErrUncompilableQuery, parameter.Name())
+		}
+
+		held := presencePredicate
+		if criterion.Missing() {
+			held = "NOT " + held
+		}
+
+		return held, []any{string(owner), parameter.Name()}, nil
+	}
+
 	if !parameter.Projects() {
 		return storedPredicate(parameter, criterion.Values())
 	}
@@ -242,7 +265,7 @@ func criterionPredicate(
 	args := []any{string(owner), parameter.Name()}
 
 	for _, value := range criterion.Values() {
-		text, valueArgs, err := indexedValue(parameter, value)
+		text, valueArgs, err := indexedValue(parameter, criterion.Modifier(), value)
 		if err != nil {
 			return "", nil, err
 		}
@@ -251,11 +274,23 @@ func criterionPredicate(
 		args = append(args, valueArgs...)
 	}
 
-	return indexPredicate + strings.Join(alternatives, " OR ") + "))", args, nil
+	held := indexPredicate + strings.Join(alternatives, " OR ") + "))"
+
+	// :not excludes what the value names. It is the whole predicate that is
+	// negated rather than the comparison inside it: a resource carrying two
+	// categories, one of them the excluded code, is one the client asked not to
+	// see — and negating the comparison would return it for the other row.
+	if criterion.Modifier() == search.ModifierNot {
+		held = "NOT " + held
+	}
+
+	return held, args, nil
 }
 
 // indexedValue compiles one alternative against the index row.
-func indexedValue(parameter search.Parameter, value search.Value) (string, []any, error) {
+func indexedValue(
+	parameter search.Parameter, modifier search.Modifier, value search.Value,
+) (string, []any, error) {
 	switch parameter.Kind() {
 	case search.KindToken:
 		if system, qualified := value.System(); qualified {
@@ -266,6 +301,17 @@ func indexedValue(parameter search.Parameter, value search.Value) (string, []any
 	case search.KindReference:
 		return "i.code = ?", []any{value.Text()}, nil
 	case search.KindString:
+		switch modifier {
+		case search.ModifierExact:
+			// The value as it was written, which is what :exact is about.
+			return "i.code = ?", []any{value.Text()}, nil
+		case search.ModifierContains:
+			// Unanchored, so this is the one match here that cannot use an
+			// index. R4 marks it optional for that reason, and a search naming
+			// it is bounded like every other.
+			return `i.folded LIKE ? ESCAPE '\'`, []any{likeAnywhere(value.Text())}, nil
+		}
+
 		// Folded on both sides, so the match does not depend on how either was
 		// capitalised, and anchored, so a search never scans every value.
 		return `i.folded LIKE ? ESCAPE '\'`, []any{likePrefix(value.Text())}, nil
@@ -332,7 +378,16 @@ func spanPredicate(lower, upper string, value search.Value) (string, []any, erro
 // likePrefix turns a value into an anchored LIKE pattern, escaping the
 // wildcards so nothing a caller types is read as one.
 func likePrefix(value string) string {
-	escaped := strings.NewReplacer(`\`, `\\`, `%`, `\%`, `_`, `\_`).Replace(strings.ToLower(value))
+	return escapedLike(value) + "%"
+}
 
-	return escaped + "%"
+// likeAnywhere is likePrefix without the anchor, which is what :contains asks
+// for and what makes it the expensive one.
+func likeAnywhere(value string) string {
+	return "%" + escapedLike(value) + "%"
+}
+
+// escapedLike folds a value and takes the wildcards out of it.
+func escapedLike(value string) string {
+	return strings.NewReplacer(`\`, `\\`, `%`, `\%`, `_`, `\_`).Replace(strings.ToLower(value))
 }

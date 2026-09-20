@@ -70,7 +70,9 @@ func indexColumns(entry search.Entry) (code, system, folded, lower, upper any) {
 	case search.KindReference:
 		return entry.Code, nil, nil, nil, nil
 	case search.KindString:
-		return nil, nil, entry.Folded, nil, nil
+		// The value as written and the value folded: one is what :exact reads,
+		// the other what a prefix match reads.
+		return entry.Code, nil, entry.Folded, nil, nil
 	case search.KindDate:
 		return nil, nil, nil, entry.Lower, entry.Upper
 	default:

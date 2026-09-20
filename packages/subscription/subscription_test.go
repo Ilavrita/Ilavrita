@@ -53,7 +53,7 @@ func TestACriteriaThisServerCannotRunIsRefused(t *testing.T) {
 		"a type nobody declared":      "NotAResource?status=final",
 		"a parameter nobody declared": "Observation?colour=blue",
 		"a parameter of another type": "Observation?gender=female",
-		"a modifier":                  "Patient?family:exact=Smith",
+		"a modifier":                  "Patient?family:above=Smith",
 		"a chain":                     "Observation?subject.name=Ada",
 		"a page size":                 "Observation?status=final&_count=5",
 		"a cursor":                    "Observation?status=final&_cursor=abc",

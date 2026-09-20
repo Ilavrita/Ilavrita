@@ -64,7 +64,10 @@ Every other `/fhir/R4` route answers `501 Not Implemented` as an
 | Area | State |
 | --- | --- |
 | Search | Working, over a declared parameter set; anything outside it is refused, never ignored |
-| `_include`, `_revinclude`, chaining, `_sort` | Not implemented; refused rather than ignored |
+| Search modifiers | `:missing`, `:exact`, `:contains` and `:not`; every other one is refused by name |
+| `_include`, `_revinclude`, chaining, `_has`, `_sort`, `_summary`, `_elements` | Not implemented; refused rather than ignored |
+| Parameter types | token, string, reference and date; number, quantity, uri, composite and special are not indexed |
+| Date prefixes | `eq`, `gt`, `lt`, `ge`, `le`; `ne`, `sa`, `eb` and `ap` are not |
 | History paging (`_count`, `_cursor`) | Working; see below |
 | History filtering | `_since` narrows; `_at` and `_list` are refused, never ignored |
 | Type-level and system-level history | Not implemented; see below |
@@ -372,6 +375,38 @@ means nothing across resources. A feed like that would look like it worked and
 silently answer out of order. Doing it properly means ordering by
 `last_updated` with a tiebreaker and a compound cursor, which is a different
 piece of work from widening the query.
+
+## A modifier is a different search from the bare parameter
+
+`name:exact=Ward` and `name=Ward` are different questions. Answering the second
+when the first was asked would come back looking answered, so a modifier this
+build does not apply is refused by name.
+
+What it applies:
+
+- **`:missing`** asks whether the element is there at all, which no value can
+  ask: a resource that never stated a gender and one that stated an unknown
+  gender are different facts about a person. It is a yes or a no, not a value
+- **`:exact`** matches the value as written, whole. The index keeps a string
+  twice for this — folded for the prefix match a bare parameter does, and as
+  written for this one
+- **`:contains`** matches anywhere in the value. It is the one match here that
+  cannot use an index, which is why R4 marks it optional; a search naming it is
+  bounded like every other
+- **`:not`** excludes the resource rather than the value. A resource carrying
+  two identifiers, one of them the excluded code, is one the client asked not to
+  see — negating the comparison instead would return it for the other row
+
+What it refuses, and why each needs something built first: **`:above`** and
+**`:below`** walk a code system's hierarchy, **`:in`** and **`:not-in`** resolve
+a value set, and **`:text`** and **`:of-type`** match parts of an element this
+build does not project. A modifier that means nothing for the kind it was put on
+— `:contains` on a token — is refused too.
+
+**Chaining, `_has`, `_include`, `_revinclude`, `_sort`, `_summary` and
+`_elements` are not implemented**, and refused rather than ignored. So are the
+parameter types beyond token, string, reference and date, and the date prefixes
+beyond `eq`, `gt`, `lt`, `ge` and `le`.
 
 ## An outside implementation judges what goes on the wire
 

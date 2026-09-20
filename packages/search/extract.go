@@ -17,7 +17,12 @@ type Entry struct {
 	Parameter string
 	Kind      Kind
 
-	// Code carries a token's code and a reference's "Type/id".
+	// Code carries a token's code, a reference's "Type/id", and a string's value
+	// as it was written.
+	//
+	// A string is kept twice on purpose. Folded is what a prefix match reads,
+	// because a search should not have to know how a name was capitalised; Code
+	// is what :exact reads, because that modifier is about exactly that.
 	Code string
 
 	// System qualifies a token, empty when the element carried none.
@@ -121,7 +126,11 @@ func entryFor(parameter Parameter, held any) (Entry, bool) {
 			return Entry{}, false
 		}
 
-		return Entry{Parameter: parameter.Name(), Kind: KindString, Folded: strings.ToLower(text)}, true
+		return Entry{
+			Parameter: parameter.Name(), Kind: KindString,
+			Code:   text,
+			Folded: strings.ToLower(text),
+		}, true
 	case KindReference:
 		return referenceEntry(parameter, held)
 	case KindDate:

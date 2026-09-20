@@ -110,9 +110,11 @@ func TestAStringIsFoldedSoASearchNeedNotGuessTheCapitalisation(t *testing.T) {
 		`{"resourceType":"Patient","name":[{"family":"MacDonald","given":["Ada","Jane"]}]}`)
 
 	for _, want := range []search.Entry{
-		{Parameter: "family", Kind: search.KindString, Folded: "macdonald"},
-		{Parameter: "given", Kind: search.KindString, Folded: "ada"},
-		{Parameter: "given", Kind: search.KindString, Folded: "jane"},
+		// The value as written and the value folded: one is what :exact reads,
+		// the other what a prefix match reads.
+		{Parameter: "family", Kind: search.KindString, Code: "MacDonald", Folded: "macdonald"},
+		{Parameter: "given", Kind: search.KindString, Code: "Ada", Folded: "ada"},
+		{Parameter: "given", Kind: search.KindString, Code: "Jane", Folded: "jane"},
 	} {
 		if !slices.Contains(entries, want) {
 			t.Errorf("%v is not indexed; got %v", want, entries)

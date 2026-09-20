@@ -45,14 +45,15 @@ func TestAParameterThisBuildDoesNotImplementIsRefused(t *testing.T) {
 		resourceType, query string
 		want                error
 	}{
-		"a parameter nobody declared":   {"Observation", "colour=blue", search.ErrUnknownParameter},
-		"one declared for another type": {"Observation", "gender=female", search.ErrUnknownParameter},
-		"a modifier":                    {"Patient", "family:exact=Smith", search.ErrUnsupportedModifier},
-		"a chain":                       {"Observation", "subject.name=Ada", search.ErrUnsupportedModifier},
-		"an include":                    {"Observation", "_include=Observation:subject", search.ErrUnknownParameter},
-		"a sort":                        {"Observation", "_sort=date", search.ErrUnknownParameter},
-		"a summary":                     {"Observation", "_summary=true", search.ErrUnknownParameter},
-		"an estimated total":            {"Observation", "_total=estimate", search.ErrUnsupportedModifier},
+		"a parameter nobody declared":    {"Observation", "colour=blue", search.ErrUnknownParameter},
+		"one declared for another type":  {"Observation", "gender=female", search.ErrUnknownParameter},
+		"a modifier needing a hierarchy": {"Patient", "gender:above=female", search.ErrUnsupportedModifier},
+		"a modifier for the wrong kind":  {"Patient", "gender:contains=fem", search.ErrUnsupportedModifier},
+		"a chain":                        {"Observation", "subject.name=Ada", search.ErrUnsupportedModifier},
+		"an include":                     {"Observation", "_include=Observation:subject", search.ErrUnknownParameter},
+		"a sort":                         {"Observation", "_sort=date", search.ErrUnknownParameter},
+		"a summary":                      {"Observation", "_summary=true", search.ErrUnknownParameter},
+		"an estimated total":             {"Observation", "_total=estimate", search.ErrUnsupportedModifier},
 	}
 
 	for name, tc := range cases {
