@@ -25,6 +25,10 @@ const (
 	// of which happen or none of which do. R4 declares it on the server rather
 	// than on a type, because a transaction is not about one.
 	InteractionTransaction Interaction = "transaction"
+
+	// InteractionBatch is several submitted together and settled apart. It is
+	// the same route and the opposite promise.
+	InteractionBatch Interaction = "batch"
 )
 
 // servedResourceTypes is the closed list of R4 types this build serves. Storage

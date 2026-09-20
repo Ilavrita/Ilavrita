@@ -274,7 +274,7 @@ paths:
   /fhir/R4:
     post:
       tags: [FHIR]
-      summary: Bundle transaction
+      summary: Bundle transaction or batch
       description: |
         Performs every entry of a `transaction` Bundle as one act: all of them
         happen, or none does. An entry that fails rolls away every row, audit
@@ -293,8 +293,16 @@ paths:
         time, nor a way to write without a trail.
 
         A `PUT` at an identity nothing holds creates it, which is what `update`
-        does everywhere else here. `batch`, conditional references and per-entry
-        preconditions are not implemented and are refused rather than ignored.
+        does everywhere else here. An entry may state `ifNoneExist`, which is
+        the conditional create, and a reference written `Patient?identifier=…`
+        is resolved to the resource it identifies before anything is stored. The
+        remaining per-entry preconditions are refused rather than ignored.
+
+        A `batch` is submitted the same way and settles the opposite way: every
+        entry stands or falls on its own, inside a savepoint, and the response
+        describes each one including the ones that failed. It answers `200`
+        whatever the entries did, because the request succeeded — which entry
+        did not is the answer, not the status.
       operationId: performTransaction
       requestBody:
         required: true
@@ -1431,7 +1439,7 @@ components:
           const: Bundle
         type:
           type: string
-          const: transaction
+          enum: [transaction, batch]
         entry:
           type: array
           maxItems: 200
@@ -1474,7 +1482,7 @@ components:
           const: Bundle
         type:
           type: string
-          const: transaction-response
+          enum: [transaction-response, batch-response]
         entry:
           type: array
           items:
@@ -1506,6 +1514,13 @@ components:
               type: string
             lastModified:
               type: string
+            outcome:
+              allOf:
+                - $ref: "#/components/schemas/OperationOutcome"
+              description: |
+                Why this entry did not do what was asked. Present only in a
+                batch response, and only for an entry that failed: a status
+                alone names which entry went wrong and not what about it.
 
     OperationOutcome:
       type: object

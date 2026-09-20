@@ -42,12 +42,21 @@ func entryOf(fullURL, method, url, resource string) string {
 func responseBundle(t *testing.T, recorded *httptest.ResponseRecorder) fhir.Bundle {
 	t.Helper()
 
+	return responseBundleOfType(t, recorded, fhir.BundleTransactionResponse)
+}
+
+// responseBundleOfType decodes a bundle and holds it to the type it should be.
+func responseBundleOfType(
+	t *testing.T, recorded *httptest.ResponseRecorder, want fhir.BundleType,
+) fhir.Bundle {
+	t.Helper()
+
 	var held fhir.Bundle
 	if err := json.Unmarshal(recorded.Body.Bytes(), &held); err != nil {
 		t.Fatalf("decode the response bundle: %v (%s)", err, recorded.Body)
 	}
 
-	if held.ResourceType != "Bundle" || held.Type != fhir.BundleTransactionResponse {
+	if held.ResourceType != "Bundle" || held.Type != want {
 		t.Fatalf("answered %s/%s", held.ResourceType, held.Type)
 	}
 
@@ -180,7 +189,6 @@ func TestATransactionRefusesWhatItCannotPerform(t *testing.T) {
 	routes := servingFHIR(t, everyAction)
 
 	for described, body := range map[string]string{
-		"a batch, which this build does not perform":         `{"resourceType":"Bundle","type":"batch","entry":[]}`,
 		"a resource that is not a Bundle":                    `{"resourceType":"Patient"}`,
 		"an entry naming no request":                         `{"resourceType":"Bundle","type":"transaction","entry":[{"resource":{"resourceType":"Organization"}}]}`,
 		"an entry naming a type nobody serves":               transactionOf(entryOf("", "POST", "Appointment", `{"resourceType":"Appointment"}`)),
@@ -410,7 +418,9 @@ func TestAnUpdateInATransactionReplacesWhatIsThere(t *testing.T) {
 func TestATransactionEntryStatesNoPrecondition(t *testing.T) {
 	routes := servingFHIR(t, everyAction)
 
-	for _, stated := range []string{"ifMatch", "ifNoneExist", "ifNoneMatch", "ifModifiedSince"} {
+	// ifNoneExist is not among them: it is the conditional create, and this
+	// server performs one.
+	for _, stated := range []string{"ifMatch", "ifNoneMatch", "ifModifiedSince"} {
 		answer := submitting(t, routes,
 			`{"resourceType":"Bundle","type":"transaction","entry":[{`+
 				`"resource":`+valid("Organization", nil)+`,`+

@@ -16,8 +16,14 @@ const (
 	// their Observations either all exist or none do.
 	BundleTransaction BundleType = "transaction"
 
-	// BundleTransactionResponse is what one answers with.
+	// BundleBatch is each on its own. An entry that fails leaves every other
+	// entry standing, which is what makes it the other thing: a client sending
+	// a day's unrelated writes wants the ones that worked to have worked.
+	BundleBatch BundleType = "batch"
+
+	// What each answers with.
 	BundleTransactionResponse BundleType = "transaction-response"
+	BundleBatchResponse       BundleType = "batch-response"
 )
 
 var (
@@ -65,10 +71,10 @@ func ReadBundle(body []byte) (SubmittedBundle, error) {
 		return SubmittedBundle{}, fmt.Errorf("%w: it is a %s", ErrNotABundle, held.ResourceType)
 	}
 
-	if held.Type != BundleTransaction {
+	if held.Type != BundleTransaction && held.Type != BundleBatch {
 		return SubmittedBundle{}, fmt.Errorf(
-			"%w: this server processes a %s, and that is a %s",
-			ErrNotABundle, BundleTransaction, held.Type)
+			"%w: this server processes a %s or a %s, and that is a %s",
+			ErrNotABundle, BundleTransaction, BundleBatch, held.Type)
 	}
 
 	seen := map[string]bool{}
@@ -216,5 +222,18 @@ func NewTransactionResponse(entries []BundleEntry) Bundle {
 		ResourceType: "Bundle",
 		Type:         BundleTransactionResponse,
 		Entry:        slices.Clone(entries),
+	}
+}
+
+// NewBatchResponse renders what each entry of a batch did.
+//
+// The order is the order the entries were submitted, and every entry has one:
+// a batch answers for all of them, including the ones that failed, because
+// which failed is the answer.
+func NewBatchResponse(entries []BundleEntry) Bundle {
+	return Bundle{
+		ResourceType: "Bundle",
+		Type:         BundleBatchResponse,
+		Entry:        entries,
 	}
 }

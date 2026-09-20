@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"slices"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/Ilavrita/Ilavrita/packages/storage"
@@ -114,6 +115,10 @@ var (
 // Version ids and last-updated instants are assigned by the store; the matching
 // fields on a record handed to a write are ignored.
 type ResourceStore struct {
+	// savepoints names each one uniquely within this process, so two entries
+	// running at once cannot unwind each other's.
+	savepoints atomic.Int64
+
 	db *sql.DB
 }
 
@@ -1110,6 +1115,53 @@ func validateWrite(record storage.ResourceRecord) error {
 
 	if len(record.Content) == 0 {
 		return fmt.Errorf("pocketbase: a written resource needs content")
+	}
+
+	return nil
+}
+
+// WithinSavepoint runs work so that its failure undoes only what it wrote.
+//
+// A batch is several interactions that succeed or fail on their own, inside one
+// request that already holds a transaction. Rolling the whole of it back for
+// one bad entry would be a transaction, which is the other thing entirely; not
+// rolling anything back would leave half an entry behind.
+//
+// Outside a transaction it is one, because a savepoint with nothing to nest in
+// is a transaction by another name.
+func (s *ResourceStore) WithinSavepoint(
+	ctx context.Context, work func(ctx context.Context) error,
+) error {
+	tx, open := ctx.Value(transactionKey{}).(*sql.Tx)
+	if !open {
+		return s.WithinTransaction(ctx, work)
+	}
+
+	// Named by this store rather than by a caller: a savepoint name goes into
+	// the statement verbatim, and one a request could choose is one a request
+	// could write.
+	name := fmt.Sprintf("entry_%d", s.savepoints.Add(1))
+
+	if _, err := tx.ExecContext(ctx, "SAVEPOINT "+name); err != nil {
+		return fmt.Errorf("pocketbase: open a savepoint: %w", err)
+	}
+
+	if err := work(ctx); err != nil {
+		if _, undone := tx.ExecContext(ctx, "ROLLBACK TO "+name); undone != nil {
+			// The savepoint could not be unwound, so what this entry wrote is
+			// still there and nothing below can be trusted to be what it says.
+			return errors.Join(err, fmt.Errorf("pocketbase: undo an entry: %w", undone))
+		}
+
+		if _, err := tx.ExecContext(ctx, "RELEASE "+name); err != nil {
+			return fmt.Errorf("pocketbase: release an undone savepoint: %w", err)
+		}
+
+		return err
+	}
+
+	if _, err := tx.ExecContext(ctx, "RELEASE "+name); err != nil {
+		return fmt.Errorf("pocketbase: release a savepoint: %w", err)
 	}
 
 	return nil

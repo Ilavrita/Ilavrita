@@ -73,9 +73,19 @@ var servedInteractions = []servedInteraction{
 }
 
 // systemInteractions are the ones this build serves that are not about one
-// resource type. A transaction is the whole of that list.
+// resource type.
+//
+// A transaction and a batch are submitted the same way and settle differently,
+// so one route answers both and the bundle's own type decides which it is.
 var systemInteractions = []servedInteraction{
 	{fhir.InteractionTransaction, http.MethodPost, "", performTransaction},
+}
+
+// systemCodes is what the statement declares for that one route. It is not read
+// off the table above, because two codes served by one route would register it
+// twice.
+var systemCodes = []fhir.Interaction{
+	fhir.InteractionTransaction, fhir.InteractionBatch,
 }
 
 // validateOperation is served beside the interactions rather than among them.
@@ -264,12 +274,7 @@ func advertisedOperations() []fhir.OperationCapability {
 // one type. It is read off the table the routes were registered from, the same
 // as every other advertised thing.
 func advertisedSystemInteractions() []fhir.Interaction {
-	codes := make([]fhir.Interaction, 0, len(systemInteractions))
-	for _, served := range systemInteractions {
-		codes = append(codes, served.code)
-	}
-
-	return codes
+	return slices.Clone(systemCodes)
 }
 
 // advertisedInteractions reads the codes off the table the routes were

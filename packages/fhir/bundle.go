@@ -113,6 +113,12 @@ type EntryResponse struct {
 	Status       string `json:"status"`
 	ETag         string `json:"etag,omitempty"`
 	LastModified string `json:"lastModified,omitempty"`
+
+	// Outcome says why, for an entry that did not do what was asked. A batch
+	// answers for every entry including the ones that failed, and a status with
+	// nothing beside it tells a client which entry went wrong and not what
+	// about it.
+	Outcome *OperationOutcome `json:"outcome,omitempty"`
 }
 
 // HistoryConfig is what one page of a resource's history states about itself.

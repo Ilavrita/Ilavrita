@@ -71,6 +71,17 @@ func performTransaction(request *core.RequestEvent) error {
 		return refuse(request, errTooManyEntries)
 	}
 
+	// A batch and a transaction are the same request shape and the opposite
+	// promise, so which one this is decides everything below it.
+	if submitted.Type == fhir.BundleBatch {
+		answers, err := performBatchEntries(request, submitted)
+		if err != nil {
+			return refuse(request, err)
+		}
+
+		return respondBody(request, http.StatusOK, answers)
+	}
+
 	answers, err := performEntries(request, submitted)
 	if err != nil {
 		return refuse(request, err)
@@ -113,6 +124,12 @@ func performEntries(request *core.RequestEvent, submitted fhir.SubmittedBundle) 
 	answers := make([]fhir.BundleEntry, len(submitted.Entry))
 
 	for _, index := range submitted.Ordered() {
+		// An entry a transaction could not even address ends it. A batch
+		// answers for that entry alone, which is the whole of the difference.
+		if err := identities[index].err; err != nil {
+			return nil, fmt.Errorf("entry %d: %w", index, err)
+		}
+
 		answer, err := performEntry(request, submitted.Entry[index], base, assigned, identities[index])
 		if err != nil {
 			// One entry failing ends the transaction. The error carries which
@@ -148,7 +165,12 @@ func settleIdentities(
 	for index, entry := range submitted.Entry {
 		resourceType, id, err := addressedBy(entry.Request.URL)
 		if err != nil {
-			return nil, nil, fmt.Errorf("entry %d: %w", index, err)
+			// An entry this server cannot address is one entry's problem. A
+			// transaction makes it everyone's, further down; a batch does not,
+			// which is the whole of the difference between them.
+			identities[index] = settledEntry{err: err}
+
+			continue
 		}
 
 		var alreadyThere bool
@@ -159,7 +181,9 @@ func settleIdentities(
 			// resource that is there rather than one about to be made beside it.
 			held, matched, err := matchedByEntryCondition(request, resourceType, entry)
 			if err != nil {
-				return nil, nil, fmt.Errorf("entry %d: %w", index, err)
+				identities[index] = settledEntry{err: err}
+
+				continue
 			}
 
 			switch {
@@ -173,13 +197,17 @@ func settleIdentities(
 		}
 
 		if id == "" {
-			return nil, nil, fmt.Errorf("entry %d: %w", index, errEntryNotSupported)
+			identities[index] = settledEntry{err: errEntryNotSupported}
+
+			continue
 		}
 
 		key, err := storage.NewResourceKey(
 			storage.ProjectID(projectOf(request)), resourceType, id)
 		if err != nil {
-			return nil, nil, fmt.Errorf("entry %d: %w", index, err)
+			identities[index] = settledEntry{err: err}
+
+			continue
 		}
 
 		identities[index] = settledEntry{key: key, alreadyThere: alreadyThere}

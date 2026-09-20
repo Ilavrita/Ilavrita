@@ -157,6 +157,11 @@ type settledEntry struct {
 	// alreadyThere reports a conditional create whose condition matched. The
 	// entry has an identity and nothing to write.
 	alreadyThere bool
+
+	// err is why this entry has no identity. It is carried rather than raised
+	// because a batch answers for every entry, including the ones it could not
+	// even address.
+	err error
 }
 
 // matchedByEntryCondition runs a create entry's ifNoneExist, if it states one.
