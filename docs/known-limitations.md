@@ -539,15 +539,16 @@ What that run says, rather than what it was expected to say:
 | --- | --- |
 | SMART on FHIR Discovery | Passes, including both CORS tests |
 | Standalone Launch | Passes: redirect, code, token exchange, response body, CORS |
+| OpenID Connect CORS | Passes: the FHIR user resource is readable from another origin |
 | Token Refresh, with and without scopes | Passes |
 | Backend Services authorization | Passes: the valid request and all three refusals |
 | OpenID Connect | Passes: the token decodes, verifies against the published key set, and `fhirUser` resolves |
 
-Two kinds of failure remain, and neither is a refusal this server made. Three
-TLS checks — `standalone_auth_tls`, `standalone_token_tls` and
-`smart_backend_services_token_tls_version` — fail because the run was driven
-against a plaintext local server, which is a statement about that deployment.
-Everything else passes, including `smart_cors_openid_fhir_user_claim`.
+**Every remaining failure is a TLS check** — `standalone_auth_tls`,
+`standalone_token_tls` and `smart_backend_services_token_tls_version` — and each
+fails because the run was driven against a plaintext local server. They are a
+statement about that deployment rather than about this code. Nothing else in the
+kit fails.
 
 It found three real defects, and all three are fixed.
 
