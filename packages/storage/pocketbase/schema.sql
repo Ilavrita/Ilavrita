@@ -394,6 +394,42 @@ CREATE TABLE IF NOT EXISTS client_assertion_jtis (
 CREATE INDEX IF NOT EXISTS ix_client_assertion_jtis_expiry
   ON client_assertion_jtis (expires_at);
 
+-- The keys this install signs identity tokens with. Install-scoped rather than
+-- per Project, because the issuer a token names is this server: one key set is
+-- published at one jwks_uri, and a reader that had to know which Project a
+-- token came from before it could find the key would be a reader SMART does not
+-- describe.
+--
+-- The private half is sealed, not hashed. A password can be hashed because the
+-- server only has to recognise it; this one has to be used, so whatever holds
+-- it can sign an identity for anybody.
+
+-- tenant: none, the keys this install signs identity tokens with
+CREATE TABLE IF NOT EXISTS identity_signing_keys (
+  -- The kid a token names and a reader resolves against the published set.
+  id          TEXT NOT NULL,
+
+  private_key TEXT NOT NULL,
+  state       TEXT NOT NULL CHECK (state IN ('active', 'retired')),
+  created_at  BIGINT NOT NULL,
+  retired_at  BIGINT,
+
+  PRIMARY KEY (id),
+
+  CHECK (id <> ''),
+  CHECK (private_key <> ''),
+
+  -- A retired key carries when, and an active one cannot: the pair is what says
+  -- whether a key is still signing or only still verifying.
+  CHECK ((state = 'retired') = (retired_at IS NOT NULL))
+);
+
+-- One key signs at a time. A second active key would mean two answers to which
+-- one a token came from, and the partial index makes that unrepresentable
+-- rather than merely avoided.
+CREATE UNIQUE INDEX IF NOT EXISTS ux_identity_signing_keys_active
+  ON identity_signing_keys (state) WHERE state = 'active';
+
 -- A bot is invoked by this server rather than authenticated by it. No credential
 -- table names this one and no column here holds a hash, so a bot secret is
 -- unrepresentable rather than merely unissued.
