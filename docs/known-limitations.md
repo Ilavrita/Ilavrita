@@ -264,6 +264,33 @@ A deployment that needs to resolve these codes should reach a terminology server
 that is licensed to serve them. That is a different thing from what this server
 does, and pretending otherwise was the mess.
 
+### What this argument does not cover
+
+It is an argument about **R4's own bindings**, and it holds for them. It does not
+hold for a profile whose bindings name those systems directly, which is what the
+ABDM work needs — so the directory is to come back, in the shape the rest of the
+field uses: **the machinery in the repository, the content supplied by whoever
+deploys it.**
+
+That is what Medplum does, and it is worth naming because it settles what the
+open question was really about. Medplum's repository ships a *generator* that
+reads a UMLS release the operator downloads under their own licence; the release
+itself is, in their own words, "not included in this repository". Their hosted
+service does hold the content, and its terms carry the pass-through notices for
+LOINC, SNOMED CT, CPT, RxNorm, RadLex and UCUM. Nobody ships the content in an
+open repository. What this build got wrong was removing the operations and the
+importer along with it.
+
+So the position is not "no terminology". It is **no bundled terminology** — no
+release file in this repository, and no licence this project accepts on a
+deployment's behalf — with `$lookup`, `$validate-code` and `$expand` served over
+whatever the operator did import, and an install holding no release saying so
+rather than guessing. The licensing question stays the deployment's, which is the
+one part of the removal that was right.
+
+None of this is built yet. Until it is, the paragraphs above describe the server
+as it stands.
+
 ## A Project defines its own search parameters
 
 A `SearchParameter` stored in a Project changes what that Project can search
