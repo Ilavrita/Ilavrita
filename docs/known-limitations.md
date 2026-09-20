@@ -81,6 +81,9 @@ Every other `/fhir/R4` route answers `501 Not Implemented` as an
 | Validation and `$validate` | Against the base definitions, required bindings and R4's invariants; profiles partly; see below |
 | Clinical resource types | Served, reachable only through a compartment a policy names |
 | Authentication | Working: password, sessions, TOTP second factor with an administrator recovery path, per-install throttle; see below |
+| SMART App Launch | Working for the standalone launch: authorize, token, PKCE S256, refresh, discovery; see below |
+| SMART Backend Services | Not implemented: `private_key_jwt` is unbuilt, so `system/` scopes are refused rather than granted |
+| OpenID Connect | Not implemented: no `id_token`, so `openid`, `fhirUser` and `profile` are refused by name |
 | Audit trail | Working: every interaction and login, in the transaction that did it |
 | Binary payloads | Working: bytes kept outside the database, placed by `securityContext` |
 | DocumentReference | Working: the document is a `Binary` its attachment names; inlined bytes are refused |
@@ -498,13 +501,13 @@ gate stops meaning anything:
 - **A media type cannot be verified.** R4 binds these to BCP-13, IANA's registry
   rather than a list of codes, and neither this validator nor the public
   terminology server resolves it
-- **FHIRPath invariants.** This build implements no FHIRPath engine, so it stores
-  resources that violate a `SHALL` constraint. Counted rather than listed: the
-  gap is one decision, not one per constraint
-- **One validator failure.** A `StructureDefinition` whose `type` names a URI it
-  cannot resolve makes the validator return a fatal issue with no text at all.
-  The same resource with a datatype name gets ordinary findings, so this is the
-  validator failing on the input rather than reporting something about it
+- **A composite SearchParameter's own rule**, which this build never reaches: it
+  refuses a composite parameter rather than storing one
+
+There were three. The third was FHIRPath invariants, absorbed because this build
+evaluated none — `packages/fhirpath` closed that, and the acceptance went with
+it. The list is short on purpose: a class quietly absorbing findings is how a
+gate stops meaning anything, so an entry leaves the moment it stops being true.
 
 What the validator cannot judge is asserted in Go beside it: that every issue
 code this build can emit is one R4 defines — read from the source, so a code
@@ -517,10 +520,15 @@ differently on a day that server is slow, and this build resolves no terminology
 of its own to check against anyway. The one check that would need it cannot be
 resolved by the public terminology server either.
 
-**What this is not.** It validates representation, not behaviour, and none of
-Inferno's own test kits apply here: every one of them layers an implementation
-guide — US Core, SMART App Launch, Da Vinci, CARIN — on top of R4, and this build
-implements none of those.
+**What this is not.** It validates representation, not behaviour. It is also not
+wired into CI: it needs Docker and takes minutes rather than seconds, so it is
+run deliberately and its result is not a gate anything blocks on yet.
+
+Of Inferno's own test kits, every one layers an implementation guide — US Core,
+SMART App Launch, Da Vinci, CARIN — on top of R4. **SMART App Launch is now
+partly implemented**, so that kit is the first that could apply at all; what it
+would still find missing is named under Authentication below. The others remain
+out of reach because this build implements none of their guides.
 
 ## Invariants are checked, and that is most of what R4 says
 
@@ -807,9 +815,49 @@ session would make a stolen administrator session enough to disable the factor i
 survive. The cost is real — an install with one administrator who loses their phone has no way back
 through the API, and an operator has to reach the database.
 
+### An app authorizes through SMART App Launch
+
+`/oauth2/authorize` and `/oauth2/token` serve the standalone launch. A client
+registers the addresses a code may be returned to and whether it keeps a secret;
+a person approves through their own session; the code comes back on a registered
+address and is exchanged for an access token.
+
+**An access token is a session.** There is no second kind of bearer credential
+here, which is why what an app reaches is narrowed per request against whatever
+the policy says then, rather than against a copy taken when the token was minted.
+`docs/design/smart-scope-spec.md` is the whole of that argument; the short form
+is that a SMART scope narrows and never widens.
+
+PKCE with S256 is required of every client, public and confidential alike.
+`plain` is not implemented — a challenge equal to its verifier protects against
+nobody who intercepted the code.
+
+An approval naming `offline_access` or `online_access` also receives a refresh
+token, rotated on every use. A spent one presented again is a copy somebody else
+is holding, so the grant dies: every rotation of it, and every session it minted.
+
+**What SMART App Launch does not do here:**
+
+- **No backend services.** `private_key_jwt` is not implemented, so `system/`
+  scopes are refused rather than granted. `packages/project/jwks.go` reads a
+  registration's public keys and nothing uses it yet
+- **No identity token.** `openid`, `fhirUser` and `profile` are refused by name
+  rather than granted, because granting them is a promise: a client that asked
+  for `openid` would look for an `id_token` and find nothing
+- **No EHR launch.** The `launch` parameter is read as the patient a session is
+  launched for, not as an opaque handle an EHR issues and this server resolves
+- **No token introspection or revocation endpoint.** A token expires, or the
+  session behind it is revoked through the session routes
+
+Each absence is visible rather than silent: `grant_types_supported` names only
+what the token endpoint answers to, and a scope this server will not grant is
+reported in `refused` with its reason before anybody depends on it.
+
 **What is still missing:**
 
-- **Session refresh.** A session expires and the credential is proved again.
+- **Session refresh for a password login.** A person's own session expires and
+  the credential is proved again. Refresh exists for an app's session, not for
+  the login that issued it.
 
 ## Out of scope for v0.1
 

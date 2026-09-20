@@ -84,10 +84,20 @@ single security and Project model, even though they ship in phases.
 - [x] Bringing an install into use — one claim token, handed over through the data
       directory and spent once, which is what an external tool needs before it
       can authenticate at all
-- [ ] SMART App Launch and an OAuth2 authorization server, with
-      `.well-known/smart-configuration` beside it. How a SMART scope becomes a
-      `storage.Scope` is specified in `docs/design/smart-scope-spec.md`; the
-      endpoints are ordinary once that is settled and unsafe before it is
+- [x] SMART App Launch, standalone — `/oauth2/authorize`, `/oauth2/token`, PKCE
+      S256 required of every client, rotating refresh tokens, and
+      `.well-known/smart-configuration` beside them. How a SMART scope becomes a
+      `storage.Scope` is specified in `docs/design/smart-scope-spec.md` and the
+      endpoints in `docs/design/smart-endpoints-spec.md`
+- [ ] SMART Backend Services — `private_key_jwt` and the `client_credentials`
+      grant, which is what makes a `system/` scope mean anything. Until then
+      `authz.ParseScope` refuses `system/` rather than softening it to a shared
+      secret. `packages/project/jwks.go` reads a registration's public keys and
+      nothing uses it yet
+- [ ] OpenID Connect — an `id_token`, so `openid`, `fhirUser` and `profile` can be
+      granted rather than refused by name
+- [ ] EHR launch — the `launch` parameter as an opaque handle an EHR issues and
+      this server resolves, rather than as the patient id it is read as today
 - [ ] ABDM profiles (NRCeS) — 38 core profiles and 42 value sets, which needs
       profile application beyond the root invariants this build checks today,
       and the terminology directory back for SNOMED CT India and LOINC
