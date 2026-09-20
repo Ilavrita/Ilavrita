@@ -305,7 +305,34 @@ func respondResource(request *core.RequestEvent, status int, record storage.Reso
 	request.Response.Header().Set(etagField, weakETag(record.Version))
 	request.Response.Header().Set(lastModifiedField, httpDate(record.LastUpdated))
 
-	return respondBody(request, status, body)
+	return respondAsPreferred(request, status, body)
+}
+
+// respondAsPreferred answers a write with what the client said it wanted.
+//
+// The headers are already set either way: a client that asked for nothing back
+// still needs the version it just wrote, and Location already names it.
+func respondAsPreferred(request *core.RequestEvent, status int, body []byte) error {
+	// Only a write is asked about. A read answers the resource because the
+	// resource is what was asked for.
+	if !carriesBody(request.Request.Method) && request.Request.Method != http.MethodDelete {
+		return respondBody(request, status, body)
+	}
+
+	switch preferredReturn(request) {
+	case returnMinimal:
+		request.Response.WriteHeader(status)
+
+		return nil
+
+	case returnOutcome:
+		return request.JSON(status, fhir.NewOperationOutcome(
+			fhir.SeverityInformation, fhir.CodeInformational,
+			"The resource was written."))
+
+	default:
+		return respondBody(request, status, body)
+	}
 }
 
 // respondCreated answers a write that brought a resource into existence, naming
