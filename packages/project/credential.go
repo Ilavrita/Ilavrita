@@ -59,6 +59,22 @@ func (s ClientSecret) hash() CredentialHash {
 	return CredentialHash(hex.EncodeToString(sum[:]))
 }
 
+// ParseClientSecret reads a secret a caller presented.
+//
+// It is the one way an outside value becomes a ClientSecret, and it confers
+// nothing by itself: what a presented secret names is decided by the credential
+// its hash matches, or by nothing. Nothing about the string is validated here
+// beyond its presence, because a secret this server did not mint should fail the
+// comparison rather than a shape check — the two are the same answer, and only
+// one of them takes constant time.
+func ParseClientSecret(raw string) (ClientSecret, error) {
+	if raw == "" {
+		return ClientSecret{}, fmt.Errorf("%w: no client secret was presented", ErrInvalidCredentialState)
+	}
+
+	return ClientSecret{raw: raw}, nil
+}
+
 // mintClientSecret draws a secret from the reader. A short or failed read mints
 // nothing rather than a secret an attacker could predict.
 func mintClientSecret(random io.Reader) (ClientSecret, error) {
