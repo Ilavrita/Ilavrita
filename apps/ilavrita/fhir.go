@@ -117,7 +117,16 @@ func registerFHIRRoutes(routes *router.Router[*core.RequestEvent]) {
 	// carries no cross-origin headers at all.
 	base.Unbind(apis.DefaultCorsMiddlewareId)
 
-	base.GET(metadataPath, describeCapabilities)
+	// The CapabilityStatement is the exception, and is registered outside that
+	// group so it keeps them. SMART requires cross-origin access to both public
+	// discovery endpoints — metadata and .well-known/smart-configuration — and a
+	// browser app reads them before it holds anything to protect.
+	//
+	// It is safe because the runtime allows every origin without allowing
+	// credentials: a browser will not attach an Authorization header to such a
+	// request, so what a cross-origin caller reads is what an anonymous one
+	// reads, which is the built-in parameter set and nothing a Project defined.
+	routes.GET(fhir.BasePath+metadataPath, describeCapabilities)
 
 	// Reserved segments, not logical ids: every method an instance route answers
 	// is refused on them, so none of them reads one as an id. _search keeps the

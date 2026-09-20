@@ -15,6 +15,7 @@ import (
 	"github.com/Ilavrita/Ilavrita/packages/fhir"
 	"github.com/Ilavrita/Ilavrita/packages/project"
 	sqlite "github.com/Ilavrita/Ilavrita/packages/storage/pocketbase"
+	"github.com/pocketbase/pocketbase/apis"
 	"github.com/pocketbase/pocketbase/core"
 	"github.com/pocketbase/pocketbase/tools/router"
 )
@@ -149,6 +150,12 @@ func allRoutes(t *testing.T) http.Handler {
 		func(response http.ResponseWriter, request *http.Request) (*core.RequestEvent, router.EventCleanupFunc) {
 			return &core.RequestEvent{Event: router.Event{Response: response, Request: request}}, nil
 		})
+
+	// The runtime binds this, and a route group that unbinds it is making a
+	// decision these tests should be able to see. Without it here, every
+	// cross-origin assertion would pass by accident: the header would be absent
+	// because nothing ever added it.
+	routes.Bind(apis.CORS(apis.CORSConfig{AllowOrigins: []string{"*"}}))
 
 	registerAuthRoutes(routes)
 	registerOAuthRoutes(routes)

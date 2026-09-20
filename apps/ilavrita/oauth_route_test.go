@@ -1120,3 +1120,51 @@ func TestAConsentPageThisServerCannotRedirectToIsRefusedAtStartup(t *testing.T) 
 		t.Errorf("read %q", held)
 	}
 }
+
+// TestBothPublicDiscoveryEndpointsAreReadableCrossOrigin.
+//
+// SMART requires it of a server supporting browser apps, and this one declares
+// client-public. A browser app reads both before it holds anything to protect,
+// so refusing the origin would make it unable to start.
+//
+// The rest of the FHIR surface deliberately carries no cross-origin headers at
+// all, which is what the second half asserts: this is an exception for two
+// public documents, not a relaxation.
+func TestBothPublicDiscoveryEndpointsAreReadableCrossOrigin(t *testing.T) {
+	routes, _ := launchingServer(t, project.ClientPublic)
+
+	for name, path := range map[string]string{
+		"the discovery document":  smartConfigurationPath,
+		"the CapabilityStatement": fhir.BasePath + metadataPath,
+	} {
+		t.Run(name, func(t *testing.T) {
+			sent := httptest.NewRequest(http.MethodGet, path, nil)
+			sent.Host = testHost
+			sent.Header.Set("Origin", "https://app.example.test")
+
+			recorder := httptest.NewRecorder()
+			routes.ServeHTTP(recorder, sent)
+
+			if recorder.Code != http.StatusOK {
+				t.Fatalf("%s answered %d", name, recorder.Code)
+			}
+
+			if recorder.Header().Get("Access-Control-Allow-Origin") == "" {
+				t.Errorf("%s carries no Access-Control-Allow-Origin, so no browser app can read it", name)
+			}
+		})
+	}
+
+	// And a resource route still does not, because patient data is not
+	// something another origin may read.
+	sent := httptest.NewRequest(http.MethodGet, fhir.BasePath+"/Organization/org-1", nil)
+	sent.Host = testHost
+	sent.Header.Set("Origin", "https://app.example.test")
+
+	recorder := httptest.NewRecorder()
+	routes.ServeHTTP(recorder, sent)
+
+	if recorder.Header().Get("Access-Control-Allow-Origin") != "" {
+		t.Error("a resource route is readable cross-origin")
+	}
+}

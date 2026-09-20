@@ -85,16 +85,29 @@ func runtimeRoutes(t *testing.T) http.Handler {
 // No script on another origin may read patient data. The runtime allows every
 // origin by default, so the FHIR surface has to withdraw that policy rather
 // than inherit it, preflight included.
-func TestTheFHIRSurfaceCarriesNoCrossOriginHeaders(t *testing.T) {
+//
+// The CapabilityStatement is the one exception, and it is deliberate: SMART
+// requires cross-origin access to both public discovery documents, and a browser
+// app reads them before it holds anything to protect. It is asserted separately
+// — see TestBothPublicDiscoveryEndpointsAreReadableCrossOrigin — so that the
+// exception is something a test states rather than something this one forgot.
+//
+// What makes it safe is that it carries no data: it is unauthenticated, and the
+// runtime allows every origin without allowing credentials, so a browser will
+// not attach an Authorization header to the request. A cross-origin caller reads
+// what an anonymous one reads.
+func TestEveryFHIRRouteCarryingDataRefusesAnotherOrigin(t *testing.T) {
 	serve(t, &backend{})
 
 	routes := runtimeRoutes(t)
 	const forged = "https://evil.example"
 
 	for _, attempt := range []call{
-		{method: http.MethodGet, path: fhir.BasePath + metadataPath, origin: forged},
 		{method: http.MethodOptions, path: resourcePath("Organization", "example"), origin: forged},
 		{method: http.MethodGet, path: resourcePath("Organization", "example"), origin: forged},
+		{method: http.MethodGet, path: fhir.BasePath + "/Organization", origin: forged},
+		{method: http.MethodPost, path: fhir.BasePath, origin: forged},
+		{method: http.MethodGet, path: fhir.BasePath + "/_history", origin: forged},
 	} {
 		answer := attempt.send(t, routes)
 		if got := answer.Header().Get(allowOriginField); got != "" {
