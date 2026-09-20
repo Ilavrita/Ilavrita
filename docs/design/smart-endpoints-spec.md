@@ -115,9 +115,10 @@ does not serve, `c` without `u` — is therefore visible to the app rather than 
 2. ~~The authorization code: domain type, table, store~~ — **built**
 3. ~~`GET`/`POST /oauth2/authorize`~~ — **built**
 4. ~~`POST /oauth2/token`, `authorization_code` grant~~ — **built**
-5. Refresh tokens and the `refresh_token` grant — **not built**
+5. ~~Refresh tokens and the `refresh_token` grant~~ — **built**
 6. `private_key_jwt` and the `client_credentials` grant, which is what unblocks `system/` —
-   **not built**
+   **partly built**: `project.JWKS` parses and holds a registration's public keys, and nothing
+   uses it yet. What remains is in section 12.
 7. ~~`.well-known/smart-configuration`~~ — **built**
 
 ## 10. What the standalone launch does today
@@ -129,10 +130,48 @@ it at `POST /oauth2/token` with its verifier, and receives a session narrowed to
 approved. `authz.Narrow` applies at every request thereafter, against whatever the policy says
 then.
 
-What a client cannot yet do is stay signed in past an hour without sending the person back
-through consent, because there is no refresh grant; and a backend service cannot obtain a token at
-all, because `private_key_jwt` does not exist and `system/` scopes stay refused.
+An approval naming `offline_access` or `online_access` also receives a refresh token, rotated on
+every use. A spent one presented again is a copy somebody else is holding, so the grant dies: every
+rotation of it, and every session it minted. Revoking only the chain would stop the next refresh
+while leaving whatever the replayer already obtained alive until it expired on its own, which is
+the half that matters least.
 
-Both absences are visible rather than silent: `grant_types_supported` names
-`authorization_code` alone, and a `system/` scope is reported in `refused` with its reason. A
-client reading either learns the truth before it depends on the opposite.
+What a backend service cannot yet do is obtain a token at all, because `private_key_jwt` does not
+exist and `system/` scopes stay refused. That absence is visible rather than silent:
+`grant_types_supported` names `authorization_code` and `refresh_token` only, and a `system/` scope
+is reported in `refused` with its reason. A client reading either learns the truth before it
+depends on the opposite.
+
+## 11. What a refresh token costs
+
+It is the longest-lived credential this server issues, so its ceiling is the one that matters. It
+is thirty days, and it **travels across rotations rather than restarting** (decision): an app
+refreshing hourly expires on the same day as one that refreshed once. Without that, the limit
+would apply only to apps nobody used, which is precisely backwards.
+
+A spent token's row is kept rather than deleted, and keeps its digest. That digest is no longer a
+credential — it authorizes nothing — and exists only to be recognised: a deleted row would answer
+"unknown", which is what a guess answers too, and a replay would be indistinguishable from noise.
+
+## 12. What `private_key_jwt` still needs
+
+`project.JWKS` is built: it parses a registration's public key set, refuses a key this server
+cannot verify against, refuses one carrying private material, and selects by `kid`. Only RS384 and
+ES384 are accepted, stated here rather than read from a token's own header — a verifier that
+trusts the header is one an attacker tells which algorithm to use.
+
+**Inline key sets only** (decision). SMART Backend Services lets a client register `jwks` or
+`jwks_uri`; a URL would make the token endpoint fetch a client-controlled address on every
+authentication, which is an outbound request this server does not otherwise make, an availability
+dependency on somebody else's host, and a request-forgery surface aimed at whatever the deployment
+can reach. A client pastes its key set instead.
+
+Still missing:
+
+- The column and migration to hold a registration's key set
+- Verifying a `client_assertion`: signature against the registered keys, `iss` and `sub` equal to
+  the client id, `aud` equal to the token endpoint, a short expiry, and a `jti` replay table so one
+  assertion authenticates once
+- `authz.ParseScope` accepting `system/`, and `Narrow` resolving it against the client
+  application's own standing rather than a person's
+- The `client_credentials` grant itself
