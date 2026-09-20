@@ -134,6 +134,35 @@ func VerifyClientAssertion(
 	}, nil
 }
 
+// ClientIDFromAssertion reads which client an assertion claims to be, without
+// verifying anything at all.
+//
+// It exists because the lookup has to happen before the proof: a registration's
+// keys are what verify the signature, and the id is the only thing that finds
+// the registration. So this reads a claim, and a claim is all it is — every
+// caller must go on to verify the assertion against the keys it found, and what
+// comes back from here confers nothing.
+//
+// The name says so deliberately. A function called ParseClientAssertion would be
+// one a caller could believe had checked something.
+func ClientIDFromAssertion(token string) (ClientApplicationID, error) {
+	if len(token) > maxAssertion {
+		return "", fmt.Errorf("%w: %d characters exceeds the %d an assertion carries",
+			ErrInvalidAssertion, len(token), maxAssertion)
+	}
+
+	_, _, _, claims, err := splitAssertion(token)
+	if err != nil {
+		return "", err
+	}
+
+	if claims.Issuer == "" {
+		return "", fmt.Errorf("%w: an assertion names the client it claims to be", ErrInvalidAssertion)
+	}
+
+	return ClientApplicationID(claims.Issuer), nil
+}
+
 // splitAssertion reads the three parts of a compact JWS.
 func splitAssertion(token string) ([]byte, []byte, assertionHeader, assertionClaims, error) {
 	var (

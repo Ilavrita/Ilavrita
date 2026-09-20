@@ -127,6 +127,7 @@ type Session struct {
 	id         SessionID
 	project    ID
 	user       UserID
+	client     ClientApplicationID
 	membership MembershipID
 	digest     string
 	state      SessionState
@@ -139,8 +140,14 @@ type Session struct {
 
 // SessionRecord is the shape a store rehydrates a persisted row through.
 type SessionRecord struct {
-	ID         SessionID
-	User       UserID
+	ID SessionID
+
+	// User and Client are the two principals a session may name, and exactly one
+	// is set. A person's session names a user; a backend service's names the
+	// registration whose key signed for it.
+	User   UserID
+	Client ClientApplicationID
+
 	Membership MembershipID
 	Digest     string
 	State      SessionState
@@ -209,8 +216,42 @@ func IssueAppSession(
 	return issued, token, nil
 }
 
-// issueSession is what both minting paths come to, so neither can validate less
-// than the other.
+// IssueServiceSession mints one session for a backend service, whose principal
+// is the registration itself rather than any person.
+//
+// It is a separate constructor rather than a flag, because the two differ in
+// what they may hold: a service's session names no user and carries no refresh
+// chain — a service holds a signing key and asks again whenever it likes, so
+// there is nobody to interrupt by expiring and nothing to refresh.
+func IssueServiceSession(
+	owner ID, id SessionID, client ClientApplicationID, membership MembershipID,
+	launch LaunchContext, issuedAt time.Time, lifetime time.Duration, random io.Reader,
+) (Session, SessionToken, error) {
+	if err := ValidateClientApplicationID(client); err != nil {
+		return Session{}, SessionToken{}, err
+	}
+
+	if launch.IsZero() {
+		return Session{}, SessionToken{}, fmt.Errorf(
+			"%w: a service's session states what it was granted", ErrInvalidLaunch)
+	}
+
+	// The placeholder identity is never stored: issueSession refuses an empty
+	// one, and the field is cleared below so the session names the registration
+	// and nothing else.
+	issued, token, err := issueSession(
+		owner, id, UserID(client), membership, launch, issuedAt, lifetime, random)
+	if err != nil {
+		return Session{}, SessionToken{}, err
+	}
+
+	issued.user, issued.client = "", client
+
+	return issued, token, nil
+}
+
+// issueSession is what every minting path comes to, so none can validate less
+// than the others.
 func issueSession(
 	owner ID, id SessionID, user UserID, membership MembershipID, launch LaunchContext,
 	issuedAt time.Time, lifetime time.Duration, random io.Reader,
@@ -224,7 +265,8 @@ func issueSession(
 	}
 
 	if user == "" || membership == "" {
-		return Session{}, SessionToken{}, fmt.Errorf("%w: a session names an identity and a membership", ErrMissingID)
+		return Session{}, SessionToken{}, fmt.Errorf(
+			"%w: a session names an identity and a membership", ErrMissingID)
 	}
 
 	if issuedAt.IsZero() {
@@ -260,8 +302,8 @@ func NewSession(owner ID, rec SessionRecord) (Session, error) {
 		return Session{}, err
 	}
 
-	if rec.User == "" || rec.Membership == "" {
-		return Session{}, fmt.Errorf("%w: a session names an identity and a membership", ErrMissingID)
+	if rec.Membership == "" {
+		return Session{}, fmt.Errorf("%w: a session names a membership", ErrMissingID)
 	}
 
 	if !rec.State.Valid() {
@@ -277,9 +319,19 @@ func NewSession(owner ID, rec SessionRecord) (Session, error) {
 		return Session{}, err
 	}
 
+	// One principal, never none and never two. A session naming nobody would be
+	// served as whatever a nil principal reads as, and one naming both is two
+	// principals sharing a token.
+	if (rec.User == "") == (rec.Client == "") {
+		return Session{}, fmt.Errorf(
+			"%w: %s names %s principal", ErrInvalidPrincipal, rec.ID,
+			map[bool]string{true: "no", false: "two"}[rec.User == ""])
+	}
+
 	return Session{
-		id: rec.ID, project: owner, user: rec.User, membership: rec.Membership,
-		digest: rec.Digest, state: rec.State, launch: launch, chain: rec.RefreshChain,
+		id: rec.ID, project: owner, user: rec.User, client: rec.Client,
+		membership: rec.Membership,
+		digest:     rec.Digest, state: rec.State, launch: launch, chain: rec.RefreshChain,
 		createdAt: rec.CreatedAt.UTC(), expiresAt: rec.ExpiresAt.UTC(), revokedAt: rec.RevokedAt.UTC(),
 	}, nil
 }
@@ -385,8 +437,23 @@ func (s Session) RefreshChain() RefreshChainID {
 }
 
 // Principal names the identity a request carrying this session is served as.
+//
+// Which kind it is follows from which field is set, and exactly one always is:
+// NewSession refuses a row naming neither or both, and the table refuses one
+// too. So this never has to choose a default, which is the answer that would be
+// wrong for half of them.
 func (s Session) Principal() PrincipalRef {
+	if s.client != "" {
+		return PrincipalRef{Kind: PrincipalClientApplication, ID: PrincipalID(s.client)}
+	}
+
 	return PrincipalRef{Kind: PrincipalUser, ID: PrincipalID(s.user)}
+}
+
+// Client returns the registration this session belongs to, empty when a person's
+// does.
+func (s Session) Client() ClientApplicationID {
+	return s.client
 }
 
 // Live reports whether the session authorizes anything at this instant. An
