@@ -17,6 +17,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Ilavrita/Ilavrita/packages/authz"
 	"github.com/Ilavrita/Ilavrita/packages/project"
 	sqlite "github.com/Ilavrita/Ilavrita/packages/storage/pocketbase"
 )
@@ -590,5 +591,49 @@ func TestProfileIsRefusedRatherThanGuessedAt(t *testing.T) {
 		return one.Scope == scopeProfile && strings.Contains(one.Reason, scopeFHIRUser)
 	}) {
 		t.Error("profile was refused without pointing at the scope this server does answer")
+	}
+}
+
+// TestATokenGrantedAnIdentityStillReachesWhatItWasGranted.
+//
+// openid and fhirUser name no resource type, so they restrict nothing — but
+// they travel in the same approval as the scopes that do. A server reading one
+// of them as a resource scope fails every request the token was granted for,
+// and the failure looks like a server fault rather than like a scope problem.
+func TestATokenGrantedAnIdentityStillReachesWhatItWasGranted(t *testing.T) {
+	routes, _ := signingServer(t)
+
+	issued := identityFrom(t, routes,
+		"openid fhirUser user/Organization.read user/Organization.write")
+
+	if issued.IDToken == "" {
+		t.Fatal("an approval that granted openid produced no identity token")
+	}
+
+	if wrote := organizationWrite(t, routes, issued.AccessToken); wrote != http.StatusCreated {
+		t.Fatalf("a write the approval granted answered %d", wrote)
+	}
+}
+
+// TestEveryScopeThisServerGrantsCanBeReadBackAsOne.
+//
+// Two lists have to agree: the one deciding which scopes may be granted, and
+// the one authz skips when it reads an approval back. A scope in the first and
+// not the second is a token that authorizes nothing it was granted for, and the
+// only place that shows up is a request — which is how it was found.
+func TestEveryScopeThisServerGrantsCanBeReadBackAsOne(t *testing.T) {
+	grantable := append([]string{scopeOpenID, scopeFHIRUser}, sessionScopes...)
+
+	for _, scope := range grantable {
+		t.Run(scope, func(t *testing.T) {
+			if authz.NarrowsNothing(scope) {
+				return
+			}
+
+			if _, err := authz.ParseScope(scope); err != nil {
+				t.Errorf("%s may be granted and authz can read it neither as a restriction"+
+					" nor as one of the scopes that narrow nothing: %v", scope, err)
+			}
+		})
 	}
 }

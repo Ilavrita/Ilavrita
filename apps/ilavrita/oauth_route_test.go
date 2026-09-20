@@ -1531,3 +1531,37 @@ func TestNoResponseCarryingATokenMayBeCached(t *testing.T) {
 		})
 	}
 }
+
+// TestAScopeThatNarrowsNothingDoesNotBreakEverythingElse.
+//
+// An approval carries scopes of two kinds: ones naming a resource, and ones
+// describing the token — offline_access, launch/patient, openid. Only the first
+// kind narrows anything. The second has to be carried and ignored, because a
+// server that tried to read it as a resource scope would fail every request the
+// token was granted for.
+//
+// The negative assertions elsewhere cannot catch this: "the write was refused"
+// is satisfied by a server fault just as well as by a refusal.
+func TestAScopeThatNarrowsNothingDoesNotBreakEverythingElse(t *testing.T) {
+	routes, _ := launchingServer(t, project.ClientPublic)
+	person := signedIn(t, routes)
+
+	// A write, because it is the one interaction the fixture policy grants
+	// outright: a 201 says the request was authorized, where a read answering
+	// 404 would leave open whether it was authorized and empty or refused.
+	granted := "user/Organization.read user/Organization.write"
+
+	for name, scope := range map[string]string{
+		"a refresh was asked for":            granted + " offline_access",
+		"the session was asked to stay live": granted + " online_access",
+		"a patient context was asked for":    granted + " launch/patient",
+	} {
+		t.Run(name, func(t *testing.T) {
+			issued := tokensFrom(t, routes, person, scope)
+
+			if wrote := organizationWrite(t, routes, issued.AccessToken); wrote != http.StatusCreated {
+				t.Fatalf("a write the approval granted answered %d", wrote)
+			}
+		})
+	}
+}

@@ -60,6 +60,12 @@ func ParseLaunch(held project.LaunchContext) (Launch, error) {
 	granted := make([]SmartScope, 0, len(stated))
 
 	for _, one := range stated {
+		// Carried in the approval, absent from the narrowing: these name no
+		// resource type, so there is nothing here for them to restrict.
+		if NarrowsNothing(one) {
+			continue
+		}
+
 		scope, err := ParseScope(one)
 		if err != nil {
 			return Launch{}, fmt.Errorf("authz: read granted scopes: %w", err)

@@ -98,6 +98,37 @@ var v2Actions = map[rune]storage.Action{
 	's': storage.ActionSearch,
 }
 
+// scopesThatNarrowNothing describe the token rather than the resources it
+// reaches, so none of them is a restriction and none can be parsed as one.
+//
+// They have to be carried, because an app reads back what it was granted and a
+// scope dropped between the approval and the response is one the app believes
+// it holds. They have to be ignored, because reading one as a resource scope
+// fails every request the token was actually granted for.
+//
+// The list is closed on purpose. Skipping anything unrecognised would be
+// dropping whatever restriction this build did not understand, which is the
+// silent widening ParseLaunch exists to prevent — so a scope not named here
+// still fails the launch.
+var scopesThatNarrowNothing = []string{
+	// What the token is for, rather than what it reaches.
+	"launch/patient", "online_access", "offline_access",
+
+	// OpenID Connect. They decide what the identity token says, and the identity
+	// token is not something a Scope bounds.
+	"openid", "fhirUser",
+}
+
+// NarrowsNothing reports whether a scope describes the token rather than the
+// resources it reaches.
+//
+// It is exported so the surface that decides which scopes to offer and the one
+// that reads them back cannot disagree: a scope granted by one and unparseable
+// by the other is a token that authorizes nothing it was granted for.
+func NarrowsNothing(scope string) bool {
+	return slices.Contains(scopesThatNarrowNothing, scope)
+}
+
 // ParseScope reads one scope string.
 func ParseScope(stated string) (SmartScope, error) {
 	context, rest, found := strings.Cut(strings.TrimSpace(stated), "/")
