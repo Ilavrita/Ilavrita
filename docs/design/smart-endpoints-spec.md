@@ -166,12 +166,35 @@ authentication, which is an outbound request this server does not otherwise make
 dependency on somebody else's host, and a request-forgery surface aimed at whatever the deployment
 can reach. A client pastes its key set instead.
 
-Still missing:
+Built since:
 
-- The column and migration to hold a registration's key set
-- Verifying a `client_assertion`: signature against the registered keys, `iss` and `sub` equal to
-  the client id, `aud` equal to the token endpoint, a short expiry, and a `jti` replay table so one
-  assertion authenticates once
-- `authz.ParseScope` accepting `system/`, and `Narrow` resolving it against the client
-  application's own standing rather than a person's
-- The `client_credentials` grant itself
+- The `jwks` column, its migration, and the `client_assertion_jtis` table
+- `project.VerifyClientAssertion` — signature against the registered keys, `iss` and `sub` equal to
+  the client id, `aud` equal to the token endpoint, a bounded expiry, and the `jti` and expiry
+  handed back so a caller can spend them. The accepted algorithms are a list in that file, checked
+  against the header rather than taken from it
+- `ClientApplicationStore.SpendAssertion`, where the insert *is* the check: a read that asked
+  whether a jti had been seen and an insert that recorded it would leave a window two concurrent
+  presentations both passed through
+- `authz.ParseScope` accepting `system/`, and `Narrow` treating it as it treats `user/` — because
+  what makes it a *system* scope is whose Grants went in, not anything the narrowing does
+  differently
+- The authorization endpoint refusing `system/` by name. A person cannot approve one: it narrows
+  against whoever asks, so one approved by a person would narrow against *their* standing. That is
+  the whole safety argument for splitting the two flows
+
+### What the `client_credentials` grant still needs
+
+**A session cannot currently name a machine principal.** `sessions.user_id` carries a foreign key
+to `users`, and `Session.Principal()` returns `PrincipalUser` unconditionally. A backend service's
+token is a session whose principal is the registration, so the grant needs `sessions` to hold one —
+a change to the table every request authenticates through, and not one to make in a hurry.
+
+**A client id does not resolve without a Project.** A client assertion names the client in `iss`
+and `sub` and this server in `aud`; it names no Project. The obvious answer — a unique index on
+`client_applications (id)`, the way `ux_sessions_token` is tenant-exempt — was tried and is wrong:
+this build's own fixtures register the same client id in two Projects, so ids are unique per
+Project and not per install. Either the grant carries the Project some other way, or client ids
+become install-wide, which is a migration over existing data.
+
+Both are decisions rather than plumbing, which is why the grant is not half-built here.
