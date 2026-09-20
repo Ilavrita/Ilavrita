@@ -24,6 +24,10 @@ most expensive mistake on this project so far.
 | Migrations, seeds and backfills | Idempotent, and recorded in `super_jobs` against the table |
 | Everything else under `/fhir/R4` | `501` |
 | `POST /auth/login`, `POST /auth/logout`, `GET /auth/session` | Working |
+| `GET`/`POST /oauth2/authorize`, `POST /oauth2/token` | Working: standalone launch, PKCE S256 required, rotating refresh |
+| `GET`/`POST /oauth2/consent` | Working: this server's own API for the consent page a deployment supplies |
+| `POST /oauth2/token` with `client_credentials` | Working: `private_key_jwt`, RS384 and ES384, which is what `system/` scopes need |
+| `GET /oauth2/jwks`, `GET /.well-known/openid-configuration` | Working where a sealing key is configured; `404` where none is |
 | `/admin/projects` and the surface beneath it | Working, for a Super Admin or the Project's own admin |
 
 **126 resource types are served** — 64 non-clinical and 62 clinical, out of R4's 146. The two families are reached
@@ -40,9 +44,12 @@ Encounter it also names, because refusing those would refuse nearly every real o
 one: a request authenticates or it reaches nothing.
 
 Do not deploy this anywhere near patient data yet. The audit trail, the second factor and its
-recovery path, the login throttle, search, backup and restore all exist now; what is missing is
-validation against a resource's own definition, a migration story between releases, and any review
-of this by somebody other than us.
+recovery path, the login throttle, search, backup and restore, validation against a resource's own
+definition, and SMART App Launch all exist now. What is missing is a migration story between
+releases and **any review of this by somebody other than us** — which is the one that matters,
+because every test saying a boundary holds was written by whoever wrote the boundary. Inferno
+judges protocol behaviour and found three real defects doing it; it does not judge whether a Scope
+leaks.
 
 A `client_application` or `bot` development principal now also needs a registered, active row in
 its Project, and an id carrying the `cli_` or `bot_` prefix. An id outside the namespace stops the
@@ -476,6 +483,56 @@ wrongly, and reverted rather than shipped looking like a feed. Doing it properly
 Search parameters are deliberately a short list — `packages/search/registry.go` is the
 whole of what this build answers, and adding one means adding a projection a write maintains and
 a predicate a read compiles.
+
+**12. SMART App Launch, all three ways in. Done.** A standalone launch, backend services, and an
+identity token. `docs/design/smart-scope-spec.md` holds how a SMART scope becomes a
+`storage.Scope` and `docs/design/smart-endpoints-spec.md` holds the endpoint decisions; what
+follows is only what costs time to relearn.
+
+**The consent screen is not this server's.** `/oauth2/authorize` validates the shape and redirects
+to whatever `ILAVRITA_CONSENT_URL` names, because a consent page has to be styled, translated and
+kept accessible by whoever deploys it. That page reads `GET /oauth2/consent` for what would be
+granted and what is refused and why, and posts the approval to `POST /oauth2/consent`. The pair is
+this server's own API, which is why it is not under the authorization endpoint: that endpoint
+belongs to the app and this pair belongs to the page. `scripts/consent` is a test-only page that
+approves everything without asking anybody, and says so on every start.
+
+**The authorization endpoint answers GET and POST alike**, because SMART requires both and an app
+picks which. A form request answers `303` rather than `302`, since the page being redirected to is
+a `GET` and only `303` requires that change of method.
+
+**A backend service's Project is decided by its signature, not claimed.** A client id is unique
+within a Project rather than across the install, so every registration bearing the claimed id is
+fetched and the assertion verified against each one's keys; two that verify is refused as
+ambiguous rather than resolved by picking one. Each `jti` is spent once and kept until it expires.
+
+**An identity token is RS256** — narrower than the RS384/ES384 a client assertion is verified
+with, because SMART requires RSA SHA-256 of this token by name. They are separate choices about
+separate tokens and neither implies the other. The signing key is minted on first need, sealed
+under the same configured secret as everything else, and one row is active at a time — a partial
+unique index makes a second active key unrepresentable, and `EnsureActive` re-reads after
+inserting so a process that lost the race signs with the key that landed rather than the one it
+minted.
+
+**13. Conformance against Inferno. Done, and it found three things.** `scripts/seedlaunch` seeds a
+Project, an identity, a policy and a registration through the real stores; with `scripts/consent`
+that is enough to drive Inferno's SMART App Launch kit end to end. Everything passes except the
+TLS checks, which a plaintext local run cannot satisfy.
+
+It was worth running. The token endpoint answered without `Cache-Control: no-store`, which RFC
+6749 section 5.1 requires of any response holding a token. The authorization endpoint read only a
+query, where SMART requires a form as well — and the Go suite had never sent one, because it was
+written against the same reading of the specification that wrote the handler.
+
+The third is the one to remember. **An approval carrying `offline_access`, `online_access` or
+`launch/patient` produced a token that failed every FHIR request with a server fault**, because
+those scopes name no resource type and `authz.ParseLaunch` tried to read each as a restriction. It
+had been that way since refresh was built. Nothing caught it because every test holding such a
+token asserted a *refusal* — and a `500` satisfies "the write was refused" exactly as well as a
+`403` does. `authz.NarrowsNothing` is the closed list that carries them and ignores them, and a
+scope absent from it still fails the launch rather than being dropped, because a dropped
+restriction is a widening. **A negative assertion cannot tell a refusal from a fault. Where the
+point is that something is permitted, assert the success.**
 
 ## 8. Conventions
 

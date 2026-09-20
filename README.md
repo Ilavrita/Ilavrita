@@ -87,8 +87,9 @@ and an architecture that does not have to be rewritten to reach a clustered one.
 | Audit trail | Working — every interaction and login, in the transaction that did it |
 | Authentication | Working — password, sessions, TOTP second factor with an administrator recovery path, per-install throttle |
 | SMART App Launch | Working for the standalone launch — authorize, token, PKCE S256 required of every client, rotating refresh, `.well-known/smart-configuration` |
-| SMART Backend Services | Not implemented — `private_key_jwt` is unbuilt, so `system/` scopes are refused rather than granted |
-| OpenID Connect | Not implemented — no `id_token`, so `openid`, `fhirUser` and `profile` are refused by name |
+| SMART Backend Services | Working — `client_credentials` with `private_key_jwt`, RS384 and ES384, so `system/` scopes are granted |
+| OpenID Connect | Working where a sealing key is configured — `id_token` signed RS256, a published JWKS, OIDC discovery; `profile` stays refused |
+| SMART EHR launch | Not implemented — `launch` is read as a patient id, not as the opaque handle an EHR issues |
 | Bringing an install into use | Working — one claim token, written to the data directory, spent once through `POST /auth/claim` |
 | Binary payloads | Working — bytes stored outside the database |
 | Subscriptions | Working — `rest-hook`, and `websocket` within one process; queues are claimed, so replicas do not notify twice |

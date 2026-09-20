@@ -89,13 +89,21 @@ single security and Project model, even though they ship in phases.
       `.well-known/smart-configuration` beside them. How a SMART scope becomes a
       `storage.Scope` is specified in `docs/design/smart-scope-spec.md` and the
       endpoints in `docs/design/smart-endpoints-spec.md`
-- [ ] SMART Backend Services — `private_key_jwt` and the `client_credentials`
-      grant, which is what makes a `system/` scope mean anything. Until then
-      `authz.ParseScope` refuses `system/` rather than softening it to a shared
-      secret. `packages/project/jwks.go` reads a registration's public keys and
-      nothing uses it yet
-- [ ] OpenID Connect — an `id_token`, so `openid`, `fhirUser` and `profile` can be
-      granted rather than refused by name
+- [x] SMART Backend Services — `private_key_jwt` and the `client_credentials`
+      grant, RS384 and ES384, which is what makes a `system/` scope mean
+      something. Which Project a service belongs to is decided by the signature
+      rather than claimed: every registration bearing the id is fetched and the
+      assertion verified against each one's keys, and two that verify is refused
+      as ambiguous
+- [x] OpenID Connect — an `id_token` signed RS256, a published key set at
+      `/oauth2/jwks`, and discovery at the host root, so `openid` and `fhirUser`
+      are granted rather than refused by name. Conditional on a sealing key: a
+      deployment holding none issues no identity token and omits the issuer and
+      the `sso-openid-connect` capability from both discovery documents rather
+      than advertising an issuer that answers nothing. `profile` stays refused —
+      SMART calls it a synonym for `fhirUser` and OpenID Connect gives it a claim
+      set of its own, and granting it would answer one reading while
+      disappointing the other
 - [ ] EHR launch — the `launch` parameter as an opaque handle an EHR issues and
       this server resolves, rather than as the patient id it is read as today
 - [ ] ABDM profiles (NRCeS) — 38 core profiles and 42 value sets, which needs
@@ -103,12 +111,19 @@ single security and Project model, even though they ship in phases.
       and the terminology directory back for SNOMED CT India and LOINC
 - [ ] Single binary and container image
 
-**Conditional interactions are now the one that matters most.** Several
-resources can be written as one act, and each is checked against its own
-definition and required bindings — so what this server keeps is a record a
-client can rely on. What it cannot yet do is let a client say *write this only
-if it is not already here*, which is how an ingestion pipeline stays idempotent
-and how a transaction entry names a resource by identifier rather than by id.
+**Where Phase 1 stands.** Several resources can be written as one act, each
+checked against its own definition and required bindings; a client can say
+*write this only if it is not already here*, which is how an ingestion pipeline
+stays idempotent and how a transaction entry names a resource by identifier
+rather than by id. An app authorizes through SMART — standalone launch, backend
+services, and an identity token — and Inferno's SMART App Launch kit passes
+against this build with nothing failing but the TLS checks a plaintext local
+run cannot satisfy.
+
+What is left above is unordered on purpose: EHR launch is the last SMART gap,
+type-level history and Patch are the last REST ones, and neither the single
+binary nor the upgrade procedure is written. Which of those comes next is a
+call nobody has made yet.
 
 ## Phase 2 — control plane and developer platform
 
@@ -123,9 +138,10 @@ import and export, and expanded search behaviour.
 
 Several of these arrived early because Phase 1 needed them: Projects and
 memberships, AccessPolicy with parameterized authorization, client applications
-and service accounts, a TOTP second factor, and `rest-hook` and `websocket`
-subscriptions. What remains in this phase is the rest of the control-plane
-surface, OAuth and OIDC, external identity providers, and the developer tooling.
+and service accounts, a TOTP second factor, `rest-hook` and `websocket`
+subscriptions, and the OAuth and OpenID Connect surface itself. What remains in
+this phase is the rest of the control plane, external identity providers and
+token exchange, and the developer tooling.
 
 ## Phase 3 — automation and application platform
 

@@ -1048,9 +1048,18 @@ authorization surfaces answer no preflight and carry no cross-origin headers: a
 session token is an ambient credential in a way a FHIR bearer token reached
 through a launch is not.
 
-
-
 ## Operational consequence
 
-**Do not put patient data in Ilavrita.** There is no authentication and no audit
-trail. Use synthetic data only.
+**Do not put patient data in Ilavrita. Use synthetic data only.**
+
+The reason is not that the controls are missing. Authentication, authorization,
+Project isolation and the audit trail are built and tested, and this file says so
+above. The reason is that **nothing here has had an external security review**:
+every test that says a boundary holds was written by the same people who wrote
+the boundary, which is exactly the arrangement that cannot find a mistake shared
+between the two. The conformance work was undertaken because an outside
+implementation catches what an inside one cannot, and it promptly did — but it
+judges protocol behaviour, not whether a Scope leaks.
+
+Read the tables above for what is implemented. Read this line for what that is
+worth without somebody else having checked it.
