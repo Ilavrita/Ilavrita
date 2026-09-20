@@ -111,10 +111,28 @@ does not serve, `c` without `u` — is therefore visible to the app rather than 
 
 ## 9. Order of work
 
-1. Redirect URIs and public/confidential on `ClientApplication`
-2. The authorization code: domain type, table, store
-3. `GET`/`POST /oauth2/authorize`
-4. `POST /oauth2/token`, `authorization_code` grant
-5. Refresh tokens and the `refresh_token` grant
-6. `private_key_jwt` and the `client_credentials` grant, which is what unblocks `system/`
-7. `.well-known/smart-configuration`, which is item #33 and falls out of the rest
+1. ~~Redirect URIs and public/confidential on `ClientApplication`~~ — **built**
+2. ~~The authorization code: domain type, table, store~~ — **built**
+3. ~~`GET`/`POST /oauth2/authorize`~~ — **built**
+4. ~~`POST /oauth2/token`, `authorization_code` grant~~ — **built**
+5. Refresh tokens and the `refresh_token` grant — **not built**
+6. `private_key_jwt` and the `client_credentials` grant, which is what unblocks `system/` —
+   **not built**
+7. ~~`.well-known/smart-configuration`~~ — **built**
+
+## 10. What the standalone launch does today
+
+A public or confidential client registers its redirect addresses, sends a person to
+`GET /oauth2/authorize`, which answers with what it would grant and what it refuses and why; the
+person's UI posts the approval; the code comes back on the registered address; the client redeems
+it at `POST /oauth2/token` with its verifier, and receives a session narrowed to what was
+approved. `authz.Narrow` applies at every request thereafter, against whatever the policy says
+then.
+
+What a client cannot yet do is stay signed in past an hour without sending the person back
+through consent, because there is no refresh grant; and a backend service cannot obtain a token at
+all, because `private_key_jwt` does not exist and `system/` scopes stay refused.
+
+Both absences are visible rather than silent: `grant_types_supported` names
+`authorization_code` alone, and a `system/` scope is reported in `refused` with its reason. A
+client reading either learns the truth before it depends on the opposite.
