@@ -112,20 +112,44 @@ var conditionalInteractions = []servedInteraction{
 func registerFHIRRoutes(routes *router.Router[*core.RequestEvent]) {
 	base := routes.Group(fhir.BasePath)
 
-	// The runtime allows every origin by default. No browser on another origin
-	// may read patient data, so the FHIR surface answers no preflight and
-	// carries no cross-origin headers at all.
-	base.Unbind(apis.DefaultCorsMiddlewareId)
+	// A browser app reaches this API from its own origin, which is the whole
+	// point of a public SMART client: SMART says a server supporting purely
+	// browser-based apps permits cross-origin access to the token endpoint and
+	// to the FHIR REST API. Refusing it here while advertising client-public
+	// would be advertising a launch an app cannot use what it launched for.
+	//
+	// Every origin, and no credentials. Those two go together and neither is
+	// safe without the other: with no Access-Control-Allow-Credentials a
+	// browser attaches nothing ambient — no cookie, no stored authorization —
+	// so a hostile page reaching this API cross-origin has to already hold the
+	// bearer token, and a page holding the token did not need the browser's
+	// help. Allowing credentials alongside `*` would make every session
+	// reachable from every page, which is why the runtime refuses that
+	// combination and why nothing here asks for it.
+	base.Bind(apis.CORS(apis.CORSConfig{
+		AllowOrigins: []string{"*"},
+		AllowMethods: []string{
+			http.MethodGet, http.MethodHead, http.MethodPost,
+			http.MethodPut, http.MethodPatch, http.MethodDelete,
+		},
 
-	// The CapabilityStatement is the exception, and is registered outside that
-	// group so it keeps them. SMART requires cross-origin access to both public
+		// Stated rather than echoed back from the preflight, so what this API
+		// accepts is a decision here rather than whatever a caller asked for.
+		AllowHeaders: []string{
+			"Authorization", "Content-Type", "Accept", "Prefer",
+			"If-Match", "If-None-Match", "If-Modified-Since", "If-None-Exist",
+		},
+
+		// A browser cannot read a response header that is not exposed. These
+		// four are how FHIR answers a write: the version to send back in
+		// If-Match, and where the resource now lives.
+		ExposeHeaders: []string{"ETag", "Location", "Last-Modified", "Content-Location"},
+	}))
+
+	// The CapabilityStatement is registered outside that group, and keeps the
+	// runtime's own policy. SMART requires cross-origin access to both public
 	// discovery endpoints — metadata and .well-known/smart-configuration — and a
 	// browser app reads them before it holds anything to protect.
-	//
-	// It is safe because the runtime allows every origin without allowing
-	// credentials: a browser will not attach an Authorization header to such a
-	// request, so what a cross-origin caller reads is what an anonymous one
-	// reads, which is the built-in parameter set and nothing a Project defined.
 	routes.GET(fhir.BasePath+metadataPath, describeCapabilities)
 
 	// Reserved segments, not logical ids: every method an instance route answers

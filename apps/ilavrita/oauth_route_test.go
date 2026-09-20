@@ -1155,18 +1155,10 @@ func TestBothPublicDiscoveryEndpointsAreReadableCrossOrigin(t *testing.T) {
 		})
 	}
 
-	// And a resource route still does not, because patient data is not
-	// something another origin may read.
-	sent := httptest.NewRequest(http.MethodGet, fhir.BasePath+"/Organization/org-1", nil)
-	sent.Host = testHost
-	sent.Header.Set("Origin", "https://app.example.test")
-
-	recorder := httptest.NewRecorder()
-	routes.ServeHTTP(recorder, sent)
-
-	if recorder.Header().Get("Access-Control-Allow-Origin") != "" {
-		t.Error("a resource route is readable cross-origin")
-	}
+	// What separates these two from a resource route is not the origin policy —
+	// the whole FHIR surface carries one now — but that neither needs a
+	// credential to read. That the resource routes still do is asserted where
+	// authentication is, not here.
 }
 
 // serviceKey is one backend service's key pair and the set its registration

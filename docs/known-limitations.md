@@ -547,9 +547,7 @@ Two kinds of failure remain, and neither is a refusal this server made. Three
 TLS checks — `standalone_auth_tls`, `standalone_token_tls` and
 `smart_backend_services_token_tls_version` — fail because the run was driven
 against a plaintext local server, which is a statement about that deployment.
-And `smart_cors_openid_fhir_user_claim`, which is marked optional, fails because
-the FHIR API refuses cross-origin requests; that one is a real gap and is
-described under Cross-origin requests below.
+Everything else passes, including `smart_cors_openid_fhir_user_claim`.
 
 It found three real defects, and all three are fixed.
 
@@ -1008,39 +1006,48 @@ in.
 
 ## Cross-origin requests
 
-Every FHIR route that carries data sends no CORS headers and answers no
-preflight, so no browser on another origin can read from it. The runtime's own
-default — allow every origin — is withdrawn beneath `/fhir/R4` and left in place
-everywhere else. A browser-based client needs a proxy on its own origin until a
-configurable policy exists.
+The FHIR API answers every origin and allows no credentials, which is what SMART
+requires of a server supporting purely browser-based apps: it says such a server
+permits cross-origin access to the token endpoint and to the FHIR REST API.
+Refusing it while advertising `client-public` would have been advertising a
+launch an app could complete and then not use.
 
-**Five routes are exceptions, and they are the public ones.**
-`/fhir/R4/metadata`, `/fhir/R4/.well-known/smart-configuration`,
-`/.well-known/openid-configuration`, `/oauth2/jwks` and the token endpoint keep
-the runtime's policy. SMART requires cross-origin access to the discovery
-documents, and a browser app reads them before it holds anything to protect; a
-client checking an identity token's signature has to reach the key set from
-wherever it runs. The token endpoint is reached with a code and a verifier the
-app already has, never with an ambient credential a hostile page could replay.
+**The two halves are one decision.** `Access-Control-Allow-Origin: *` lets a
+page send the request; the absence of `Access-Control-Allow-Credentials` is what
+makes that safe. Without it a browser attaches nothing ambient — no cookie, no
+stored authorization — so a hostile page reaching this API has to already hold
+the bearer token, and a page holding the token never needed the browser's help.
+The two together would be every session reachable from every page, and a test
+asserts that pairing can never appear.
 
-What makes the four documents safe is that none of them carries data. All are
-unauthenticated, and the policy allows every origin *without* allowing
-credentials — so a browser will not attach an `Authorization` header to the
-request, and a cross-origin caller reads exactly what an anonymous one reads.
-The key set is the public half of one key and nothing else.
+The preflight allows `Authorization` and the headers a FHIR write needs, and
+`ETag`, `Location`, `Last-Modified` and `Content-Location` are exposed — a
+browser discards a response header that is not, which would leave a browser app
+unable to do a conditional update against something it had just written.
 
-**This is the one place the SMART story is incomplete.** SMART says a server
-supporting purely browser-based apps SHALL permit cross-origin access to the
-token endpoint *and to the FHIR REST API*, for a client's registered origins.
-This build does the first and not the second, while advertising `client-public`
-— so a browser app can complete a launch here and then cannot call the API it
-was launched against. Inferno reports it as one optional failure,
-`smart_cors_openid_fhir_user_claim`; the honest reading is that the capability
-is advertised more broadly than it is served.
+SMART's own wording is narrower than this: *a client's registered origin(s)*.
+Narrowing to that means per-registration origins beside the redirect addresses
+those rows already hold. What is served today is the wider reading.
 
-Closing it properly means per-client origins rather than a blanket allowance:
-the spec says *a client's registered origin(s)*, and the registrations that
-would name them are the same rows that already hold redirect addresses.
+**The four public documents and the token endpoint carry it too**, on the
+runtime's own policy rather than on the one above. `/fhir/R4/metadata`,
+`/fhir/R4/.well-known/smart-configuration`,
+`/.well-known/openid-configuration` and `/oauth2/jwks` are read before a client
+holds anything to protect, and a client checking an identity token's signature
+has to reach the key set from wherever it runs. The token endpoint is reached
+with a code and a verifier the app already has, never with an ambient credential
+a hostile page could replay.
+
+None of the four carries data. All are unauthenticated, so a cross-origin caller
+reads exactly what an anonymous one reads; the key set is the public half of one
+key and nothing else.
+
+**What is still withdrawn is the control plane.** The login, session and
+authorization surfaces answer no preflight and carry no cross-origin headers: a
+session token is an ambient credential in a way a FHIR bearer token reached
+through a launch is not.
+
+
 
 ## Operational consequence
 
