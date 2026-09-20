@@ -587,3 +587,81 @@ func TestAnApprovalCannotWidenWhatWasOffered(t *testing.T) {
 		t.Errorf("an approval named a scope the server never offered: %s", recorder.Body)
 	}
 }
+
+// TestDiscoveryAdvertisesOnlyWhatThisServerDoes.
+//
+// A discovery document is what a conformance suite and every client library
+// believe without checking. Advertising a grant the token endpoint refuses, or a
+// challenge method it will not accept, turns this file into the thing that lies
+// rather than the thing that describes.
+func TestDiscoveryAdvertisesOnlyWhatThisServerDoes(t *testing.T) {
+	routes, _ := launchingServer(t, project.ClientPublic)
+
+	sent := httptest.NewRequest(http.MethodGet, smartConfigurationPath, nil)
+	sent.Host = testHost
+
+	recorder := httptest.NewRecorder()
+	routes.ServeHTTP(recorder, sent)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("discovery: %d %s", recorder.Code, recorder.Body)
+	}
+
+	var held smartConfiguration
+	if err := json.Unmarshal(recorder.Body.Bytes(), &held); err != nil {
+		t.Fatalf("decode the document: %v", err)
+	}
+
+	if held.Issuer != appAudience {
+		t.Errorf("issuer is %q, want the base an aud must name", held.Issuer)
+	}
+
+	// Every advertised challenge method must be one this build accepts.
+	for _, method := range held.ChallengeMethods {
+		if _, err := project.ParseCodeChallenge(appChallenge(), method); err != nil {
+			t.Errorf("discovery advertises %q, which this build refuses", method)
+		}
+	}
+
+	// Every advertised grant must be one the token endpoint answers to.
+	for _, grant := range held.GrantTypes {
+		recorder := redeeming(t, routes, url.Values{"grant_type": {grant}})
+
+		var failure oauthFailure
+		if err := json.Unmarshal(recorder.Body.Bytes(), &failure); err != nil {
+			t.Fatalf("decode the refusal: %v", err)
+		}
+
+		if failure.Code == "unsupported_grant_type" {
+			t.Errorf("discovery advertises the %q grant, which the token endpoint does not issue", grant)
+		}
+	}
+
+	// And the endpoints it names are the ones actually registered, each probed
+	// with the method it serves: a token endpoint answering GET would be the
+	// surprise, not a token endpoint refusing one.
+	for name, held := range map[string]struct {
+		endpoint string
+		method   string
+	}{
+		"authorization_endpoint": {held.AuthorizationEndpoint, http.MethodGet},
+		"token_endpoint":         {held.TokenEndpoint, http.MethodPost},
+	} {
+		parsed, err := url.Parse(held.endpoint)
+		if err != nil {
+			t.Fatalf("parse %s: %v", name, err)
+		}
+
+		probe := httptest.NewRequest(held.method, parsed.Path, strings.NewReader(""))
+		probe.Host = testHost
+		probe.Header.Set(contentTypeField, "application/x-www-form-urlencoded")
+
+		answered := httptest.NewRecorder()
+		routes.ServeHTTP(answered, probe)
+
+		if answered.Code == http.StatusNotFound {
+			t.Errorf("discovery names %s at %q, where nothing answers %s",
+				name, parsed.Path, held.method)
+		}
+	}
+}

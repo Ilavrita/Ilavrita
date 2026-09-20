@@ -121,6 +121,11 @@ func registerOAuthRoutes(routes *router.Router[*core.RequestEvent]) {
 	// costs nothing, and refusing it would make every public browser app
 	// unimplementable.
 	routes.Group(oauthBasePath).POST(tokenPath, issueToken)
+
+	// Discovery is read before a client holds anything, so it authenticates
+	// nobody and keeps the runtime's cross-origin handling: a browser app reads
+	// it from its own origin before it has a token to protect.
+	routes.GET(smartConfigurationPath, describeSmartConfiguration)
 }
 
 // authorizationAsk is what a client asked for, read from a query or a form.
