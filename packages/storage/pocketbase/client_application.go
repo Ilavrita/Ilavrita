@@ -41,7 +41,8 @@ const secretOnFile = project.CredentialHash("[secret on file]")
 
 // clientApplicationColumns is what every read selects, in the order the scan
 // reads them.
-const clientApplicationColumns = "id, name, description, state, kind, version"
+const clientApplicationColumns = "id, name, description, state, kind," +
+	" COALESCE(jwks, ''), version"
 
 // credentialColumns is what every credential read selects. The hash appears only
 // as the single fact the domain asks of it; no projection in this package selects
@@ -146,7 +147,7 @@ func (s *ClientApplicationStore) Create(
 
 	err := conn(ctx, s.db).QueryRowContext(ctx, createApplication,
 		string(app.Project()), string(app.ID()), app.Name(), app.Description(),
-		string(app.State()), string(app.Kind()), stamp, stamp,
+		string(app.State()), string(app.Kind()), app.JWKS().Document(), stamp, stamp,
 	).Scan(&version)
 
 	switch {
@@ -221,12 +222,12 @@ func (s *ClientApplicationStore) ByID(
 	}
 
 	var (
-		scannedID, name, description, state, kind string
-		version                                   int64
+		scannedID, name, description, state, kind, keys string
+		version                                         int64
 	)
 
 	err := conn(ctx, s.db).QueryRowContext(ctx, readApplication, string(proj), string(id)).Scan(
-		&scannedID, &name, &description, &state, &kind, &version)
+		&scannedID, &name, &description, &state, &kind, &keys, &version)
 
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
@@ -245,10 +246,19 @@ func (s *ClientApplicationStore) ByID(
 		return project.ClientApplication{}, 0, false, err
 	}
 
+	// Rebuilt through the same constructor a fresh registration goes through, so
+	// a key set nothing could have written is refused rather than verified
+	// against.
+	registered, err := project.ParseJWKS(keys)
+	if err != nil {
+		return project.ClientApplication{}, 0, false,
+			fmt.Errorf("pocketbase: rebuild the keys of %s: %w", scannedID, err)
+	}
+
 	app, err := project.NewClientApplication(proj, project.ClientApplicationConfig{
 		ID: project.ClientApplicationID(scannedID), Name: name,
 		Description: description, State: project.ServiceState(state),
-		Kind: project.ClientKind(kind), RedirectURIs: addresses,
+		Kind: project.ClientKind(kind), RedirectURIs: addresses, JWKS: registered,
 	})
 	if err != nil {
 		return project.ClientApplication{}, 0, false,

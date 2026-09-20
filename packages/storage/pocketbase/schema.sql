@@ -151,6 +151,16 @@ CREATE TABLE IF NOT EXISTS client_applications (
   kind        TEXT NOT NULL DEFAULT 'confidential'
                 CHECK (kind IN ('public', 'confidential')),
 
+  -- The public keys a backend service signs its client assertions with, as a
+  -- JWK Set, NULL for a registration that signs none.
+  --
+  -- Inline rather than a jwks_uri, deliberately. A URL would make the token
+  -- endpoint fetch a client-controlled address on every authentication: an
+  -- outbound request this server otherwise never makes, an availability
+  -- dependency on somebody else's host, and a request-forgery surface aimed at
+  -- whatever the deployment can reach.
+  jwks        TEXT,
+
   created_at  BIGINT NOT NULL,
   updated_at  BIGINT NOT NULL,
   revoked_at  BIGINT,
@@ -354,6 +364,35 @@ CREATE INDEX IF NOT EXISTS ix_refresh_tokens_expiry
 -- For sweeping what expired without anyone redeeming it.
 CREATE INDEX IF NOT EXISTS ix_authorization_codes_expiry
   ON authorization_codes (expires_at);
+
+-- The client assertions already spent, so none authenticates twice.
+
+-- A client assertion carries a jti its client chose, and SMART requires a server
+-- to refuse a second use of one. The row is kept until the assertion it names
+-- would have expired anyway: after that the expiry refuses it, and remembering
+-- it longer would be remembering something nothing can present.
+
+-- tenant: project_id
+CREATE TABLE IF NOT EXISTS client_assertion_jtis (
+  project_id            TEXT NOT NULL,
+  client_application_id TEXT NOT NULL,
+  jti                   TEXT NOT NULL,
+  expires_at            BIGINT NOT NULL,
+
+  -- The key is what makes a replay a conflict rather than a second row. It is
+  -- per client, because a jti is unique within the client that chose it and two
+  -- clients picking the same string are not replaying each other.
+  PRIMARY KEY (project_id, client_application_id, jti),
+
+  CHECK (jti <> ''),
+
+  FOREIGN KEY (project_id, client_application_id)
+    REFERENCES client_applications (project_id, id) ON DELETE CASCADE ON UPDATE RESTRICT
+);
+
+-- For sweeping what expired.
+CREATE INDEX IF NOT EXISTS ix_client_assertion_jtis_expiry
+  ON client_assertion_jtis (expires_at);
 
 -- A bot is invoked by this server rather than authenticated by it. No credential
 -- table names this one and no column here holds a hash, so a bot secret is

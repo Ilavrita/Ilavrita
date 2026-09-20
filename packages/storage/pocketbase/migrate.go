@@ -62,6 +62,13 @@ var (
 	ErrSessionRefreshChainMissing = errors.New(
 		"pocketbase: sessions cannot say which refresh chain minted them")
 
+	// ErrClientJWKSMissing reports a client_applications table with nowhere to
+	// hold the keys a backend service signs with. Every such client would then
+	// authenticate against no key at all, and the safe reading — refuse them
+	// all — is indistinguishable from the feature being switched off.
+	ErrClientJWKSMissing = errors.New(
+		"pocketbase: client_applications cannot hold a registration's public keys")
+
 	// ErrRebuildWouldDropColumn reports an old table holding a column the current
 	// declaration does not. The rebuild copies rows, so a dropped column is lost
 	// data and the rebuild refuses rather than performing it.
@@ -121,6 +128,10 @@ const (
 	// refreshChainColumn is what a session records the grant that minted it in,
 	// and what an install that predates the refresh grant does not declare.
 	refreshChainColumn = "refresh_chain"
+
+	// clientJWKSColumn is what a registration holds its public keys in, and what
+	// an install that predates backend services does not declare.
+	clientJWKSColumn = "jwks"
 )
 
 // principalParents are the registries project_memberships must name, each with
@@ -216,6 +227,7 @@ func assertServable(ctx context.Context, db *sql.DB) error {
 		AssertQueueClaims,
 		AssertSessionLaunch,
 		AssertClientKind,
+		AssertClientJWKS,
 		AssertSessionRefreshChain,
 		AssertNoSystemClientApplicationDocuments,
 	} {
@@ -325,6 +337,14 @@ func schemaMigrations() []schemaMigration {
 			},
 			rebuild: rebuildSessionRefreshChain,
 			applied: "refresh_chain, so a replayed refresh token can revoke what it already minted",
+		},
+		{
+			job: SuperJob{
+				Name: "migrate.client_applications.jwks",
+				Kind: JobMigration, Subject: clientTable,
+			},
+			rebuild: rebuildClientJWKS,
+			applied: "jwks, so a backend service can register the keys it signs assertions with",
 		},
 	}
 }
@@ -657,6 +677,49 @@ func rebuildSessionRefreshChain(ctx context.Context, db *sql.DB) (bool, error) {
 	}
 
 	return true, nil
+}
+
+// rebuildClientJWKS adopts the key set column onto a client_applications table
+// that predates backend services.
+//
+// Every registration it carries across signed no assertion — there was nothing
+// to sign one against — so NULL is what each of them already meant.
+func rebuildClientJWKS(ctx context.Context, db *sql.DB) (bool, error) {
+	present, err := hasColumn(ctx, db, clientTable, clientJWKSColumn)
+	if err != nil || present {
+		return false, err
+	}
+
+	declared, err := hasTable(ctx, db, clientTable)
+	if err != nil || !declared {
+		return false, err
+	}
+
+	plan, err := planRebuild(ctx, db, clientTable)
+	if err != nil {
+		return false, err
+	}
+
+	if err := performRebuild(ctx, db, plan); err != nil {
+		return false, err
+	}
+
+	return true, nil
+}
+
+// AssertClientJWKS refuses a database that cannot hold the keys a backend
+// service signs with.
+func AssertClientJWKS(ctx context.Context, db *sql.DB) error {
+	present, err := hasColumn(ctx, db, clientTable, clientJWKSColumn)
+	if err != nil {
+		return err
+	}
+
+	if !present {
+		return fmt.Errorf("%w: %s.%s", ErrClientJWKSMissing, clientTable, clientJWKSColumn)
+	}
+
+	return nil
 }
 
 // AssertSessionRefreshChain refuses a database whose sessions cannot name the
