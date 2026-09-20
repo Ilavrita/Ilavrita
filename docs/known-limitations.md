@@ -73,7 +73,7 @@ Every other `/fhir/R4` route answers `501 Not Implemented` as an
 | Conditional create, update, delete | Not implemented; `If-None-Exist` is refused, never ignored |
 | Conditional read (`If-None-Match`, `If-Modified-Since`) | Not implemented; the headers are ignored and the whole resource is returned |
 | Patch | Not implemented |
-| Validation and `$validate` | Against the base definitions and required bindings; no profiles; see below |
+| Validation and `$validate` | Against the base definitions, required bindings and R4's invariants; profiles partly; see below |
 | Clinical resource types | Served, reachable only through a compartment a policy names |
 | Authentication | Working: password, sessions, TOTP second factor with an administrator recovery path, per-install throttle; see below |
 | Audit trail | Working: every interaction and login, in the transaction that did it |
@@ -361,6 +361,74 @@ resolved by the public terminology server either.
 Inferno's own test kits apply here: every one of them layers an implementation
 guide — US Core, SMART App Launch, Da Vinci, CARIN — on top of R4, and this build
 implements none of those.
+
+## Invariants are checked, and that is most of what R4 says
+
+R4 states 203 required rules that cardinality and datatypes cannot express.
+"An Organization SHALL have a name or an identifier" is not a fact about either
+element — both are optional on their own — and R4 writes those as FHIRPath.
+
+**All 203 are evaluated.** `packages/fhirpath` implements the subset they are
+written in, which is measurable rather than guessed: thirty functions cover 197
+of them, and the rest need eight more. A refusal cites the rule by the name R4
+gives it — `org-1` — and then in the specification's own words, because most
+people do not read FHIRPath.
+
+What matters as much as the subset is what happens outside it. An expression
+this build cannot read is an error, never an empty result and never true. An
+invariant reported as passing because nobody could evaluate it is worse than one
+nobody checked, because it looks checked. `validate.Unevaluable()` names the
+ones this build cannot apply and a test asserts that list is empty, so a rule
+that quietly stopped being checked fails the build rather than the next audit.
+
+**Best practice is not a rule.** R4 marks some constraints as guidance with an
+extension it puts on exactly those — "a resource should have narrative for
+robust management" is true, and is not something to refuse a write over or to
+repeat about every resource that ever arrives. This build reads that marking
+rather than inventing a line of its own.
+
+## A declared profile is checked, as far as this build reads one
+
+A resource naming a profile in `meta.profile` is claiming to conform to it, and
+R4 says it SHALL. So the claim is answered rather than stored unread.
+
+- A profile this install holds has its **resource-level invariants** applied,
+  and a write that fails one is refused
+- A profile constraining a different type than the resource is refused: an
+  Organization claiming the Patient definition is saying something untrue
+- A profile this install does not hold is **reported** — "this server does not
+  hold that, so it did not check this resource against it" — and the resource is
+  stored. Naming a profile from somewhere else is not a client error; letting
+  the claim pass unremarked would be this server's
+
+What is not applied, stated plainly because the word "profile" suggests more
+than this does: a profile's narrowed cardinality, narrowed types, narrowed
+bindings, slicing, and any invariant it attaches below the root. An invariant
+sits on an element and is evaluated with that element as its context, and
+resolving each one's path through a resource is work this build has not done.
+
+## A reference that leads nowhere is reported, not refused
+
+R4 permits a reference to name something this server does not hold: the target
+may live elsewhere, or may not exist yet. This build depends on that itself — a
+confined grant names a compartment before the Patient in it exists, which is how
+one is provisioned at all.
+
+So `$validate` reports a relative reference that resolves to nothing, and a
+write does not refuse one. `$validate` is where a client asks what this server
+makes of a resource, and a reference nobody can follow is a record that reads as
+complete and is not.
+
+It is followed **under a read grant for the type the reference names**. Anything
+else would make this an oracle: a caller who cannot read a Patient would learn
+whether one exists by validating a resource that points at it. Under their own
+grant, "not there" and "not yours" are one answer — the same one a read gives
+them. A caller holding no such grant is told nothing rather than told it is
+missing.
+
+Absolute urls, `urn:` references and contained `#` references are left alone.
+The first two name resources that are not this server's to resolve, and `ref-1`
+already holds the third.
 
 ## Validation checks a resource against its own definition
 

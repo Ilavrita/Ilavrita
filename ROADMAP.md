@@ -58,7 +58,15 @@ single security and Project model, even though they ship in phases.
       them before anything is written
 - [ ] Bundle batch — entries that succeed or fail independently
 - [x] Validation and `$validate` — every resource is checked against its own R4
-      base definition, on the operation and on every write alike
+      base definition, on the operation and on every write alike, including all
+      203 of R4's required FHIRPath invariants
+- [x] Declared profiles — `meta.profile` is resolved and a held profile's
+      resource-level rules applied; one this server does not hold is reported
+      rather than passed. A profile's narrowed cardinality and slicing are not
+      applied
+- [x] Reference integrity — `$validate` reports a relative reference that leads
+      nowhere, under a read grant for the type it names. Writes do not refuse
+      one, because R4 permits it and provisioning a compartment depends on it
 - [x] Terminology for required bindings — a code is checked against the value set
       its element is bound to, from the specification's own bundled sets
 - [ ] Single binary and container image

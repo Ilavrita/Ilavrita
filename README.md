@@ -88,7 +88,9 @@ and an architecture that does not have to be rewritten to reach a clustered one.
 | Authentication | Working — password, sessions, TOTP second factor with an administrator recovery path, per-install throttle |
 | Binary payloads | Working — bytes stored outside the database |
 | Subscriptions | Working — `rest-hook`, and `websocket` within one process; queues are claimed, so replicas do not notify twice |
-| Resource validation, `$validate` | Against the R4 base definitions and required bindings — no profiles, no FHIRPath invariants |
+| Resource validation, `$validate` | Against the R4 base definitions, required bindings and every FHIRPath invariant R4 states |
+| Declared profiles | `meta.profile` is resolved and its resource-level rules applied; one this server does not hold is reported, never silently passed |
+| Reference integrity | `$validate` reports a relative reference that leads nowhere; writes do not refuse one, because R4 permits it |
 | FHIR R4 representation | Checked against the HL7 validator by `scripts/conformance.sh`, not only against our own tests |
 | Search parameters | Built-in set, plus any a Project defines with a `SearchParameter`; new ones backfill in the background |
 | LOINC and SNOMED | Not resolved — a code is stored and read back, never looked up or checked |

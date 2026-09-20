@@ -16,7 +16,7 @@ most expensive mistake on this project so far.
 | `GET /fhir/R4/{type}?...`, `POST /fhir/R4/{type}/_search` | Working, over the built-ins plus what the Project defined |
 | `SearchParameter` written by a Project | Working: compiled, indexed, and backfilled by a claimed worker |
 | `POST /fhir/R4` with a `transaction` Bundle | Working, all-or-nothing |
-| `POST /fhir/R4/{type}/$validate` | Working, against the base definitions and required bindings |
+| `POST /fhir/R4/{type}/$validate` | Working: base definitions, required bindings, R4's invariants, declared profiles, dangling references |
 | `ilavrita backup`, `verify-backup`, `restore` | Working |
 | Migrations, seeds and backfills | Idempotent, and recorded in `super_jobs` against the table |
 | Everything else under `/fhir/R4` | `501` |
@@ -177,12 +177,14 @@ None of these are visible from reading the code.
 - **A compartment subject is created by naming it.** A `POST /Patient` mints an id no confined
   grant can name in advance, so it is refused; `PUT /Patient/{id}` under a grant naming that
   patient is how one is provisioned. Correct, and surprising the first time.
-- **Nothing checks a resource against a profile.** The R4 base definitions and value sets are
-  embedded, seeded at startup and read by the validator: an element nobody declared, a required one
-  that is absent, a repeating element written as a value, a choice written twice, a malformed date
-  and a code outside its required binding are all refused, on `$validate` and on every write alike.
-  What is not checked is a profile constraining the base, a FHIRPath invariant, or whether a
-  reference resolves.
+- **A profile is checked as far as its root.** The R4 base definitions and value sets are
+  embedded, seeded at startup and read by the validator, and all 203 of R4's required FHIRPath
+  invariants are evaluated by `packages/fhirpath`. A resource naming a profile in `meta.profile`
+  has that profile's resource-level invariants applied, and one this install does not hold is
+  reported rather than passed. What is *not* applied is a profile's narrowed cardinality, narrowed
+  types, narrowed bindings, slicing, or any invariant it attaches below the root — an invariant is
+  evaluated with its own element as context, and resolving each one's path through a resource is
+  work nobody has done here.
 - **No LOINC or SNOMED, at all.** There was a directory — an importer that read a release a
   deployment supplied, two tables it landed in, and `$lookup` / `$validate-code` over it — and it
   was removed deliberately. It bought almost nothing: exactly one of R4's required bindings names
@@ -429,6 +431,24 @@ means that request is every other request waiting. Defining enqueues one row per
 however many parameters name it — and `reindexer` claims and walks it. The claim has a lease, so a
 replica that dies returns the work; rebuilding an index that is already right changes nothing,
 which is what makes that safe.
+
+**10. FHIRPath invariants, declared profiles and reference integrity. Done.** `packages/fhirpath`
+evaluates the subset of FHIRPath R4's invariants are written in — measured rather than guessed:
+thirty functions cover 197 of the 205, eight more cover the rest. All 203 the model holds are
+parsed, and `TestEveryInvariantR4StatesCanBeRead` is what keeps that true.
+
+Two rules in that package are worth keeping. **An expression it cannot read is an error**, never
+an empty result and never true: an invariant reported as passing because nobody could evaluate it
+is worse than one nobody checked, because it looks checked. And **`Holds` fails only on an explicit
+false** — an expression that produced nothing decided nothing, and refusing on that would refuse
+resources nobody showed were wrong.
+
+Writing it found eleven types whose own fixtures violated R4, exactly the eleven the HL7 validator
+had been flagging, and the conformance run's accepted findings fell from 33 to 15 because the
+invariant class is now enforced rather than waived.
+
+Best-practice constraints are not applied. R4 marks them with an extension it puts on exactly
+those, and `dom-6` on every resource ever written is noise that buries the rest.
 
 Search parameters are deliberately a short list — `packages/search/registry.go` is the
 whole of what this build answers, and adding one means adding a projection a write maintains and
