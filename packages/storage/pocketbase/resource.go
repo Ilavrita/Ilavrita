@@ -411,6 +411,20 @@ func versionsStatement(
 		args = append(args, before)
 	}
 
+	// _since narrows to what changed after a moment. It is applied here rather
+	// than after reading, so a caller asking for changes since yesterday does
+	// not page through years of history to find them.
+	if !window.Since.IsZero() {
+		if window.Before == "" {
+			statement += " WHERE"
+		} else {
+			statement += " AND"
+		}
+
+		statement += " last_updated > ?"
+		args = append(args, window.Since.UTC().UnixMilli())
+	}
+
 	// One more than asked for, so a further page is known to exist without
 	// counting the rest of a history that may be long.
 	statement += " ORDER BY version_seq DESC LIMIT ?"
@@ -573,7 +587,11 @@ func (s *ResourceStore) ListVersions(
 		return storage.VersionPage{}, fmt.Errorf("pocketbase: list versions: %w", err)
 	}
 
-	if len(records) == 0 {
+	// A resource always has at least one version, so an unnarrowed history with
+	// no rows is a resource that is not there. A narrowed one with no rows is a
+	// resource nothing happened to in the window asked about, which is an empty
+	// history and not a missing resource.
+	if len(records) == 0 && window.Since.IsZero() {
 		return storage.VersionPage{}, storage.ErrNotFound
 	}
 

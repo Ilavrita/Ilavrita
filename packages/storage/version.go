@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"strconv"
+	"time"
 )
 
 // How much of a resource's history one page carries.
@@ -28,6 +29,17 @@ var ErrMalformedWindow = errors.New("storage: that is not a page of history this
 type VersionWindow struct {
 	Count  int
 	Before VersionID
+
+	// Since narrows a history to what changed after a moment. It is the _since
+	// parameter R4 names, and the zero time is a caller who did not ask.
+	Since time.Time
+}
+
+// From returns the window narrowed to what changed after a moment.
+func (w VersionWindow) From(since time.Time) VersionWindow {
+	w.Since = since
+
+	return w
 }
 
 // NewVersionWindow reads a window a caller asked for, and refuses one this
