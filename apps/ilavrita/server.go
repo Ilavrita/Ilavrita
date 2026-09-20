@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log"
 	"path/filepath"
+	"sync"
 	"time"
 
 	"github.com/Ilavrita/Ilavrita/packages/audit"
@@ -40,7 +41,15 @@ type backend struct {
 
 	// refreshes holds the grants an app may exchange for a new session.
 	refreshes *sqlite.RefreshStore
-	resolvers authz.Resolvers
+
+	// signingKeys holds what this install signs identity tokens with, and
+	// identityKey is the one this process uses. It is read once because the
+	// published set has to keep naming whatever has already been signed.
+	signingKeys  *sqlite.SigningKeyStore
+	identityOnce sync.Once
+	identityKey  project.SigningKey
+	identityErr  error
+	resolvers    authz.Resolvers
 
 	// sockets holds the subscribers connected to this process. A deployment
 	// running several replicas has each subscriber on one of them, which is
@@ -267,6 +276,7 @@ func newBackend(db *sql.DB, dataDir string) *backend {
 		refreshes:     sqlite.NewRefreshStore(db),
 		audits:        sqlite.NewAuditStore(db),
 		factors:       sqlite.NewFactorStore(db, sealingKey()),
+		signingKeys:   sqlite.NewSigningKeyStore(db, sealingKey()),
 		definitions:   sqlite.NewCanonicalStore(db),
 		payloads:      files.NewDisk(filepath.Join(dataDir, payloadDirectory)),
 		notifications: sqlite.NewSubscriptionStore(db),

@@ -165,6 +165,14 @@ func registerOAuthRoutes(routes *router.Router[*core.RequestEvent]) {
 	// nobody and keeps the runtime's cross-origin handling: a browser app reads
 	// it from its own origin before it has a token to protect.
 	routes.GET(smartConfigurationPath, describeSmartConfiguration)
+
+	// The same is true of OpenID Connect's two published documents, and more
+	// so: a client checks an identity token's signature against the key set,
+	// which means reading both from wherever the app happens to run. The
+	// discovery document sits at the root because a reader builds its address
+	// by appending to the issuer an identity token names.
+	routes.GET(openIDConfigurationPath, describeOpenIDConfiguration)
+	routes.GET(oauthBasePath+identityKeysPath, describeIdentityKeys)
 }
 
 // authorizationAsk is what a client asked for, read from a query or a form.
@@ -287,7 +295,8 @@ func (b *backend) resolveAsk(
 			"this server requires PKCE with code_challenge_method=S256")
 	}
 
-	grantable, refused := sortScopes(ask.scope)
+	grantable, refused := sortScopes(
+		ask.scope, b.offeredIdentity(request.Request.Context(), request, session))
 	if len(grantable) == 0 {
 		return pendingAuthorization{}, invalidScope("no scope asked for is one this server grants")
 	}
@@ -341,34 +350,43 @@ var sessionScopes = []string{
 // nothing, and a scope honoured in name only is worse than one plainly refused.
 var contextScopes = []string{"launch", "launch/encounter"}
 
-// identityScopes ask for an OpenID Connect identity token, and this build issues
-// none.
+// identityScopes ask for an OpenID Connect identity token.
 //
-// They are refused by name rather than granted, because granting them is a
-// promise: a client that asked for openid and was told it received it will look
-// for an id_token in the response and find nothing. That is the silent
-// widening this surface refuses everywhere else — a scope quietly honoured in
-// name only is worse than one plainly refused, because only one of them is
-// visible to the app that depended on it.
-var identityScopes = []string{"openid", "fhirUser", "profile"}
+// openid and fhirUser are granted when this deployment can actually answer
+// them, and refused with the reason when it cannot: granting one is a promise,
+// and a client told it received openid will look for an id_token in the
+// response. A scope quietly honoured in name only is worse than one plainly
+// refused, because only one of the two is visible to the app that depended on
+// it.
+//
+// profile is refused always. SMART calls it a deprecated synonym for fhirUser,
+// while OpenID Connect gives it its own meaning — a claim set of name, picture
+// and the rest, which this server does not hold. Granting it would be answering
+// one reading and disappointing the other, so it is refused and said why.
+const (
+	scopeOpenID   = "openid"
+	scopeFHIRUser = "fhirUser"
+	scopeProfile  = "profile"
+)
 
 // sortScopes separates what this server would grant from what it refuses.
 //
 // Every refusal carries its reason, so an app told it may not have something
 // learns which something and why, rather than discovering at request time that a
 // scope it believed it held reaches nothing.
-func sortScopes(stated string) ([]string, []refusedScope) {
+func sortScopes(stated string, offer identityOffer) ([]string, []refusedScope) {
 	var (
 		grantable []string
 		refused   []refusedScope
 	)
 
 	for _, one := range strings.Fields(stated) {
-		if slices.Contains(identityScopes, one) {
-			refused = append(refused, refusedScope{
-				Scope:  one,
-				Reason: "this server issues no identity token",
-			})
+		if granted, reason, identity := offer.sort(one); identity {
+			if granted {
+				grantable = append(grantable, one)
+			} else {
+				refused = append(refused, refusedScope{Scope: one, Reason: reason})
+			}
 
 			continue
 		}
@@ -605,6 +623,10 @@ type tokenResponse struct {
 	Scope        string `json:"scope"`
 	Patient      string `json:"patient,omitempty"`
 	RefreshToken string `json:"refresh_token,omitempty"`
+
+	// IDToken is present when the approval granted `openid`, and absent
+	// otherwise. A client that asked for it looks for it here.
+	IDToken string `json:"id_token,omitempty"`
 }
 
 // issueToken exchanges a grant for an access token.
@@ -679,6 +701,12 @@ func issueFromCode(request *core.RequestEvent) error {
 		return refuseOAuth(request, err)
 	}
 
+	identity, err := serving.identityToken(
+		ctx, request, issued, code.Client(), code.Launch(), time.Now().UTC())
+	if err != nil {
+		return refuseOAuth(request, serverFailure())
+	}
+
 	return answerToken(request, tokenResponse{
 		AccessToken:  token.Reveal(),
 		TokenType:    "Bearer",
@@ -686,6 +714,7 @@ func issueFromCode(request *core.RequestEvent) error {
 		Scope:        code.Launch().Scopes(),
 		Patient:      code.Launch().Patient(),
 		RefreshToken: refresh,
+		IDToken:      identity,
 	})
 }
 
@@ -791,6 +820,15 @@ func issueFromRefresh(request *core.RequestEvent) error {
 		return refuseOAuth(request, err)
 	}
 
+	// Reissued rather than carried over: the approval still says openid, and a
+	// client refreshing an hour later would otherwise be handed an identity
+	// token that expired fifty-five minutes ago.
+	identity, err := serving.identityToken(
+		ctx, request, issued, rotated.Client(), rotated.Launch(), time.Now().UTC())
+	if err != nil {
+		return refuseOAuth(request, serverFailure())
+	}
+
 	return answerToken(request, tokenResponse{
 		AccessToken:  token.Reveal(),
 		TokenType:    "Bearer",
@@ -798,6 +836,7 @@ func issueFromRefresh(request *core.RequestEvent) error {
 		Scope:        rotated.Launch().Scopes(),
 		Patient:      rotated.Launch().Patient(),
 		RefreshToken: refresh.Reveal(),
+		IDToken:      identity,
 	})
 }
 

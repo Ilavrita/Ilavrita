@@ -956,6 +956,8 @@ func TestEveryRouteThisSurfaceServesIsDescribed(t *testing.T) {
 		"the authorization endpoint": oauthBasePath + authorizePath,
 		"the consent description":    oauthBasePath + consentPath,
 		"the token endpoint":         oauthBasePath + tokenPath,
+		"the identity key set":       oauthBasePath + identityKeysPath,
+		"OpenID Connect discovery":   openIDConfigurationPath,
 		"the discovery document":     smartConfigurationPath,
 		"login":                      authBasePath + loginPath,
 		"logout":                     authBasePath + logoutPath,

@@ -498,6 +498,106 @@ paths:
         "500":
           $ref: "#/components/responses/OAuthRefused"
 
+  /oauth2/jwks:
+    get:
+      tags: [SMART App Launch]
+      summary: The keys identity tokens are signed with
+      description: |
+        The public half of what signs an identity token, as a JWK Set. This is
+        the `jwks_uri` both discovery documents publish.
+
+        It authenticates nobody, and that is the point: anybody holding an
+        identity token has to be able to check it. Only public members are
+        written — the document is built from the modulus and exponent rather
+        than from the key, so there is no path here that could emit private
+        material.
+
+        A deployment with no sealing key holds no signing key, issues no
+        identity token, and answers `404` rather than an empty set a client
+        would read as a parse failure.
+      operationId: describeIdentityKeys
+      security: []
+      responses:
+        "200":
+          description: The key set.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  keys:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        kty: { type: string, enum: [RSA] }
+                        use: { type: string, enum: [sig] }
+                        alg: { type: string, enum: [RS256] }
+                        kid: { type: string }
+                        n: { type: string }
+                        e: { type: string }
+        "404":
+          $ref: "#/components/responses/OAuthRefused"
+        "500":
+          $ref: "#/components/responses/OAuthRefused"
+
+  /.well-known/openid-configuration:
+    get:
+      tags: [SMART App Launch]
+      summary: OpenID Connect discovery
+      description: |
+        Where an identity token's signature can be checked, and what this server
+        puts in one.
+
+        It sits at the host root rather than beside the SMART document because a
+        client builds its address by appending to the `iss` claim it read out of
+        a token, and that claim names this server.
+
+        `RS256` alone: SMART requires RSA SHA-256 for an identity token
+        specifically, which is narrower than the RS384/ES384 this server
+        verifies a client assertion with. Subjects are `public` — the same
+        subject reaches every client, because it is this server's own
+        identifier for the person.
+
+        A deployment with no sealing key holds no signing key and answers `404`.
+      operationId: describeOpenIDConfiguration
+      security: []
+      responses:
+        "200":
+          description: What this server answers for OpenID Connect.
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                  [issuer, authorization_endpoint, token_endpoint, jwks_uri,
+                   response_types_supported, subject_types_supported,
+                   id_token_signing_alg_values_supported]
+                properties:
+                  issuer: { type: string }
+                  authorization_endpoint: { type: string }
+                  token_endpoint: { type: string }
+                  jwks_uri: { type: string }
+                  response_types_supported:
+                    type: array
+                    items: { type: string }
+                  subject_types_supported:
+                    type: array
+                    items: { type: string, enum: [public] }
+                  id_token_signing_alg_values_supported:
+                    type: array
+                    items: { type: string, enum: [RS256] }
+                  scopes_supported:
+                    type: array
+                    items: { type: string }
+                  claims_supported:
+                    type: array
+                    items: { type: string }
+        "404":
+          $ref: "#/components/responses/OAuthRefused"
+        "500":
+          $ref: "#/components/responses/OAuthRefused"
+
   /oauth2/token:
     post:
       tags: [SMART App Launch]

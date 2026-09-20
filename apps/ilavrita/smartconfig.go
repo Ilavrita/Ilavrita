@@ -21,11 +21,14 @@ const smartConfigurationPath = fhir.BasePath + "/.well-known/smart-configuration
 // endpoint answers to. A discovery document advertising more than that would be
 // one a conformance suite believes.
 type smartConfiguration struct {
-	// Issuer is omitted, not empty. SMART makes it conditional on the
-	// sso-openid-connect capability — "otherwise, omitted" — and this build
-	// issues no identity token. A FHIR base published here would be an OpenID
-	// Connect issuer that answers nothing.
-	Issuer                string   `json:"issuer,omitempty"`
+	// Issuer is omitted rather than empty when this deployment cannot sign an
+	// identity token. SMART makes it conditional on the sso-openid-connect
+	// capability — "otherwise, omitted" — and an issuer published by a server
+	// that answers no OpenID Connect is one a client would follow to nothing.
+	Issuer string `json:"issuer,omitempty"`
+
+	// JWKSURI travels with the issuer, and is omitted with it.
+	JWKSURI               string   `json:"jwks_uri,omitempty"`
 	AuthorizationEndpoint string   `json:"authorization_endpoint"`
 	TokenEndpoint         string   `json:"token_endpoint"`
 	GrantTypes            []string `json:"grant_types_supported"`
@@ -44,7 +47,16 @@ func describeSmartConfiguration(request *core.RequestEvent) error {
 		return refuseOAuth(request, serverFailure())
 	}
 
-	return request.JSON(http.StatusOK, smartConfiguration{
+	// Whether this deployment can sign decides three fields together: a document
+	// claiming sso-openid-connect without an issuer, or an issuer without the
+	// capability, is one a client cannot act on either way.
+	identity := false
+	if serving != nil {
+		_, err := serving.signingKey(request.Request.Context())
+		identity = err == nil
+	}
+
+	held := smartConfiguration{
 		AuthorizationEndpoint: origin + oauthBasePath + authorizePath,
 		TokenEndpoint:         origin + oauthBasePath + tokenPath,
 
@@ -82,8 +94,8 @@ func describeSmartConfiguration(request *core.RequestEvent) error {
 		// Standalone Apps", and permission-user what completes the clinician
 		// set beside it.
 		//
-		// sso-openid-connect and launch-ehr are absent because they are not
-		// built.
+		// launch-ehr is absent because it is not built. sso-openid-connect is
+		// added below when this deployment holds a key to sign with.
 		Capabilities: []string{
 			"launch-standalone",
 			"client-public",
@@ -96,5 +108,14 @@ func describeSmartConfiguration(request *core.RequestEvent) error {
 			"permission-v1",
 			"permission-v2",
 		},
-	})
+	}
+
+	if identity {
+		held.Issuer = origin
+		held.JWKSURI = origin + oauthBasePath + identityKeysPath
+		held.ScopesSupported = append(held.ScopesSupported, scopeOpenID, scopeFHIRUser)
+		held.Capabilities = append(held.Capabilities, "sso-openid-connect")
+	}
+
+	return request.JSON(http.StatusOK, held)
 }
