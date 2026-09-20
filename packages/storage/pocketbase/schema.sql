@@ -204,6 +204,80 @@ CREATE TABLE IF NOT EXISTS client_redirect_uris (
     REFERENCES client_applications (project_id, id) ON DELETE CASCADE ON UPDATE RESTRICT
 );
 
+-- One person's approval, waiting to be redeemed once.
+
+-- Everything the token endpoint re-checks is bound here rather than re-read from
+-- the request that redeems it: which client it was issued to, the address it is
+-- returned at, the challenge it is bound to, and what was approved. A row that
+-- carried less would be one the token endpoint had to trust its presenter about.
+
+-- The code itself is never written. Only its SHA-256 is, so a stolen database
+-- yields nothing a caller could present — the same reason a session token is
+-- stored as a digest.
+
+-- Redemption deletes the row rather than marking it spent, which is how single
+-- use is enforced without any state something must remember to read: a code that
+-- cannot be replayed because it no longer exists needs no flag.
+
+-- tenant: project_id
+-- tenant-exempt: ux_authorization_codes_hash, because the digest is the lookup
+-- key and the row it finds is what names the Project
+CREATE TABLE IF NOT EXISTS authorization_codes (
+  project_id            TEXT NOT NULL,
+  id                    TEXT NOT NULL,
+
+  code_hash             TEXT NOT NULL,
+
+  client_application_id TEXT NOT NULL,
+  user_id               TEXT NOT NULL REFERENCES users (id) ON DELETE RESTRICT ON UPDATE RESTRICT,
+  membership_id         TEXT NOT NULL,
+
+  redirect_uri          TEXT NOT NULL,
+  code_challenge        TEXT NOT NULL,
+
+  -- What was approved, in the shape a session carries it, so the token endpoint
+  -- moves the value across rather than deriving a second one.
+  launch_patient        TEXT,
+  granted_scopes        TEXT NOT NULL,
+
+  created_at            BIGINT NOT NULL,
+  expires_at            BIGINT NOT NULL,
+
+  PRIMARY KEY (project_id, id),
+
+  CHECK (substr(id, 1, 4) = 'acd_'),
+
+  -- A code is redeemed on the round trip the client is already making. Sixty
+  -- seconds is generous for that; NOT NULL alone would permit the year 3000.
+  CHECK (expires_at > created_at AND expires_at <= created_at + 60000),
+
+  -- A code holding nothing to compare against would answer every presenter.
+  CHECK (code_hash <> ''),
+
+  -- PKCE is required of every client, so a row with no challenge is one nothing
+  -- binds to the client that asked for it.
+  CHECK (code_challenge <> ''),
+
+  -- A code granting nothing would mint a session narrowed by nothing.
+  CHECK (granted_scopes <> ''),
+
+  CHECK (redirect_uri <> '' AND instr(redirect_uri, '#') = 0),
+
+  FOREIGN KEY (project_id, client_application_id)
+    REFERENCES client_applications (project_id, id) ON DELETE CASCADE ON UPDATE RESTRICT,
+
+  FOREIGN KEY (project_id, membership_id)
+    REFERENCES project_memberships (project_id, id) ON DELETE RESTRICT ON UPDATE RESTRICT
+);
+
+-- The digest is the lookup key, so it is unique across the install.
+CREATE UNIQUE INDEX IF NOT EXISTS ux_authorization_codes_hash
+  ON authorization_codes (code_hash);
+
+-- For sweeping what expired without anyone redeeming it.
+CREATE INDEX IF NOT EXISTS ix_authorization_codes_expiry
+  ON authorization_codes (expires_at);
+
 -- A bot is invoked by this server rather than authenticated by it. No credential
 -- table names this one and no column here holds a hash, so a bot secret is
 -- unrepresentable rather than merely unissued.
