@@ -156,8 +156,39 @@ of them is safe before it is.
 ## 9. What this needs that does not exist
 
 - Client-credentials tokens, for `system/` scopes to mean anything
-- A launch-context store: which patient a session was launched for
+- ~~A launch-context store: which patient a session was launched for~~ — **built**, as two
+  columns on `sessions` rather than a table beside it. See section 10.
 - ~~`authz.Narrow(Scope, []SmartScope) Scope`~~ — **built**. `packages/authz/smart.go`, beside
   `BuildScope`, with `ParseScope` for the scope strings themselves. Every rule marked a decision
   above has a test, and each of the five that matter for safety has been confirmed by mutating
   the code until that test fails
+
+## 10. Where the launch context lives
+
+Section 7 says the scopes are stored with the session and intersected at request time. They are
+stored **in the session's own row** — `sessions.launch_patient` and `sessions.granted_scopes` —
+rather than in a table keyed on the session id (decision).
+
+The reason is the failure mode. A launch context in a second table can be absent, and absent
+reads as "no app holds this session", which is the value that skips the narrowing entirely. A
+row that failed to write, or a join that was forgotten, would hand an app everything the person
+it acts for can reach. In the session's own row there is no such state: the read that proves the
+token is the read that returns the grant.
+
+The same reasoning shapes the types.
+
+- `project.LaunchContext` holds the two strings and refuses an empty grant, so "an app's session"
+  and "a session granting nothing" cannot be the same value.
+- `project.IssueAppSession` takes one as an argument. There is no method that attaches a launch
+  context afterwards, so no order of calls mints an app's session that nothing narrows.
+- `authz.Launch` has three states, not two: **unstated**, no app, and an app's. `BuildScope`
+  refuses an unstated one with `ErrMissingLaunch`, the way it refuses a nil resolver — a caller
+  that never considered the question is a wiring mistake, and this mistake widens.
+- `BuildScope` applies the narrowing itself rather than returning a Scope for the caller to
+  narrow. It is the only function that produces a Scope, so an app's request cannot reach storage
+  through a path that forgot.
+
+The scopes are stored as the token response reported them, space-delimited and verbatim, so what
+the app was told it holds and what this server narrows by are the same text rather than two
+renderings of it. A stored scope this build cannot parse denies the request; it is never read as
+a session no app holds.
