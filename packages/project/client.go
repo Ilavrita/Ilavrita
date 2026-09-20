@@ -150,6 +150,7 @@ type ClientApplication struct {
 	state       ServiceState
 	kind        ClientKind
 	redirects   RedirectURIs
+	keys        JWKS
 }
 
 // ClientKind is whether a registration can keep a secret.
@@ -200,6 +201,11 @@ type ClientApplicationConfig struct {
 	// to. A registration naming none does no authorization-code flow, which is
 	// what a backend service is.
 	RedirectURIs RedirectURIs
+
+	// JWKS are the public keys this registration signs its client assertions
+	// with. A registration stating none signs none, which is every client that
+	// is not a backend service.
+	JWKS JWKS
 }
 
 // NewClientApplication registers a caller in one Project.
@@ -228,7 +234,7 @@ func NewClientApplication(owner ID, cfg ClientApplicationConfig) (ClientApplicat
 	return ClientApplication{
 		id: cfg.ID, project: owner, name: cfg.Name,
 		description: cfg.Description, state: cfg.State,
-		kind: cfg.Kind, redirects: cfg.RedirectURIs,
+		kind: cfg.Kind, redirects: cfg.RedirectURIs, keys: cfg.JWKS,
 	}, nil
 }
 
@@ -240,6 +246,11 @@ func (a ClientApplication) Kind() ClientKind {
 // RedirectURIs returns the addresses an authorization code may be handed back to.
 func (a ClientApplication) RedirectURIs() RedirectURIs {
 	return a.redirects
+}
+
+// JWKS returns the public keys this registration signs its assertions with.
+func (a ClientApplication) JWKS() JWKS {
+	return a.keys
 }
 
 // ID returns the registration's identifier.

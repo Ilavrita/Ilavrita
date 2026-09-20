@@ -110,6 +110,12 @@ var (
 	// principal id alone, so two families sharing one id would be one principal.
 	ErrInvalidServiceID = errors.New("project: identifier is outside its principal namespace")
 
+	// ErrInvalidAssertion reports a client assertion this server will not accept:
+	// one signed with an algorithm it does not verify, naming another client, aimed
+	// at somewhere else, expired, living longer than a jti can be remembered, or
+	// carrying a signature none of the registration's keys made.
+	ErrInvalidAssertion = errors.New("project: invalid client assertion")
+
 	// ErrInvalidJWKS reports a registered key set this server cannot verify
 	// against: a key type or curve it does not support, a key too short to be
 	// signing with, a malformed member, or one carrying private material — which
