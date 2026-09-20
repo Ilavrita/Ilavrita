@@ -131,6 +131,7 @@ type Session struct {
 	digest     string
 	state      SessionState
 	launch     LaunchContext
+	chain      RefreshChainID
 	createdAt  time.Time
 	expiresAt  time.Time
 	revokedAt  time.Time
@@ -150,6 +151,11 @@ type SessionRecord struct {
 	// read without reading what that app was granted.
 	LaunchPatient string
 	GrantedScopes string
+
+	// RefreshChain is the grant that minted this session, empty when a login or
+	// a code redemption did. It is recorded so that detecting a replayed refresh
+	// token can revoke what that grant already produced.
+	RefreshChain RefreshChainID
 
 	CreatedAt time.Time
 	ExpiresAt time.Time
@@ -172,8 +178,14 @@ func IssueSession(
 // because a session that is an app's and does not say what the app was granted
 // is one nothing narrows: it would reach everything the person reaches, which is
 // the whole of what a SMART scope exists to prevent.
+// chain is the refresh grant that minted this session, empty when the session
+// came straight from an authorization code. It is an argument rather than
+// something attached afterwards, for the same reason the launch context is: a
+// session that forgot which grant minted it is one a replay response cannot
+// reach.
 func IssueAppSession(
-	owner ID, id SessionID, user UserID, membership MembershipID, launch LaunchContext,
+	owner ID, id SessionID, user UserID, membership MembershipID,
+	launch LaunchContext, chain RefreshChainID,
 	issuedAt time.Time, lifetime time.Duration, random io.Reader,
 ) (Session, SessionToken, error) {
 	if launch.IsZero() {
@@ -181,7 +193,20 @@ func IssueAppSession(
 			"%w: an app's session states what the app was granted", ErrInvalidLaunch)
 	}
 
-	return issueSession(owner, id, user, membership, launch, issuedAt, lifetime, random)
+	if chain != "" {
+		if err := validateServiceID(string(chain), refreshChainPrefix); err != nil {
+			return Session{}, SessionToken{}, err
+		}
+	}
+
+	issued, token, err := issueSession(owner, id, user, membership, launch, issuedAt, lifetime, random)
+	if err != nil {
+		return Session{}, SessionToken{}, err
+	}
+
+	issued.chain = chain
+
+	return issued, token, nil
 }
 
 // issueSession is what both minting paths come to, so neither can validate less
@@ -254,7 +279,7 @@ func NewSession(owner ID, rec SessionRecord) (Session, error) {
 
 	return Session{
 		id: rec.ID, project: owner, user: rec.User, membership: rec.Membership,
-		digest: rec.Digest, state: rec.State, launch: launch,
+		digest: rec.Digest, state: rec.State, launch: launch, chain: rec.RefreshChain,
 		createdAt: rec.CreatedAt.UTC(), expiresAt: rec.ExpiresAt.UTC(), revokedAt: rec.RevokedAt.UTC(),
 	}, nil
 }
@@ -351,6 +376,12 @@ func (s Session) Digest() string {
 // exactly what the person's own standing reaches.
 func (s Session) Launch() LaunchContext {
 	return s.launch
+}
+
+// RefreshChain returns the grant that minted this session, empty when a login or
+// a code redemption did.
+func (s Session) RefreshChain() RefreshChainID {
+	return s.chain
 }
 
 // Principal names the identity a request carrying this session is served as.

@@ -90,7 +90,7 @@ func TestAnOrdinaryLoginCarriesNoLaunchContext(t *testing.T) {
 // so there is no order of calls that mints an app's session nothing narrows.
 func TestAnAppsSessionCannotBeIssuedWithoutSayingWhatItWasGranted(t *testing.T) {
 	_, _, err := IssueAppSession(
-		"prj_a", "ses_1", "usr_1", "mbr_1", LaunchContext{}, launchedAt, time.Hour, rand.Reader)
+		"prj_a", "ses_1", "usr_1", "mbr_1", LaunchContext{}, "", launchedAt, time.Hour, rand.Reader)
 
 	if !errors.Is(err, ErrInvalidLaunch) {
 		t.Fatalf("error: got %v, want ErrInvalidLaunch", err)
@@ -106,7 +106,7 @@ func TestAnAppsSessionCarriesWhatItWasGranted(t *testing.T) {
 	}
 
 	session, _, err := IssueAppSession(
-		"prj_a", "ses_1", "usr_1", "mbr_1", granted, launchedAt, time.Hour, rand.Reader)
+		"prj_a", "ses_1", "usr_1", "mbr_1", granted, "", launchedAt, time.Hour, rand.Reader)
 	if err != nil {
 		t.Fatalf("IssueAppSession: %v", err)
 	}
@@ -178,7 +178,7 @@ func TestASessionSaysWhetherAnAppHoldsIt(t *testing.T) {
 	}
 
 	app, _, err := IssueAppSession(
-		"prj_a", "ses_1", "usr_1", "mbr_1", granted, launchedAt, time.Hour, rand.Reader)
+		"prj_a", "ses_1", "usr_1", "mbr_1", granted, "", launchedAt, time.Hour, rand.Reader)
 	if err != nil {
 		t.Fatalf("IssueAppSession: %v", err)
 	}

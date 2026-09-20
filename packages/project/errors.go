@@ -110,6 +110,11 @@ var (
 	// principal id alone, so two families sharing one id would be one principal.
 	ErrInvalidServiceID = errors.New("project: identifier is outside its principal namespace")
 
+	// ErrInvalidRefreshToken reports a token whose material, state or lifetime
+	// contradict each other, a redemption presenting none, or a rotation of one
+	// that is not the live rotation of its chain.
+	ErrInvalidRefreshToken = errors.New("project: invalid refresh token")
+
 	// ErrInvalidAuthorizationCode reports a code whose material, lifetime or
 	// binding contradict each other, or a redemption presenting none. Nothing is
 	// read as an approval that merely happens to be shaped like one.
