@@ -104,6 +104,18 @@ type membershipResponse struct {
 type createApplicationRequest struct {
 	Name        string `json:"name"`
 	Description string `json:"description"`
+
+	// Kind is "public" or "confidential", and defaults to confidential when a
+	// caller says nothing. Confidential is what every registration this server
+	// made before the OAuth endpoints existed already was — it is issued a
+	// secret below — so the default states the existing behaviour rather than
+	// choosing a new one. A public client is the deliberate answer, and asking
+	// for it is how a caller gets one.
+	Kind string `json:"kind,omitempty"`
+
+	// RedirectURIs are the addresses an authorization code may be handed back
+	// to. A registration naming none does no authorization-code flow.
+	RedirectURIs []string `json:"redirectUris,omitempty"`
 }
 
 // applicationResponse describes a registration and, once, the secret it was
@@ -410,8 +422,19 @@ func (b *backend) register(
 		return none, noSecret, noRecord, err
 	}
 
+	kind := project.ClientKind(body.Kind)
+	if body.Kind == "" {
+		kind = project.ClientConfidential
+	}
+
+	addresses, err := project.NewRedirectURIs(body.RedirectURIs...)
+	if err != nil {
+		return none, noSecret, noRecord, err
+	}
+
 	registered, err := project.NewClientApplication(owner, project.ClientApplicationConfig{
 		ID: id, Name: body.Name, Description: body.Description, State: project.ServiceActive,
+		Kind: kind, RedirectURIs: addresses,
 	})
 	if err != nil {
 		return none, noSecret, noRecord, err
