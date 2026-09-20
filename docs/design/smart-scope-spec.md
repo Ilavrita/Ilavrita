@@ -157,6 +157,7 @@ of them is safe before it is.
 
 - Client-credentials tokens, for `system/` scopes to mean anything
 - A launch-context store: which patient a session was launched for
-- `authz.Narrow(Scope, []SmartScope) Scope` — the intersection itself, which belongs in
-  `packages/authz` beside `BuildScope`, and is the only new function this specification
-  requires
+- ~~`authz.Narrow(Scope, []SmartScope) Scope`~~ — **built**. `packages/authz/smart.go`, beside
+  `BuildScope`, with `ParseScope` for the scope strings themselves. Every rule marked a decision
+  above has a test, and each of the five that matter for safety has been confirmed by mutating
+  the code until that test fails
