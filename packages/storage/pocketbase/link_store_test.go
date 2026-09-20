@@ -61,6 +61,7 @@ func reachRequest(db *sql.DB, grantors ...project.ID) authz.Request {
 		Type:           "Observation",
 		Action:         storage.ActionRead,
 		Now:            decidedAt,
+		Launch:         authz.NoLaunch(),
 		Resolvers:      linkedResolvers(db),
 	}
 }

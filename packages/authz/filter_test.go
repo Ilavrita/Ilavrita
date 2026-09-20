@@ -460,6 +460,7 @@ func TestAPrincipalNobodyHoldsBuildsNoScope(t *testing.T) {
 			Type:      "Observation",
 			Action:    storage.ActionRead,
 			Now:       time.Date(2026, time.March, 1, 9, 0, 0, 0, time.UTC),
+			Launch:    NoLaunch(),
 			Resolvers: Resolvers{
 				Memberships: standingNobodyHolds{},
 				Projects:    activeEverywhere{},

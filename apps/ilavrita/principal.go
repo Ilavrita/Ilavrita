@@ -19,11 +19,17 @@ var (
 	errNotServing = errors.New("ilavrita: no database is wired to this server")
 )
 
-// caller is the identity one request is served as: one principal, and the home
-// Project its standing lives in.
+// caller is the identity one request is served as: one principal, the home
+// Project its standing lives in, and what the app holding the session was
+// granted.
 type caller struct {
 	project   project.ID
 	principal project.PrincipalRef
+
+	// launch is read from the same session that proved the credential, so there
+	// is no second lookup to forget: a request cannot name a principal without
+	// also naming what narrows them.
+	launch authz.Launch
 }
 
 // resolve answers who is asking. A session token is the only answer: it is the
@@ -39,7 +45,19 @@ func (b *backend) resolve(request *core.RequestEvent) (caller, error) {
 		return caller{}, errNoPrincipal
 	}
 
-	return caller{project: session.Project(), principal: session.Principal()}, nil
+	// A stored scope this build cannot read denies the request. The alternative
+	// is serving the session as though no app held it, which is the one answer
+	// wider than the truth.
+	launch, err := authz.ParseLaunch(session.Launch())
+	if err != nil {
+		return caller{}, err
+	}
+
+	return caller{
+		project:   session.Project(),
+		principal: session.Principal(),
+		launch:    launch,
+	}, nil
 }
 
 // authorizationRequest is the decision one interaction rests on. LinkedProjects
@@ -58,6 +76,7 @@ func (b *backend) authorizationRequest(request *core.RequestEvent, want decision
 		Type:      want.Type,
 		Action:    want.Action,
 		Now:       time.Now().UTC(),
+		Launch:    who.launch,
 		Resolvers: b.resolvers,
 	}, nil
 }

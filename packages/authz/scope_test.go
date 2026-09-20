@@ -149,7 +149,7 @@ func (f *fixture) probe() Request {
 	return Request{
 		Principal: member, Project: clinic,
 		Kind: storage.KindFHIR, Type: "Observation", Action: storage.ActionRead,
-		Now: decidedAt, Resolvers: f.resolvers(),
+		Now: decidedAt, Launch: NoLaunch(), Resolvers: f.resolvers(),
 	}
 }
 
@@ -1037,4 +1037,65 @@ func TestAMembershipReportedNotFoundGrantsNothing(t *testing.T) {
 	}
 
 	assertEmpty(t, scope, "a membership the resolver reported as not found")
+}
+
+// TestARequestThatDidNotSayWhetherAnAppIsAskingIsRefused.
+//
+// "No app is asking" and "nobody said" are the same zero value and opposite
+// answers. The permissive one must not be reachable by leaving a field alone,
+// so BuildScope denies rather than assuming.
+func TestARequestThatDidNotSayWhetherAnAppIsAskingIsRefused(t *testing.T) {
+	req := newFixture(t).probe()
+	req.Launch = Launch{}
+
+	scope, err := BuildScope(t.Context(), req)
+	if !errors.Is(err, ErrMissingLaunch) {
+		t.Fatalf("error: got %v, want ErrMissingLaunch", err)
+	}
+
+	if len(scope.Grants()) != 0 {
+		t.Errorf("a refused request carried %d grants", len(scope.Grants()))
+	}
+}
+
+// TestBuildScopeNarrowsAnAppsRequestItself, rather than leaving that to its
+// caller: it is the only function that produces a Scope, so a request an app
+// made cannot reach storage through a path that forgot to restrict it.
+func TestBuildScopeNarrowsAnAppsRequestItself(t *testing.T) {
+	f := newFixture(t)
+
+	// The probe asks about Observations, which the person may read. Their app
+	// was granted Conditions and nothing else.
+	context, err := project.NewLaunchContext("", "user/Condition.read")
+	if err != nil {
+		t.Fatalf("launch context: %v", err)
+	}
+
+	launch, err := ParseLaunch(context)
+	if err != nil {
+		t.Fatalf("parse a launch context: %v", err)
+	}
+
+	req := f.probe()
+	req.Launch = launch
+
+	scope, err := BuildScope(t.Context(), req)
+	if err != nil {
+		t.Fatalf("BuildScope: %v", err)
+	}
+
+	if len(scope.Grants()) != 0 {
+		t.Errorf("an app granted only Condition reached %d Observation grants", len(scope.Grants()))
+	}
+
+	// The same request with no app behind it reaches what the person holds, so
+	// the emptiness above is the narrowing and not a fixture that grants nothing.
+	held, err := BuildScope(t.Context(), f.probe())
+	if err != nil {
+		t.Fatalf("BuildScope with no app: %v", err)
+	}
+
+	if len(held.Grants()) == 0 {
+		t.Fatal("the person themselves reached nothing, so the test above proves nothing")
+	}
 }

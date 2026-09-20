@@ -262,6 +262,7 @@ func (f *fixture) request(
 		Type:           resourceType,
 		Action:         action,
 		Now:            decidedAt,
+		Launch:         authz.NoLaunch(),
 		Resolvers: authz.Resolvers{
 			Memberships: NewMembershipResolver(f.db),
 			Projects:    NewProjectResolver(f.db),

@@ -191,6 +191,10 @@ func (n *notifier) matches(
 		Type:      written.Key.Type,
 		Action:    storage.ActionSearch,
 		Now:       n.clock(),
+		// A delivery is judged against the subscription owner's own standing.
+		// No app is asking: the session an app once held is not what decides
+		// whether a later write matches a subscription somebody else created.
+		Launch:    authz.NoLaunch(),
 		Resolvers: n.resolve,
 	})
 	if err != nil {

@@ -86,6 +86,12 @@ type Request struct {
 	// and expiry are judged.
 	Now time.Time
 
+	// Launch is what the asking session was launched with, and it is required:
+	// NoLaunch for a request no app is behind, ParseLaunch for a session's own
+	// context. Leaving it alone denies the call rather than skipping the
+	// narrowing, because skipping the narrowing is what widens.
+	Launch Launch
+
 	Resolvers Resolvers
 }
 
@@ -125,7 +131,10 @@ func BuildScope(ctx context.Context, req Request) (storage.Scope, error) {
 		return storage.Scope{}, err
 	}
 
-	return storage.NewScope(append(held, reached...)...), nil
+	// The narrowing is applied here rather than by the caller, because this is
+	// the only function that produces a Scope: an app's request cannot reach
+	// storage through a path that forgot to restrict it.
+	return req.Launch.Narrow(storage.NewScope(append(held, reached...)...)), nil
 }
 
 // validate refuses a malformed call. These are the caller's mistakes, kept
@@ -151,6 +160,10 @@ func (r Request) validate() error {
 
 	if r.Now.IsZero() {
 		return ErrMissingInstant
+	}
+
+	if !r.Launch.stated {
+		return ErrMissingLaunch
 	}
 
 	return r.Resolvers.validate()
