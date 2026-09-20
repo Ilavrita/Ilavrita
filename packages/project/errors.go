@@ -110,6 +110,12 @@ var (
 	// principal id alone, so two families sharing one id would be one principal.
 	ErrInvalidServiceID = errors.New("project: identifier is outside its principal namespace")
 
+	// ErrInvalidRedirectURI reports an address an authorization code must not be
+	// handed back to: one that is relative, carries a fragment, is cleartext
+	// somewhere other than loopback, or names a scheme that runs its content
+	// rather than addressing something.
+	ErrInvalidRedirectURI = errors.New("project: invalid redirect uri")
+
 	// ErrMissingServiceName reports a machine principal registered with no name.
 	// Nothing an operator can revoke in a hurry is nameless.
 	ErrMissingServiceName = errors.New("project: a client application or bot needs a name")

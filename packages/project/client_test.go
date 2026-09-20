@@ -77,7 +77,10 @@ func TestAnIdOutsideItsNamespaceIsRefused(t *testing.T) {
 // TestNewClientApplicationRefusesAnIncompleteRegistration, because nothing an
 // operator must revoke in a hurry is nameless or stateless.
 func TestNewClientApplicationRefusesAnIncompleteRegistration(t *testing.T) {
-	complete := ClientApplicationConfig{ID: "cli_loader", Name: "Nightly loader", State: ServiceActive}
+	complete := ClientApplicationConfig{
+		ID: "cli_loader", Name: "Nightly loader",
+		State: ServiceActive, Kind: ClientConfidential,
+	}
 
 	cases := map[string]struct {
 		owner  ID

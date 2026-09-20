@@ -24,7 +24,7 @@ func activeApplication(t *testing.T) ClientApplication {
 	t.Helper()
 
 	app, err := NewClientApplication("prj_a", ClientApplicationConfig{
-		ID: "cli_loader", Name: "Nightly loader", State: ServiceActive,
+		ID: "cli_loader", Name: "Nightly loader", State: ServiceActive, Kind: ClientConfidential,
 	})
 	if err != nil {
 		t.Fatalf("NewClientApplication: %v", err)
@@ -226,7 +226,7 @@ func TestACredentialNeverOutlivesItsCeiling(t *testing.T) {
 func TestASuspendedRegistrationIssuesNoCredential(t *testing.T) {
 	for _, state := range []ServiceState{ServiceSuspended, ServiceRevoked} {
 		app, err := NewClientApplication("prj_a", ClientApplicationConfig{
-			ID: "cli_loader", Name: "Nightly loader", State: state,
+			ID: "cli_loader", Name: "Nightly loader", State: state, Kind: ClientConfidential,
 		})
 		if err != nil {
 			t.Fatalf("NewClientApplication(%s): %v", state, err)

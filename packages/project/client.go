@@ -148,7 +148,38 @@ type ClientApplication struct {
 	name        string
 	description string
 	state       ServiceState
+	kind        ClientKind
+	redirects   RedirectURIs
 }
+
+// ClientKind is whether a registration can keep a secret.
+//
+// It is recorded rather than derived from whether a credential currently exists,
+// because those two differ exactly when it matters: a confidential client whose
+// only credential was revoked would, if derived, become a public client — one
+// that redeems authorization codes presenting no secret at all. Revoking a
+// credential must take capability away, never change which proof is demanded.
+type ClientKind string
+
+// The kinds of registration.
+const (
+	// ClientPublic is a registration that holds no secret: a browser app or a
+	// native app, where anything shipped to the device is readable. PKCE is what
+	// it proves itself with.
+	ClientPublic ClientKind = "public"
+
+	// ClientConfidential is a registration that keeps a secret somewhere a user
+	// cannot read, and must present it to redeem a code.
+	ClientConfidential ClientKind = "confidential"
+)
+
+// Valid reports whether the kind is one this server recognises.
+func (k ClientKind) Valid() bool {
+	return k == ClientPublic || k == ClientConfidential
+}
+
+// KeepsASecret reports whether this registration must present a client secret.
+func (k ClientKind) KeepsASecret() bool { return k == ClientConfidential }
 
 // ClientApplicationConfig is what NewClientApplication takes, and the shape a
 // store rehydrates a row through. It names no Project: the owning Project is an
@@ -159,6 +190,16 @@ type ClientApplicationConfig struct {
 	Name        string
 	Description string
 	State       ServiceState
+
+	// Kind is whether this registration keeps a secret. It has no default: a
+	// zero value is refused, because the two answers demand different proof and
+	// guessing would pick one for a caller who never said.
+	Kind ClientKind
+
+	// RedirectURIs are the addresses an authorization code may be handed back
+	// to. A registration naming none does no authorization-code flow, which is
+	// what a backend service is.
+	RedirectURIs RedirectURIs
 }
 
 // NewClientApplication registers a caller in one Project.
@@ -179,10 +220,26 @@ func NewClientApplication(owner ID, cfg ClientApplicationConfig) (ClientApplicat
 		return ClientApplication{}, fmt.Errorf("%w: %q", ErrUnknownState, string(cfg.State))
 	}
 
+	if !cfg.Kind.Valid() {
+		return ClientApplication{}, fmt.Errorf("%w: %q is not a client kind",
+			ErrUnknownKind, string(cfg.Kind))
+	}
+
 	return ClientApplication{
 		id: cfg.ID, project: owner, name: cfg.Name,
 		description: cfg.Description, state: cfg.State,
+		kind: cfg.Kind, redirects: cfg.RedirectURIs,
 	}, nil
+}
+
+// Kind returns whether this registration keeps a secret.
+func (a ClientApplication) Kind() ClientKind {
+	return a.kind
+}
+
+// RedirectURIs returns the addresses an authorization code may be handed back to.
+func (a ClientApplication) RedirectURIs() RedirectURIs {
+	return a.redirects
 }
 
 // ID returns the registration's identifier.
