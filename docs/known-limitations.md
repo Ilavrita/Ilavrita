@@ -923,11 +923,23 @@ in.
 
 ## Cross-origin requests
 
-The FHIR surface sends no CORS headers and answers no preflight, so no browser
-on another origin can read from it. The runtime's own default — allow every
-origin — is withdrawn beneath `/fhir/R4` and left in place everywhere else. A
-browser-based client needs a proxy on its own origin until a configurable policy
-exists.
+Every FHIR route that carries data sends no CORS headers and answers no
+preflight, so no browser on another origin can read from it. The runtime's own
+default — allow every origin — is withdrawn beneath `/fhir/R4` and left in place
+everywhere else. A browser-based client needs a proxy on its own origin until a
+configurable policy exists.
+
+**Three routes are exceptions, and they are the public ones.**
+`/fhir/R4/metadata`, `/fhir/R4/.well-known/smart-configuration` and the token
+endpoint keep the runtime's policy. SMART requires cross-origin access to both
+discovery documents, and a browser app reads them before it holds anything to
+protect; the token endpoint is reached with a code and a verifier the app already
+has, never with an ambient credential a hostile page could replay.
+
+What makes the two discovery documents safe is that neither carries data. Both
+are unauthenticated, and the policy allows every origin *without* allowing
+credentials — so a browser will not attach an `Authorization` header to the
+request, and a cross-origin caller reads exactly what an anonymous one reads.
 
 ## Operational consequence
 
