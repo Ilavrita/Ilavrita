@@ -192,8 +192,14 @@ func TestNoScopeNamesAPlatformResource(t *testing.T) {
 // client to read what it was granted. Refusing is visible; granting something
 // adjacent and calling it the same is not.
 func TestWhatThisBuildWillNotGrant(t *testing.T) {
+	// A backend service scope is no longer refused here. It parses, and narrows
+	// against the standing of whoever is asking — which for a client-credentials
+	// token is the registration itself. What must never happen is one reaching a
+	// session that acts for a person, because that standing is theirs and not
+	// the service's. Nothing in this package could tell those apart, so the
+	// refusal lives where scopes are approved and is tested there.
+
 	for named, stated := range map[string]string{
-		"a backend service, which nothing here can authenticate":      "system/Observation.read",
 		"a type this server does not serve":                           "user/Appointment.read",
 		"a search restriction this build does not apply":              "patient/Observation.rs?category=lab",
 		"creating without updating, which this build cannot separate": "user/Observation.c",
@@ -261,4 +267,41 @@ func containsAction(held []storage.Action, wanted storage.Action) bool {
 	}
 
 	return false
+}
+
+// TestABackendServiceScopeNarrowsAgainstWhoeverIsAsking.
+//
+// It behaves exactly as a user scope does, and that is the point: what makes it
+// a *system* scope is whose Grants went in, not anything this function does
+// differently. A client-credentials token's principal is the registration, so
+// the Grants are the registration's own.
+//
+// Which is also why it must never reach a session acting for a person: the same
+// narrowing would then hand a service scope that person's standing.
+func TestABackendServiceScopeNarrowsAgainstWhoeverIsAsking(t *testing.T) {
+	// What a registration's own policy grants it.
+	service := storage.NewScope(
+		reading("Observation", storage.ActionRead),
+		reading("Observation", storage.ActionWrite),
+		reading("Condition", storage.ActionRead),
+	)
+
+	held := authz.Narrow(service, granting(t, "system/Observation.read"), "")
+
+	if len(held.Grants()) != 1 {
+		t.Fatalf("a system scope kept %d grants, want the one read it names", len(held.Grants()))
+	}
+
+	if held.Grants()[0].Type != "Observation" || held.Grants()[0].Action != storage.ActionRead {
+		t.Errorf("a system scope reached %v", held.Grants()[0])
+	}
+
+	// And it reaches nothing the registration's own standing does not.
+	beyond := authz.Narrow(
+		storage.NewScope(reading("Observation", storage.ActionRead)),
+		granting(t, "system/Patient.read"), "")
+
+	if len(beyond.Grants()) != 0 {
+		t.Errorf("a system scope reached %d grants its own standing does not hold", len(beyond.Grants()))
+	}
 }

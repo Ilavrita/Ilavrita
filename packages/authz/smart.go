@@ -108,12 +108,7 @@ func ParseScope(stated string) (SmartScope, error) {
 	held := SmartScope{Context: SmartContext(context)}
 
 	switch held.Context {
-	case ContextPatient, ContextUser:
-	case ContextSystem:
-		// A backend service has no person to narrow against, and this build
-		// issues no client-credentials token yet. Treating it as a user with
-		// nobody would be treating it as unrestricted.
-		return SmartScope{}, fmt.Errorf("%w: %s", ErrUnsupportedScope, stated)
+	case ContextPatient, ContextUser, ContextSystem:
 	default:
 		return SmartScope{}, fmt.Errorf("%w: %q names no context", ErrMalformedScope, stated)
 	}
@@ -264,9 +259,16 @@ func narrowGrant(
 			}
 
 		case ContextSystem:
-			// ParseScope refuses these, so one reaching here is a caller that
-			// built a SmartScope by hand rather than by parsing.
-			continue
+			// A backend service narrows against its own standing, exactly as a
+			// person's app narrows against theirs. The difference is whose
+			// standing went in: a client-credentials token's principal is the
+			// registration itself, so the Grants here are the client's own.
+			//
+			// That is why a system scope must never reach a session acting for
+			// a person. Nothing in this function could tell the difference —
+			// the Grants look the same — so the refusal belongs where the
+			// scopes are approved, and the authorization endpoint makes it.
+			asIs = true
 		}
 	}
 
