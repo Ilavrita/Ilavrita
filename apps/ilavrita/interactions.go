@@ -162,6 +162,13 @@ func readCanonical(
 func respondPossiblePayload(
 	request *core.RequestEvent, held granted, record storage.ResourceRecord,
 ) error {
+	// A caller holding this version already is told so rather than sent it
+	// again. Decided after authorization, so 304 is never an answer somebody
+	// could not have read.
+	if unchangedSince(request, record) {
+		return respondUnchanged(request, record)
+	}
+
 	if record.Key.Type != binaryType {
 		return respondResource(request, http.StatusOK, record)
 	}
