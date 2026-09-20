@@ -15,6 +15,7 @@
   <a href="https://app.fossa.com/projects/git%2Bgithub.com%2FIlavrita%2FIlavrita?ref=badge_shield"><img src="https://app.fossa.com/api/projects/git%2Bgithub.com%2FIlavrita%2FIlavrita.svg?type=shield" alt="FOSSA licence scan" /></a>
   <a href="https://golang.org"><img src="https://img.shields.io/badge/go-1.27-7C3AED" alt="Go 1.27" /></a>
   <a href="https://hl7.org/fhir/R4/"><img src="https://img.shields.io/badge/FHIR-R4%204.0.1-A78BFA" alt="FHIR R4" /></a>
+  <a href="https://deepwiki.com/Ilavrita/Ilavrita"><img src="https://deepwiki.com/badge.svg" alt="Ask DeepWiki" /></a>
 </p>
 
 ---
@@ -274,6 +275,12 @@ rule in [`.golangci.yml`](.golangci.yml) rather than by convention:
 [docs/architecture.md](docs/architecture.md) covers the search pipeline,
 transaction boundaries and the tenancy model. The reasoning behind the big
 decisions is in [docs/adr](docs/adr).
+
+[DeepWiki](https://deepwiki.com/Ilavrita/Ilavrita) indexes this repository and
+will answer questions about it in plain language, which is a good way in if you
+do not yet know which file to open. It is generated from a snapshot rather than
+from the working tree, so it lags: where it disagrees with the documents in this
+repository, the documents are what is true.
 
 ## Repository layout
 
