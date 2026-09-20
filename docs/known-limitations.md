@@ -83,7 +83,7 @@ Every other `/fhir/R4` route answers `501 Not Implemented` as an
 | Authentication | Working: password, sessions, TOTP second factor with an administrator recovery path, per-install throttle; see below |
 | SMART App Launch | Working for the standalone launch: authorize, token, PKCE S256, refresh, discovery; see below |
 | SMART Backend Services | Working: `client_credentials` with `private_key_jwt`, RS384 and ES384, so `system/` scopes are granted; see below |
-| OpenID Connect | Not implemented: no `id_token`, so `openid`, `fhirUser` and `profile` are refused by name |
+| OpenID Connect | Working when a sealing key is configured: `id_token` signed RS256, a published JWKS, OIDC discovery; `profile` is refused |
 | Audit trail | Working: every interaction and login, in the transaction that did it |
 | Binary payloads | Working: bytes kept outside the database, placed by `securityContext` |
 | DocumentReference | Working: the document is a `Binary` its attachment names; inlined bytes are refused |
@@ -541,20 +541,36 @@ What that run says, rather than what it was expected to say:
 | Standalone Launch | Passes: redirect, code, token exchange, response body, CORS |
 | Token Refresh, with and without scopes | Passes |
 | Backend Services authorization | Passes: the valid request and all three refusals |
-| OpenID Connect | Skipped — no `id_token` is issued, so nothing is reached |
+| OpenID Connect | Passes: the token decodes, verifies against the published key set, and `fhirUser` resolves |
 
-Every remaining failure is a TLS check — `standalone_auth_tls`,
-`standalone_token_tls` and `smart_backend_services_token_tls_version` — and the
-run was driven against a plaintext local server. They are a statement about that
-deployment and not about this code.
+Two kinds of failure remain, and neither is a refusal this server made. Three
+TLS checks — `standalone_auth_tls`, `standalone_token_tls` and
+`smart_backend_services_token_tls_version` — fail because the run was driven
+against a plaintext local server, which is a statement about that deployment.
+And `smart_cors_openid_fhir_user_claim`, which is marked optional, fails because
+the FHIR API refuses cross-origin requests; that one is a real gap and is
+described under Cross-origin requests below.
 
-It found two real defects, and both are fixed. The token endpoint answered
-without `Cache-Control: no-store`, which RFC 6749 section 5.1 requires of any
-response holding a token. And the authorization endpoint read only a query,
-where SMART requires a server to accept a form as well — the Go suite had never
-sent one, because it was written against the same reading of the specification
-that wrote the handler. That is exactly the class of mistake an outside
-implementation exists to catch.
+It found three real defects, and all three are fixed.
+
+The token endpoint answered without `Cache-Control: no-store`, which RFC 6749
+section 5.1 requires of any response holding a token.
+
+The authorization endpoint read only a query, where SMART requires a server to
+accept a form as well. The Go suite had never sent one, because it was written
+against the same reading of the specification that wrote the handler — exactly
+the class of mistake an outside implementation exists to catch.
+
+The third was the oldest and the worst. An approval carrying `offline_access`,
+`online_access` or `launch/patient` produced a token that failed **every** FHIR
+request with a server fault, because those scopes name no resource type and the
+authorization layer tried to read each one as a restriction. It had been that
+way since refresh was built. Nothing caught it because every test that held such
+a token asserted a refusal — and a `500` satisfies "the write was refused" just
+as well as a `403` does. The fix carries them and ignores them, from a closed
+list, so a scope this build does not recognise still fails the launch; the test
+that would have caught it asserts the positive, that a request the approval
+granted actually succeeds.
 
 The run is not automated. It needs a seeded database, a consent page and a
 browser driven through the launch; `scripts/seedlaunch` and `scripts/consent`
@@ -894,6 +910,31 @@ that verify is refused as ambiguous rather than resolved by picking one.
 Each assertion's `jti` is spent once and kept until it expires, so a replayed one
 is refused rather than honoured twice.
 
+**An identity token says who signed in.** `openid` and `fhirUser` are granted
+when this deployment can answer them, and an approval carrying `openid` receives
+an `id_token`: a compact JWS signed RS256, which is what SMART requires of this
+token specifically and is narrower than the RS384/ES384 a client assertion uses.
+The public half is published at `/oauth2/jwks`, and
+`/.well-known/openid-configuration` sits at the host root because a client finds
+it by appending to the `iss` claim it read.
+
+The signing key is minted on first need and kept sealed, under the same
+configured secret as every other stored secret. **A deployment with no sealing
+key issues no identity token** — it says so in both discovery documents, which
+omit the issuer and the `sso-openid-connect` capability together, and it refuses
+the identity scopes with that reason rather than granting a promise it cannot
+keep.
+
+`fhirUser` names the resource the person is, taken from the FHIR resource their
+membership names. An account whose membership names none is refused that scope
+and granted `openid` alone: this server knows who signed in, it simply cannot
+say which record they are.
+
+**`profile` is refused.** SMART calls it a deprecated synonym for `fhirUser`;
+OpenID Connect gives it a claim set of its own, which this server does not hold.
+Granting it would answer one reading and disappoint the other, and the app that
+asked cannot tell which happened.
+
 **Both methods at the authorization endpoint.** SMART requires a server to accept
 an authorization request serialised into the query or into a form, because the
 app chooses which. A form request is answered `303`, the status that means the
@@ -901,9 +942,6 @@ change of method the consent page needs.
 
 **What SMART App Launch does not do here:**
 
-- **No identity token.** `openid`, `fhirUser` and `profile` are refused by name
-  rather than granted, because granting them is a promise: a client that asked
-  for `openid` would look for an `id_token` and find nothing
 - **No EHR launch.** The `launch` parameter is read as the patient a session is
   launched for, not as an opaque handle an EHR issues and this server resolves.
   The `launch` and `launch/encounter` scopes are refused by name: there is no
@@ -976,17 +1014,33 @@ default — allow every origin — is withdrawn beneath `/fhir/R4` and left in p
 everywhere else. A browser-based client needs a proxy on its own origin until a
 configurable policy exists.
 
-**Three routes are exceptions, and they are the public ones.**
-`/fhir/R4/metadata`, `/fhir/R4/.well-known/smart-configuration` and the token
-endpoint keep the runtime's policy. SMART requires cross-origin access to both
-discovery documents, and a browser app reads them before it holds anything to
-protect; the token endpoint is reached with a code and a verifier the app already
-has, never with an ambient credential a hostile page could replay.
+**Five routes are exceptions, and they are the public ones.**
+`/fhir/R4/metadata`, `/fhir/R4/.well-known/smart-configuration`,
+`/.well-known/openid-configuration`, `/oauth2/jwks` and the token endpoint keep
+the runtime's policy. SMART requires cross-origin access to the discovery
+documents, and a browser app reads them before it holds anything to protect; a
+client checking an identity token's signature has to reach the key set from
+wherever it runs. The token endpoint is reached with a code and a verifier the
+app already has, never with an ambient credential a hostile page could replay.
 
-What makes the two discovery documents safe is that neither carries data. Both
-are unauthenticated, and the policy allows every origin *without* allowing
+What makes the four documents safe is that none of them carries data. All are
+unauthenticated, and the policy allows every origin *without* allowing
 credentials — so a browser will not attach an `Authorization` header to the
 request, and a cross-origin caller reads exactly what an anonymous one reads.
+The key set is the public half of one key and nothing else.
+
+**This is the one place the SMART story is incomplete.** SMART says a server
+supporting purely browser-based apps SHALL permit cross-origin access to the
+token endpoint *and to the FHIR REST API*, for a client's registered origins.
+This build does the first and not the second, while advertising `client-public`
+— so a browser app can complete a launch here and then cannot call the API it
+was launched against. Inferno reports it as one optional failure,
+`smart_cors_openid_fhir_user_claim`; the honest reading is that the capability
+is advertised more broadly than it is served.
+
+Closing it properly means per-client origins rather than a blanket allowance:
+the spec says *a client's registered origin(s)*, and the registrations that
+would name them are the same rows that already hold redirect addresses.
 
 ## Operational consequence
 

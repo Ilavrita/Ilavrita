@@ -125,10 +125,22 @@ does not serve, `c` without `u` — is therefore visible to the app rather than 
 3. ~~`GET`/`POST /oauth2/authorize` and the consent pair~~ — **built**
 4. ~~`POST /oauth2/token`, `authorization_code` grant~~ — **built**
 5. ~~Refresh tokens and the `refresh_token` grant~~ — **built**
-6. `private_key_jwt` and the `client_credentials` grant, which is what unblocks `system/` —
-   **partly built**: `project.JWKS` parses and holds a registration's public keys, and nothing
-   uses it yet. What remains is in section 12.
+6. ~~`private_key_jwt` and the `client_credentials` grant, which is what unblocks `system/`~~ —
+   **built**. Section 12 records how its two blockers were settled.
 7. ~~`.well-known/smart-configuration`~~ — **built**
+8. ~~OpenID Connect: an `id_token`, a published key set, and OIDC discovery~~ — **built**, and
+   conditional on a sealing key. The signing key is minted on first need and kept sealed; a
+   deployment holding none issues no identity token and omits the issuer and the
+   `sso-openid-connect` capability from both discovery documents rather than advertising an
+   issuer that answers nothing.
+
+   `RS256` for this token specifically (decision), which is narrower than the RS384/ES384 a
+   client assertion is verified with. SMART requires RSA SHA-256 of an identity token by name,
+   and the two are separate choices about separate tokens.
+
+   `profile` is refused (decision). SMART calls it a deprecated synonym for `fhirUser`; OpenID
+   Connect gives it a claim set of its own. Granting it would answer one reading and disappoint
+   the other, and the app that asked cannot tell which happened.
 
 ## 10. What the standalone launch does today
 
