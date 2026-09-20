@@ -341,21 +341,30 @@ paths:
   /oauth2/authorize:
     get:
       tags: [SMART App Launch]
-      summary: Describe a pending authorization
+      summary: Begin an authorization
       description: |
-        Answers what a client asked for and what this server would grant, for a
-        consent screen to render. It writes nothing: approving is a separate
-        call, and a GET that created an approval would be one a link could
-        trigger.
+        SMART's authorization endpoint. A browser arrives from an app and leaves
+        for the page this deployment configured in `ILAVRITA_CONSENT_URL`,
+        carrying the request so that page can describe what is being approved.
 
-        The caller is the person who would approve, carrying their own session.
-        A request nobody is signed in for is refused: a scope narrows somebody's
-        standing, and without a person there is nobody's to narrow.
+        It authenticates nobody: the person has not signed in yet, which is the
+        reason they are being sent somewhere. It also does not resolve the client
+        or verify the redirect address, and that is not an omission — a browser
+        arriving from an app carries no session, so this server does not yet know
+        which Project is being asked about, and a client id is unique within one
+        rather than across the install. Those checks happen at
+        `GET /oauth2/consent`, once somebody has signed in.
 
-        `refused` names every scope this server will not grant, with a reason.
-        SMART requires a client to read what it was granted, so a scope quietly
-        dropped would be one the app believes it holds.
-      operationId: describeAuthorization
+        Redirecting before them is safe because the address redirected to is the
+        deployment's own page, never the app's. RFC 6749 section 4.1.2.1 forbids
+        reporting an error to an address that has not been verified; it says
+        nothing about sending a person to a first-party page.
+
+        A request missing anything this endpoint needs is answered directly
+        rather than redirected, which is also what stops it becoming a way to
+        bounce a browser wherever a query parameter names.
+      operationId: beginAuthorization
+      security: []
       parameters:
         - { in: query, name: response_type, required: true, schema: { type: string, enum: [code] } }
         - { in: query, name: client_id, required: true, schema: { type: string } }
@@ -367,11 +376,13 @@ paths:
         - { in: query, name: state, required: false, schema: { type: string } }
         - { in: query, name: launch, required: false, schema: { type: string } }
       responses:
-        "200":
-          $ref: "#/components/responses/AuthorizationDescribed"
+        "302":
+          description: The person is sent to the consent page.
+          headers:
+            Location:
+              description: The consent page, carrying the request being approved.
+              schema: { type: string }
         "400":
-          $ref: "#/components/responses/OAuthRefused"
-        "401":
           $ref: "#/components/responses/OAuthRefused"
         "500":
           $ref: "#/components/responses/OAuthRefused"
@@ -397,6 +408,44 @@ paths:
       responses:
         "200":
           $ref: "#/components/responses/AuthorizationApproved"
+        "400":
+          $ref: "#/components/responses/OAuthRefused"
+        "401":
+          $ref: "#/components/responses/OAuthRefused"
+        "500":
+          $ref: "#/components/responses/OAuthRefused"
+
+  /oauth2/consent:
+    get:
+      tags: [SMART App Launch]
+      summary: Describe a pending authorization
+      description: |
+        What a client asked for and what this server would grant, for the consent
+        page to render. It writes nothing: approving is a separate call, and a
+        GET that created an approval would be one a link could trigger.
+
+        The caller is the person who would approve, carrying their own session.
+        Which Project the request is about is whatever that person belongs to,
+        which is why the client and the redirect address are resolved here rather
+        than at the authorization endpoint.
+
+        `refused` names every scope this server will not grant, with a reason.
+        SMART requires a client to read what it was granted, so a scope quietly
+        dropped would be one the app believes it holds.
+      operationId: describeAuthorization
+      parameters:
+        - { in: query, name: response_type, required: true, schema: { type: string, enum: [code] } }
+        - { in: query, name: client_id, required: true, schema: { type: string } }
+        - { in: query, name: redirect_uri, required: true, schema: { type: string } }
+        - { in: query, name: scope, required: true, schema: { type: string } }
+        - { in: query, name: aud, required: true, schema: { type: string } }
+        - { in: query, name: code_challenge, required: true, schema: { type: string } }
+        - { in: query, name: code_challenge_method, required: true, schema: { type: string, enum: [S256] } }
+        - { in: query, name: state, required: false, schema: { type: string } }
+        - { in: query, name: launch, required: false, schema: { type: string } }
+      responses:
+        "200":
+          $ref: "#/components/responses/AuthorizationDescribed"
         "400":
           $ref: "#/components/responses/OAuthRefused"
         "401":
@@ -1856,13 +1905,19 @@ components:
               refresh_token: { type: string }
 
     SmartConfiguration:
-      description: Where a client goes and what it may ask for.
+      description: |
+        Where a client goes and what it may ask for.
+
+        `issuer` and `jwks_uri` are absent. SMART makes both conditional on the
+        `sso-openid-connect` capability — "otherwise, omitted" — and this build
+        issues no identity token, so publishing either would name an OpenID
+        Connect issuer that answers nothing. They belong here the day that is
+        built and not before.
       content:
         application/json:
           schema:
             type: object
             properties:
-              issuer: { type: string }
               authorization_endpoint: { type: string }
               token_endpoint: { type: string }
               grant_types_supported:

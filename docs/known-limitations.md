@@ -819,8 +819,21 @@ through the API, and an operator has to reach the database.
 
 `/oauth2/authorize` and `/oauth2/token` serve the standalone launch. A client
 registers the addresses a code may be returned to and whether it keeps a secret;
-a person approves through their own session; the code comes back on a registered
-address and is exchanged for an access token.
+a person approves; the code comes back on a registered address and is exchanged
+for an access token.
+
+**The consent screen is not this server's.** `GET /oauth2/authorize` is the
+browser endpoint SMART specifies, and what it does is redirect to the page named
+by `ILAVRITA_CONSENT_URL`, carrying the request. That page reads
+`GET /oauth2/consent` for what would be granted and what is refused, and posts
+the approval back. A deployment that configures no such page authorizes nobody,
+and says so rather than redirecting nowhere.
+
+The endpoint resolves neither the client nor the redirect address: a browser
+arriving from an app carries no session, so the Project is not yet known, and a
+client id is unique within a Project rather than across the install. Those checks
+happen at `/oauth2/consent`, once somebody has signed in — the Project is
+whoever they are.
 
 **An access token is a session.** There is no second kind of bearer credential
 here, which is why what an app reaches is narrowed per request against whatever
@@ -845,7 +858,10 @@ is holding, so the grant dies: every rotation of it, and every session it minted
   rather than granted, because granting them is a promise: a client that asked
   for `openid` would look for an `id_token` and find nothing
 - **No EHR launch.** The `launch` parameter is read as the patient a session is
-  launched for, not as an opaque handle an EHR issues and this server resolves
+  launched for, not as an opaque handle an EHR issues and this server resolves.
+  The `launch` and `launch/encounter` scopes are refused by name: there is no
+  encounter in a token response, and a scope honoured in name only is worse than
+  one plainly refused
 - **No token introspection or revocation endpoint.** A token expires, or the
   session behind it is revoked through the session routes
 
