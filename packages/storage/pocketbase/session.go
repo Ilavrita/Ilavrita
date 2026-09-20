@@ -20,7 +20,7 @@ var ErrSessionTokenTaken = errors.New("pocketbase: the install already holds thi
 // sessionColumns is what a resolve selects. The digest is selected here because
 // this is the comparison: it is the only projection in this package that reads
 // one, and it never leaves the method.
-const sessionColumns = "project_id, id, user_id, membership_id," +
+const sessionColumns = "project_id, id, COALESCE(user_id, ''), COALESCE(client_application_id, ''), membership_id," +
 	" COALESCE(token_hash, ''), state," +
 	// Absence is NULL in the table and the empty string in the record, and the
 	// two mean the same thing: a login nobody's app holds, narrowed by nothing.
@@ -30,12 +30,13 @@ const sessionColumns = "project_id, id, user_id, membership_id," +
 
 const (
 	createSession = "INSERT INTO sessions" +
-		" (project_id, id, token_hash, user_id, membership_id, state," +
+		" (project_id, id, token_hash, user_id, client_application_id, membership_id, state," +
 		" launch_patient, granted_scopes, refresh_chain," +
 		" created_at, expires_at, revoked_at)" +
 		// NULLIF writes absence as NULL rather than as an empty string the
 		// CHECK refuses, so the record's zero value and the row's agree.
-		" VALUES (?, ?, ?, ?, ?, 'active', NULLIF(?, ''), NULLIF(?, ''), NULLIF(?, ''), ?, ?, NULL)" +
+		" VALUES (?, ?, ?, NULLIF(?, ''), NULLIF(?, ''), ?, 'active'," +
+		" NULLIF(?, ''), NULLIF(?, ''), NULLIF(?, ''), ?, ?, NULL)" +
 		// The uniqueness index is partial, so the conflict target repeats its
 		// predicate: without it SQLite matches no index and refuses the statement.
 		" ON CONFLICT (token_hash) WHERE token_hash IS NOT NULL DO NOTHING" +
@@ -79,7 +80,7 @@ func (s *SessionStore) Issue(ctx context.Context, session project.Session) error
 
 	err := conn(ctx, s.db).QueryRowContext(ctx, createSession,
 		string(session.Project()), string(session.ID()), session.Digest(),
-		string(session.User()), string(session.Membership()),
+		string(session.User()), string(session.Client()), string(session.Membership()),
 		launch.Patient(), launch.Scopes(), string(session.RefreshChain()),
 		session.CreatedAt().UnixMilli(), session.ExpiresAt().UnixMilli(),
 	).Scan(&written)
@@ -106,13 +107,13 @@ func (s *SessionStore) Resolve(
 	}
 
 	var (
-		proj, id, user, membership, digest, state string
-		launchPatient, grantedScopes, chain       string
-		createdAt, expiresAt, revokedAt           int64
+		proj, id, user, client, membership, digest, state string
+		launchPatient, grantedScopes, chain               string
+		createdAt, expiresAt, revokedAt                   int64
 	)
 
 	switch err := conn(ctx, s.db).QueryRowContext(ctx, resolveSession, token.Digest()).Scan(
-		&proj, &id, &user, &membership, &digest, &state,
+		&proj, &id, &user, &client, &membership, &digest, &state,
 		&launchPatient, &grantedScopes, &chain,
 		&createdAt, &expiresAt, &revokedAt); {
 	case errors.Is(err, sql.ErrNoRows):
@@ -123,6 +124,7 @@ func (s *SessionStore) Resolve(
 
 	record := project.SessionRecord{
 		ID: project.SessionID(id), User: project.UserID(user),
+		Client:     project.ClientApplicationID(client),
 		Membership: project.MembershipID(membership), Digest: digest,
 		State:         project.SessionState(state),
 		LaunchPatient: launchPatient, GrantedScopes: grantedScopes,

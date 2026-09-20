@@ -69,6 +69,14 @@ var (
 	ErrClientJWKSMissing = errors.New(
 		"pocketbase: client_applications cannot hold a registration's public keys")
 
+	// ErrSessionPrincipalMissing reports a sessions table that can name only a
+	// person. A backend service's token is a session whose principal is the
+	// registration, so a database without the column cannot hold one — and the
+	// grant would either refuse every service or, worse, mint a session naming
+	// somebody who is not there.
+	ErrSessionPrincipalMissing = errors.New(
+		"pocketbase: sessions cannot name a machine principal")
+
 	// ErrRebuildWouldDropColumn reports an old table holding a column the current
 	// declaration does not. The rebuild copies rows, so a dropped column is lost
 	// data and the rebuild refuses rather than performing it.
@@ -132,6 +140,10 @@ const (
 	// clientJWKSColumn is what a registration holds its public keys in, and what
 	// an install that predates backend services does not declare.
 	clientJWKSColumn = "jwks"
+
+	// sessionClientColumn is what a session names a machine principal in, and
+	// what an install that predates backend services does not declare.
+	sessionClientColumn = "client_application_id"
 )
 
 // principalParents are the registries project_memberships must name, each with
@@ -229,6 +241,7 @@ func assertServable(ctx context.Context, db *sql.DB) error {
 		AssertClientKind,
 		AssertClientJWKS,
 		AssertSessionRefreshChain,
+		AssertSessionPrincipal,
 		AssertNoSystemClientApplicationDocuments,
 	} {
 		if err := assert(ctx, db); err != nil {
@@ -345,6 +358,14 @@ func schemaMigrations() []schemaMigration {
 			},
 			rebuild: rebuildClientJWKS,
 			applied: "jwks, so a backend service can register the keys it signs assertions with",
+		},
+		{
+			job: SuperJob{
+				Name: "migrate.sessions.principal",
+				Kind: JobMigration, Subject: sessionTable,
+			},
+			rebuild: rebuildSessionPrincipal,
+			applied: "client_application_id, so a session can name a backend service",
 		},
 	}
 }
@@ -705,6 +726,51 @@ func rebuildClientJWKS(ctx context.Context, db *sql.DB) (bool, error) {
 	}
 
 	return true, nil
+}
+
+// rebuildSessionPrincipal adopts the machine principal column onto a sessions
+// table that can name only a person.
+//
+// Every session it carries across names a user — no service could have held one
+// — so each satisfies the new check, which requires exactly one principal, on
+// the strength of the user it already names.
+func rebuildSessionPrincipal(ctx context.Context, db *sql.DB) (bool, error) {
+	present, err := hasColumn(ctx, db, sessionTable, sessionClientColumn)
+	if err != nil || present {
+		return false, err
+	}
+
+	declared, err := hasTable(ctx, db, sessionTable)
+	if err != nil || !declared {
+		return false, err
+	}
+
+	plan, err := planRebuild(ctx, db, sessionTable)
+	if err != nil {
+		return false, err
+	}
+
+	if err := performRebuild(ctx, db, plan); err != nil {
+		return false, err
+	}
+
+	return true, nil
+}
+
+// AssertSessionPrincipal refuses a database whose sessions can name only a
+// person, because a backend service's token is a session naming its
+// registration.
+func AssertSessionPrincipal(ctx context.Context, db *sql.DB) error {
+	present, err := hasColumn(ctx, db, sessionTable, sessionClientColumn)
+	if err != nil {
+		return err
+	}
+
+	if !present {
+		return fmt.Errorf("%w: %s.%s", ErrSessionPrincipalMissing, sessionTable, sessionClientColumn)
+	}
+
+	return nil
 }
 
 // AssertClientJWKS refuses a database that cannot hold the keys a backend

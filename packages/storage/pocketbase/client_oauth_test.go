@@ -1,7 +1,11 @@
 package pocketbase
 
 import (
+	"crypto/rand"
+	"crypto/rsa"
 	"database/sql"
+	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -242,5 +246,127 @@ func TestEveryGuaranteeADeclarationDependsOnIsAsserted(t *testing.T) {
 				t.Fatalf("still not servable after the migrations ran: %v", err)
 			}
 		})
+	}
+}
+
+// TestARegistrationRoundTripsItsKeySet.
+//
+// This exists because it did not. The insert was missing its jwks column while
+// the read selected one, so a registration was written with its key set bound to
+// created_at and read back holding no keys at all — and every backend service
+// test passed, because an assertion that verifies against nothing fails the same
+// way an assertion signed by the wrong key does.
+//
+// A negative test cannot tell those apart. Only a round trip can.
+func TestARegistrationRoundTripsItsKeySet(t *testing.T) {
+	db := legacyClientDatabase(t)
+
+	if err := PrepareSchema(t.Context(), db); err != nil {
+		t.Fatalf("prepare: %v", err)
+	}
+
+	key, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatalf("GenerateKey: %v", err)
+	}
+
+	set, err := json.Marshal(map[string]any{"keys": []map[string]string{{
+		"kty": "RSA", "kid": "svc", "alg": "RS384",
+		"n": base64.RawURLEncoding.EncodeToString(key.N.Bytes()),
+		"e": base64.RawURLEncoding.EncodeToString([]byte{1, 0, 1}),
+	}}})
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+
+	keys, err := project.ParseJWKS(string(set))
+	if err != nil {
+		t.Fatalf("ParseJWKS: %v", err)
+	}
+
+	registered, err := project.NewClientApplication("prj_a", project.ClientApplicationConfig{
+		ID: "cli_svc", Name: "Nightly service", State: project.ServiceActive,
+		Kind: project.ClientConfidential, JWKS: keys,
+	})
+	if err != nil {
+		t.Fatalf("NewClientApplication: %v", err)
+	}
+
+	store := NewClientApplicationStore(db)
+	if _, err := store.Create(t.Context(), registered); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+
+	// Both reads, because they select through different statements and only one
+	// of them was ever exercised.
+	read, _, found, err := store.ByID(t.Context(), "prj_a", "cli_svc")
+	if err != nil || !found {
+		t.Fatalf("ByID: found %v, err %v", found, err)
+	}
+
+	if read.JWKS().Len() != 1 {
+		t.Errorf("ByID read back %d keys, want the one registered", read.JWKS().Len())
+	}
+
+	borne, err := store.Bearing(t.Context(), "cli_svc")
+	if err != nil {
+		t.Fatalf("Bearing: %v", err)
+	}
+
+	if len(borne) != 1 {
+		t.Fatalf("Bearing found %d registrations, want 1", len(borne))
+	}
+
+	if borne[0].Application.JWKS().Len() != 1 {
+		t.Errorf("Bearing read back %d keys, want the one registered",
+			borne[0].Application.JWKS().Len())
+	}
+
+	// And the columns beside it still hold what they should: the bug put a key
+	// set into created_at, which nothing noticed because SQLite stores what it
+	// is given.
+	var created int64
+
+	if err := db.QueryRowContext(t.Context(),
+		"SELECT created_at FROM client_applications WHERE id = 'cli_svc'").Scan(&created); err != nil {
+		t.Fatalf("read created_at: %v", err)
+	}
+
+	if created <= 0 {
+		t.Errorf("created_at holds %d, which is not an instant", created)
+	}
+}
+
+// TestOneClientIDMayBeBorneByTwoProjects, which is what makes a client id a
+// per-Project name rather than an install-wide one — the containment tests rest
+// on it, and so does the rule that a backend service is selected by its
+// signature rather than by its id.
+func TestOneClientIDMayBeBorneByTwoProjects(t *testing.T) {
+	db := legacyClientDatabase(t)
+
+	if err := PrepareSchema(t.Context(), db); err != nil {
+		t.Fatalf("prepare: %v", err)
+	}
+
+	execAll(t, db, []string{
+		"INSERT INTO projects (id, kind, slug, name, state, created_at, updated_at, state_changed_at)" +
+			" VALUES ('prj_b', 'standard', 'prj_b', 'prj_b', 'active', 0, 0, 0)",
+		"INSERT INTO client_applications (project_id, id, name, description, state, kind," +
+			" created_at, updated_at, revoked_at, version) VALUES" +
+			" ('prj_a', 'cli_twin', 'Twin', '', 'active', 'confidential', 0, 0, NULL, 1)," +
+			" ('prj_b', 'cli_twin', 'Twin', '', 'active', 'confidential', 0, 0, NULL, 1)",
+	})
+
+	borne, err := NewClientApplicationStore(db).Bearing(t.Context(), "cli_twin")
+	if err != nil {
+		t.Fatalf("Bearing: %v", err)
+	}
+
+	if len(borne) != 2 {
+		t.Fatalf("Bearing found %d registrations, want both", len(borne))
+	}
+
+	if borne[0].Project == borne[1].Project {
+		t.Errorf("both registrations came back under %s", borne[0].Project)
 	}
 }

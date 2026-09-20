@@ -1300,7 +1300,13 @@ CREATE TABLE IF NOT EXISTS sessions (
   -- NULL once revoked: a revoked session matches no token because it holds none.
   token_hash    TEXT,
 
-  user_id       TEXT NOT NULL REFERENCES users (id) ON DELETE RESTRICT ON UPDATE RESTRICT,
+  -- Exactly one of these names the principal. A person's session names a user;
+  -- a backend service's names the registration whose key signed for it. Both are
+  -- nullable because only one is ever set, and the CHECK below is what makes
+  -- "neither" and "both" unrepresentable rather than merely unusual.
+  user_id       TEXT REFERENCES users (id) ON DELETE RESTRICT ON UPDATE RESTRICT,
+  client_application_id TEXT,
+
   membership_id TEXT NOT NULL,
   state         TEXT NOT NULL CHECK (state IN ('active', 'revoked')),
 
@@ -1331,6 +1337,11 @@ CREATE TABLE IF NOT EXISTS sessions (
 
   CHECK (substr(id, 1, 4) = 'ses_'),
 
+  -- One principal, never none and never two. A session naming nobody authorizes
+  -- nothing and would be served as whatever a nil principal reads as; one naming
+  -- both is two principals sharing a token.
+  CHECK ((user_id IS NULL) <> (client_application_id IS NULL)),
+
   -- A patient without scopes is a session that was launched and granted
   -- nothing. It would rebuild as an ordinary login while looking like an app's
   -- session to anyone reading the table, so it is unrepresentable.
@@ -1353,7 +1364,10 @@ CREATE TABLE IF NOT EXISTS sessions (
   -- The membership is pinned in the session's own Project, so a token issued for
   -- one Project cannot name standing in another.
   FOREIGN KEY (project_id, membership_id)
-    REFERENCES project_memberships (project_id, id) ON DELETE RESTRICT ON UPDATE RESTRICT
+    REFERENCES project_memberships (project_id, id) ON DELETE RESTRICT ON UPDATE RESTRICT,
+
+  FOREIGN KEY (project_id, client_application_id)
+    REFERENCES client_applications (project_id, id) ON DELETE RESTRICT ON UPDATE RESTRICT
 );
 
 -- The token is the lookup key, so it is unique across the install. A revoked

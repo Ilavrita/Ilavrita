@@ -52,9 +52,9 @@ const credentialColumns = "id, client_application_id," +
 
 const (
 	createApplication = "INSERT INTO client_applications" +
-		" (project_id, id, name, description, state, kind," +
+		" (project_id, id, name, description, state, kind, jwks," +
 		" created_at, updated_at, revoked_at, version)" +
-		" VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, 1)" +
+		" VALUES (?, ?, ?, ?, ?, ?, NULLIF(?, ''), ?, ?, NULL, 1)" +
 		" ON CONFLICT (project_id, name) DO NOTHING" +
 		" RETURNING version"
 
@@ -637,4 +637,100 @@ func (s *ClientApplicationStore) SweepAssertions(
 	}
 
 	return swept, nil
+}
+
+// BorneRegistration is one registration bearing a client id, and the Project it
+// belongs to.
+type BorneRegistration struct {
+	Application project.ClientApplication
+	Project     project.ID
+}
+
+// A client assertion names the client in iss and sub, and this server in aud. It
+// names no Project, and a client id is unique within one rather than across the
+// install — the containment tests rely on exactly that. So this answers with
+// every registration bearing the id and lets the caller decide, because the only
+// thing that can decide is the signature.
+const readEveryBearing = "SELECT project_id, " + clientApplicationColumns +
+	" FROM client_applications WHERE id = ? ORDER BY project_id"
+
+// Bearing returns every registration that bears one client id.
+//
+// It carries no tenant predicate and deliberately answers more than one row.
+// Which of them is asking is not something this query can know: the id is a
+// claim, and the proof is a signature. The caller verifies the assertion against
+// each registration's keys, and the one whose key verifies is the one — because
+// a signature is unforgeable, that answer is as sound as a tenant predicate
+// would have been, and unlike a tenant predicate it needs nothing the assertion
+// does not carry.
+//
+// Two verifying would mean two Projects hold the same private key, which makes
+// them the same service wearing two names; the caller refuses that rather than
+// choosing.
+func (s *ClientApplicationStore) Bearing(
+	ctx context.Context, id project.ClientApplicationID,
+) ([]BorneRegistration, error) {
+	if err := project.ValidateClientApplicationID(id); err != nil {
+		return nil, err
+	}
+
+	rows, err := conn(ctx, s.db).QueryContext(ctx, readEveryBearing, string(id))
+	if err != nil {
+		return nil, fmt.Errorf("pocketbase: read the registrations bearing %s: %w", id, err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	var (
+		borne  []BorneRegistration
+		owners []project.ID
+		held   []project.ClientApplicationConfig
+	)
+
+	for rows.Next() {
+		var (
+			proj, scannedID, name, description, state, kind, keys string
+			version                                               int64
+		)
+
+		if err := rows.Scan(
+			&proj, &scannedID, &name, &description, &state, &kind, &keys, &version); err != nil {
+			return nil, fmt.Errorf("pocketbase: scan the registration bearing %s: %w", id, err)
+		}
+
+		registered, err := project.ParseJWKS(keys)
+		if err != nil {
+			return nil, fmt.Errorf("pocketbase: rebuild the keys of %s: %w", scannedID, err)
+		}
+
+		owners = append(owners, project.ID(proj))
+		held = append(held, project.ClientApplicationConfig{
+			ID: project.ClientApplicationID(scannedID), Name: name,
+			Description: description, State: project.ServiceState(state),
+			Kind: project.ClientKind(kind), JWKS: registered,
+		})
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("pocketbase: read the registrations bearing %s: %w", id, err)
+	}
+
+	// The addresses are read after the cursor closes: this pool is opened with
+	// one connection, so a query inside an open one would wait on itself.
+	for index, config := range held {
+		addresses, err := s.redirectURIs(ctx, owners[index], config.ID)
+		if err != nil {
+			return nil, err
+		}
+
+		config.RedirectURIs = addresses
+
+		app, err := project.NewClientApplication(owners[index], config)
+		if err != nil {
+			return nil, fmt.Errorf("pocketbase: rebuild client application %s: %w", config.ID, err)
+		}
+
+		borne = append(borne, BorneRegistration{Application: app, Project: owners[index]})
+	}
+
+	return borne, nil
 }
