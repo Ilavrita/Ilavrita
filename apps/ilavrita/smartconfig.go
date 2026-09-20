@@ -21,7 +21,11 @@ const smartConfigurationPath = fhir.BasePath + "/.well-known/smart-configuration
 // endpoint answers to. A discovery document advertising more than that would be
 // one a conformance suite believes.
 type smartConfiguration struct {
-	Issuer                string   `json:"issuer"`
+	// Issuer is omitted, not empty. SMART makes it conditional on the
+	// sso-openid-connect capability — "otherwise, omitted" — and this build
+	// issues no identity token. A FHIR base published here would be an OpenID
+	// Connect issuer that answers nothing.
+	Issuer                string   `json:"issuer,omitempty"`
 	AuthorizationEndpoint string   `json:"authorization_endpoint"`
 	TokenEndpoint         string   `json:"token_endpoint"`
 	GrantTypes            []string `json:"grant_types_supported"`
@@ -40,38 +44,56 @@ func describeSmartConfiguration(request *core.RequestEvent) error {
 		return refuseOAuth(request, serverFailure())
 	}
 
-	// The issuer is the FHIR base, which is also what aud must name: a client
-	// reading this document and sending that aud is one this server accepts, and
-	// the two cannot disagree because both are built here.
 	return request.JSON(http.StatusOK, smartConfiguration{
-		Issuer:                origin + fhir.BasePath,
 		AuthorizationEndpoint: origin + oauthBasePath + authorizePath,
 		TokenEndpoint:         origin + oauthBasePath + tokenPath,
 
-		// What issueToken actually answers to. client_credentials is absent
-		// because private_key_jwt is not built; advertising it would make this
-		// document a promise the token endpoint breaks.
-		GrantTypes:    []string{"authorization_code", "refresh_token"},
+		// SMART names two options here — authorization_code and
+		// client_credentials — so only those appear, and client_credentials is
+		// absent because private_key_jwt is not built. The refresh grant is
+		// served and is deliberately not listed: it is a grant this endpoint
+		// answers, but not one of the two this field enumerates, and a document
+		// that invents entries in a closed list is one a validator reads as
+		// wrong rather than as generous.
+		GrantTypes:    []string{"authorization_code"},
 		ResponseTypes: []string{"code"},
 
 		// S256 alone. "plain" is unrepresentable here, so naming it would
 		// advertise a downgrade ParseCodeChallenge refuses.
 		ChallengeMethods: []string{"S256"},
 
-		// A public client authenticates with PKCE alone, which is what "none"
-		// names; a confidential one presents its secret over Basic.
-		TokenEndpointAuthWays: []string{"none", "client_secret_basic"},
+		// SMART names three: client_secret_post, client_secret_basic and
+		// private_key_jwt. A public client authenticates with PKCE alone, which
+		// RFC 8414 spells "none" and SMART does not list — so it is left out
+		// rather than added to a closed list. That a public client needs no
+		// secret is said by the client-public capability below.
+		TokenEndpointAuthWays: []string{"client_secret_basic"},
 
-		ScopesSupported: sessionScopes,
+		// Every scope here is one this server grants, because SMART says a
+		// server SHALL support all of them. launch/encounter is absent: there is
+		// no encounter context to convey, and listing it would be claiming one.
+		ScopesSupported: []string{
+			"launch/patient", "offline_access", "online_access",
+			"user/*.rs", "patient/*.rs",
+		},
 
-		// Only what this build does. launch-standalone is the flow the
-		// authorization endpoint serves, and permission-v1 and permission-v2 are
-		// the scope syntaxes ParseScope reads.
+		// Only what this build does — and everything it does, which matters as
+		// much: a capability set is satisfied by the capabilities listed, so
+		// omitting one this server supports makes a use case it serves look
+		// unserved. permission-patient is what completes "Patient Access for
+		// Standalone Apps", and permission-user what completes the clinician
+		// set beside it.
+		//
+		// sso-openid-connect, launch-ehr and client-confidential-asymmetric are
+		// absent because they are not built.
 		Capabilities: []string{
 			"launch-standalone",
 			"client-public",
 			"client-confidential-symmetric",
 			"context-standalone-patient",
+			"permission-patient",
+			"permission-user",
+			"permission-offline",
 			"permission-v1",
 			"permission-v2",
 		},
