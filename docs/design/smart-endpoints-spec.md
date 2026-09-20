@@ -183,18 +183,30 @@ Built since:
   against whoever asks, so one approved by a person would narrow against *their* standing. That is
   the whole safety argument for splitting the two flows
 
-### What the `client_credentials` grant still needs
+### How the two decisions were settled
 
-**A session cannot currently name a machine principal.** `sessions.user_id` carries a foreign key
-to `users`, and `Session.Principal()` returns `PrincipalUser` unconditionally. A backend service's
-token is a session whose principal is the registration, so the grant needs `sessions` to hold one —
-a change to the table every request authenticates through, and not one to make in a hurry.
+**A session now names a machine principal.** `sessions` carries `user_id` and
+`client_application_id`, both nullable, with a CHECK that exactly one is set — `(user_id IS NULL)
+<> (client_application_id IS NULL)`. `Session.Principal()` answers by which one it is, so it never
+chooses a default, which would be the wrong answer for half of them. `IssueServiceSession` is a
+separate constructor rather than a flag, because the two differ in what they may hold: a service's
+session names no user and carries no refresh chain.
 
-**A client id does not resolve without a Project.** A client assertion names the client in `iss`
-and `sub` and this server in `aud`; it names no Project. The obvious answer — a unique index on
-`client_applications (id)`, the way `ux_sessions_token` is tenant-exempt — was tried and is wrong:
-this build's own fixtures register the same client id in two Projects, so ids are unique per
-Project and not per install. Either the grant carries the Project some other way, or client ids
-become install-wide, which is a migration over existing data.
+**A client id still does not resolve without a Project, and does not need to** (decision). Client
+ids are unique per Project, not per install — `machine_principal_test.go` registers the same id in
+two Projects deliberately, so that the containment test is "about the Project and not about the
+id". Making them install-wide would destroy that property.
 
-Both are decisions rather than plumbing, which is why the grant is not half-built here.
+So the id does not select the registration. **The signature does.** Every registration bearing the
+claimed id is fetched, the assertion is verified against each one's keys, and the one whose key
+verifies is the one asking. A signature cannot be forged, so that answer is exactly as sound as a
+tenant predicate would have been — and unlike a tenant predicate it needs nothing the assertion
+does not already carry, so no non-standard parameter and no per-Project token endpoint.
+
+Every candidate is tried rather than stopping at the first, so the work does not depend on which
+Project is listed first. Two verifying would mean two Projects hold one private key, which makes
+them one service wearing two names; that is refused rather than resolved by picking, because
+choosing either would decide whose data a service reaches on the strength of a row order.
+
+`ClientIDFromAssertion` reads the `iss` claim and verifies nothing, which its name says on purpose:
+a function called `ParseClientAssertion` would be one a caller could believe had checked something.
