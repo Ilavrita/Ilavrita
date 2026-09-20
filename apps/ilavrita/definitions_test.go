@@ -111,6 +111,9 @@ func TestAProjectsOwnDefinitionWins(t *testing.T) {
 	const theirs = `{"resourceType":"StructureDefinition","id":"Observation",` +
 		`"url":"http://example.test/StructureDefinition/OurObservation",` +
 		`"name":"OurObservation","status":"draft","kind":"resource","abstract":false,` +
+		`"baseDefinition":"http://hl7.org/fhir/StructureDefinition/Observation",` +
+		`"derivation":"constraint",` +
+		`"differential":{"element":[{"id":"Observation","path":"Observation"}]},` +
 		`"type":"Observation"}`
 
 	assertStatus(t, call{

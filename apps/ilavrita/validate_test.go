@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/Ilavrita/Ilavrita/packages/fhir"
@@ -187,4 +188,95 @@ func TestTheStatementDeclaresTheOperationItServes(t *testing.T) {
 		assertStatus(t, validating(t, routes, resource.Type,
 			`{"resourceType":"`+resource.Type+`"}`), http.StatusOK)
 	}
+}
+
+// TestAnInvariantR4StatesIsEnforcedOnTheWayIn.
+//
+// Cardinality cannot express "an Organization SHALL have a name or an
+// identifier": both are optional on their own and the rule is about the
+// resource. R4 writes those as FHIRPath, and a server that stored what they
+// refuse is a server whose records other implementations will reject.
+func TestAnInvariantR4StatesIsEnforcedOnTheWayIn(t *testing.T) {
+	routes := servingFHIR(t, everyAction)
+
+	for named, body := range map[string]string{
+		"an Organization with neither a name nor an identifier": `{"resourceType":"Organization"}`,
+		"a Consent with neither a policy nor a policy rule": `{"resourceType":"Consent",` +
+			`"status":"active","scope":{"coding":[{"code":"patient-privacy"}]},` +
+			`"category":[{"coding":[{"code":"acd"}]}]}`,
+	} {
+		answer := call{
+			method: http.MethodPost,
+			path:   fhir.BasePath + "/" + decodeType(t, body),
+			body:   body,
+		}.send(t, routes)
+
+		if answer.Code != http.StatusBadRequest {
+			t.Errorf("%s answered %d: %s", named, answer.Code, answer.Body)
+		}
+	}
+
+	// And one that satisfies the rule is stored, so this is a rule rather than
+	// a refusal of the type.
+	assertStatus(t, call{
+		method: http.MethodPost, path: fhir.BasePath + "/Organization",
+		body: `{"resourceType":"Organization","name":"a named one"}`,
+	}.send(t, routes), http.StatusCreated)
+}
+
+// TestARefusalNamesTheRuleR4NamesIt, because "org-1" is what the specification
+// and every other implementation call this, and a client that reads it can look
+// it up.
+func TestARefusalNamesTheRuleR4NamesIt(t *testing.T) {
+	routes := servingFHIR(t, everyAction)
+
+	answer := call{
+		method: http.MethodPost, path: fhir.BasePath + "/Organization",
+		body: `{"resourceType":"Organization"}`,
+	}.send(t, routes)
+
+	assertStatus(t, answer, http.StatusBadRequest)
+
+	if !strings.Contains(answer.Body.String(), "org-1") {
+		t.Errorf("the refusal does not name the rule: %s", answer.Body)
+	}
+}
+
+// TestBestPracticeIsNotARule. R4 marks some constraints as guidance with an
+// extension it puts on exactly those — "a resource should have narrative" is
+// true, and is not something to refuse a write over or to say about every
+// resource that ever arrives.
+func TestBestPracticeIsNotARule(t *testing.T) {
+	routes := servingFHIR(t, everyAction)
+
+	answer := call{
+		method: http.MethodPost, path: fhir.BasePath + "/Organization",
+		body: `{"resourceType":"Organization","name":"a named one"}`,
+	}.send(t, routes)
+
+	assertStatus(t, answer, http.StatusCreated)
+
+	validated := call{
+		method: http.MethodPost, path: fhir.BasePath + "/Organization/$validate",
+		body: `{"resourceType":"Organization","name":"a named one"}`,
+	}.send(t, routes)
+
+	if strings.Contains(validated.Body.String(), "dom-6") {
+		t.Errorf("a best-practice constraint was reported: %s", validated.Body)
+	}
+}
+
+// decodeType reads which type a body names.
+func decodeType(t *testing.T, body string) string {
+	t.Helper()
+
+	var held struct {
+		ResourceType string `json:"resourceType"`
+	}
+
+	if err := json.Unmarshal([]byte(body), &held); err != nil {
+		t.Fatalf("read the body: %v", err)
+	}
+
+	return held.ResourceType
 }

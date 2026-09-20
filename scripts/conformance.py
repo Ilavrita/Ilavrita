@@ -34,41 +34,16 @@ ACCEPTED = [
         "resolve it, so every media type reads as unverifiable.",
     ),
     (
-        "Constraint failed:",
-        "A FHIRPath invariant. This build implements no FHIRPath engine, which "
-        "docs/known-limitations.md states, so it stores resources that violate "
-        "one. Counted rather than listed: the gap is one decision, not N.",
-    ),
-    (
         "must define two or more components",
-        "The same gap by another name: a composite SearchParameter's rule is an "
-        "invariant, and this build refuses composite parameters anyway.",
-    ),
-    (
-        "__validator_fatal_no_message__",
-        "The validator returns a fatal issue carrying no text at all for a "
-        "StructureDefinition whose type names a URI it cannot resolve. Given the "
-        "same resource with a datatype name it reports ordinary findings, so this "
-        "is the validator failing on the input rather than a defect in it.",
+        "A composite SearchParameter's own rule, which this build never reaches: "
+        "it refuses a composite parameter rather than storing one.",
     ),
 ]
 
 
 def finding_text(issue):
-    """Return the text a finding is matched on.
-
-    A fatal with no text is the validator failing rather than reporting, and it
-    is matched by a name of its own so it cannot silently absorb a real finding
-    that merely happened to be empty.
-    """
-    text = issue.get("details", {}).get("text", "")
-    if text or issue.get("diagnostics"):
-        return text or issue.get("diagnostics", "")
-
-    if issue.get("severity") == "fatal":
-        return "__validator_fatal_no_message__"
-
-    return ""
+    """Return the text a finding is matched on."""
+    return issue.get("details", {}).get("text", "") or issue.get("diagnostics", "")
 
 
 def validate(path, profile):

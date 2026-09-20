@@ -165,7 +165,12 @@ func filledAtLeastOnce(
 	// Nothing is required, so one optional element carries the content. A
 	// primitive, because a complex one would have the same problem one level
 	// down, and valueOf so a bound code comes from its own value set.
-	for _, name := range named.Names("") {
+	//
+	// What it reaches for first is the element a datatype is mostly about: a
+	// Quantity's value, a CodeableConcept's text. Taking the first name in
+	// order instead would fill a Quantity's code and leave its system absent,
+	// which R4 refuses — the halves of a coded value travel together.
+	for _, name := range append([]string{"value", "text"}, named.Names("")...) {
 		element, found := named.Element(name)
 		if !found || element.Choice || len(element.Types) == 0 {
 			continue

@@ -73,6 +73,8 @@ func (r *Report) checkObject(
 		return
 	}
 
+	r.checkInvariants(constraintsAt(structure, under), held, where)
+
 	for name, value := range held {
 		r.checkMember(model, structure, under, name, value, where, depth)
 	}
@@ -507,4 +509,19 @@ func stated(names []string) string {
 	}
 
 	return strings.Join(names, ", ")
+}
+
+// constraintsAt returns the invariants stated about one path, which at the root
+// of a structure are the ones stated about the whole of it.
+func constraintsAt(structure conformance.Structure, under string) []conformance.Constraint {
+	if under == "" {
+		return structure.Root.Constraints
+	}
+
+	element, found := structure.Element(under)
+	if !found {
+		return nil
+	}
+
+	return element.Constraints
 }

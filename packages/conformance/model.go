@@ -34,6 +34,11 @@ type Element struct {
 	// what a code should be, and R4 permits another.
 	Binding Binding
 
+	// Constraints are the invariants R4 attaches to this element: rules about
+	// the resource that cardinality and datatypes cannot express, written as
+	// FHIRPath and evaluated with this element as the context.
+	Constraints []Constraint
+
 	// Opaque reports an element this build cannot say what is inside.
 	//
 	// R4 lets an element hold its own kind — a Questionnaire.item holds items,
@@ -44,6 +49,44 @@ type Element struct {
 	// every child it does have reported as one nobody declared.
 	Opaque bool
 }
+
+// Constraint is one invariant R4 states about an element.
+type Constraint struct {
+	// Key is the name R4 gives it, such as "org-1". It is what a refusal cites,
+	// because it is what the specification and every other implementation call
+	// this rule.
+	Key string
+
+	// Severity is "error" or "warning". A warning is a best practice R4 states
+	// and does not require, so it is reported and never refused.
+	Severity string
+
+	// Human is the rule in the specification's own words, which is what makes a
+	// refusal actionable to somebody who does not read FHIRPath.
+	Human string
+
+	// Expression is the rule itself.
+	Expression string
+
+	// BestPractice reports a constraint R4 marks as guidance rather than a
+	// rule, with an extension it puts on exactly those.
+	//
+	// "A resource should have narrative for robust management" is true and is
+	// not something a server refuses a write over, nor something worth saying
+	// about every resource that ever arrives. R4 draws that line itself, so
+	// this build reads it rather than inventing one.
+	BestPractice bool
+}
+
+// bestPracticeExtension is what R4 marks guidance with.
+const bestPracticeExtension = "http://hl7.org/fhir/StructureDefinition/elementdefinition-bestpractice"
+
+// Applies reports whether this build holds a resource to this constraint.
+func (c Constraint) Applies() bool { return !c.BestPractice }
+
+// Required reports whether failing this invariant makes a resource invalid,
+// rather than merely unusual.
+func (c Constraint) Required() bool { return c.Severity == "error" }
 
 // Repeats reports whether R4 writes this element as a JSON array.
 func (e Element) Repeats() bool { return e.Max != "1" && e.Max != "0" }
@@ -82,6 +125,16 @@ type Structure struct {
 
 	// Elements is every element beneath the root, by its relative path.
 	Elements map[string]Element
+
+	// Root is the definition's own element — the one whose path is the type
+	// itself. It is kept apart from Elements rather than stored under the empty
+	// path, because everything that walks Elements walks it by name and an
+	// element with no name is not one of those.
+	//
+	// It carries the invariants stated about the resource as a whole, which is
+	// most of them: whether an Organization has a name or an identifier is not
+	// a fact about any one of its elements.
+	Root Element
 }
 
 // Model is every structure this build can check a resource against.
@@ -239,6 +292,15 @@ type snapshotElement struct {
 		Strength string `json:"strength"`
 		ValueSet string `json:"valueSet"`
 	} `json:"binding"`
+	Constraint []struct {
+		Key        string `json:"key"`
+		Severity   string `json:"severity"`
+		Human      string `json:"human"`
+		Expression string `json:"expression"`
+		Extension  []struct {
+			URL string `json:"url"`
+		} `json:"extension"`
+	} `json:"constraint"`
 }
 
 // structureOf reads one definition into the elements it declares.
@@ -269,7 +331,12 @@ func structureOf(content json.RawMessage) (Structure, bool) {
 		return Structure{}, false
 	}
 
-	structure := Structure{Type: held.ID, Kind: held.Kind, Elements: map[string]Element{}}
+	structure := Structure{
+		Type:     held.ID,
+		Kind:     held.Kind,
+		Elements: map[string]Element{},
+		Root:     elementOf(held.Snapshot.Element[0]),
+	}
 	root := held.Snapshot.Element[0].Path
 
 	for _, element := range held.Snapshot.Element[1:] {
@@ -296,6 +363,7 @@ func elementOf(held snapshotElement) Element {
 			// set is defined under the url without it.
 			ValueSet: strings.SplitN(held.Binding.ValueSet, "|", 2)[0],
 		},
+		Constraints: constraintsOf(held),
 	}
 
 	for _, named := range held.Type {
@@ -429,4 +497,36 @@ func referenced(element Element) string {
 	}
 
 	return strings.TrimPrefix(element.Types[0], contentReferenceType)
+}
+
+// constraintsOf reads the invariants one element declares.
+//
+// An invariant with no expression is one R4 states in prose alone. It is left
+// out rather than kept as an empty rule: a constraint nothing can evaluate
+// would otherwise be counted as one that passed.
+func constraintsOf(held snapshotElement) []Constraint {
+	var kept []Constraint
+
+	for _, one := range held.Constraint {
+		if one.Key == "" || one.Expression == "" {
+			continue
+		}
+
+		held := Constraint{
+			Key:        one.Key,
+			Severity:   one.Severity,
+			Human:      one.Human,
+			Expression: one.Expression,
+		}
+
+		for _, extension := range one.Extension {
+			if extension.URL == bestPracticeExtension {
+				held.BestPractice = true
+			}
+		}
+
+		kept = append(kept, held)
+	}
+
+	return kept
 }

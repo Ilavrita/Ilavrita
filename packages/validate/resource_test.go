@@ -2,6 +2,7 @@ package validate_test
 
 import (
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -70,7 +71,8 @@ func TestAWellFormedResourceRaisesNothing(t *testing.T) {
 			`"subject":{"reference":"Group/grp-1"}`),
 		"an absolute reference": an(
 			`"subject":{"reference":"https://example.test/fhir/Patient/pat-1"}`),
-		"a contained reference": an(`"subject":{"reference":"#p1"}`),
+		"a contained reference": an(`"contained":[{"resourceType":"Patient","id":"p1"}],` +
+			`"subject":{"reference":"#p1"}`),
 		"an extension on a primitive": an(
 			`"_status":{"extension":[{"url":"http://example.test/x","valueString":"why"}]}`),
 		"a choice written with its type": an(`"valueQuantity":{"value":7}`),
@@ -370,8 +372,9 @@ func TestNestingPastTheBoundIsUncheckedRatherThanRefused(t *testing.T) {
 	const depth = 12
 
 	body := `{"linkId":"deep","type":"display","text":"the bottom"}`
-	for range depth {
-		body = `{"linkId":"held","type":"group","item":[` + body + `]}`
+	for level := range depth {
+		body = `{"linkId":"held-` + strconv.Itoa(level) +
+			`","type":"group","item":[` + body + `]}`
 	}
 
 	body = `{"resourceType":"Questionnaire","status":"active","item":[` + body + `]}`

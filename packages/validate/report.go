@@ -47,6 +47,9 @@ type Issue struct {
 // after it was answered would describe a different resource from the one that
 // was checked.
 type Report struct {
+	// resource is what %resource reads in an invariant.
+	resource any
+
 	issues []Issue
 }
 

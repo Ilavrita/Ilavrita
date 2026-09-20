@@ -367,7 +367,8 @@ func TestSubmittedMetaNeverOverridesTheRow(t *testing.T) {
 	answer := call{
 		method: http.MethodPost,
 		path:   fhir.BasePath + "/Organization",
-		body:   `{"resourceType":"Organization","meta":{"versionId":"99","lastUpdated":"1999-01-01T00:00:00Z","source":"kept"}}`,
+		body: `{"resourceType":"Organization","name":"a named one",` +
+			`"meta":{"versionId":"99","lastUpdated":"1999-01-01T00:00:00Z","source":"kept"}}`,
 	}.send(t, routes)
 
 	assertStatus(t, answer, http.StatusCreated)

@@ -53,6 +53,8 @@ func Resource(custom search.Custom, resourceType storage.ResourceType, content [
 		return report
 	}
 
+	report.resource = held
+
 	report.checkIdentifier(held, string(resourceType))
 	report.checkServerOwned(held, string(resourceType))
 	report.walk(held, string(resourceType), 0)

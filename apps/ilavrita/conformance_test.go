@@ -609,6 +609,10 @@ func submission(resourceType string) string {
 			`{"reference":"Patient/`+string(conformancePatient)+`"}`)
 	}
 
+	for name, value := range satisfyingInvariants[resourceType] {
+		fields[name] = json.RawMessage(value)
+	}
+
 	body, err := json.Marshal(fields)
 	if err != nil {
 		panic("a fixture that cannot be encoded: " + err.Error())
@@ -648,4 +652,66 @@ func compartmentPath(resourceType string) (string, bool) {
 
 		return "", false
 	}
+}
+
+// satisfyingInvariants is what a fixture has to state beyond the elements its
+// definition requires.
+//
+// R4 states rules that cardinality cannot: an Organization SHALL have a name or
+// an identifier, though both are optional on their own. A fixture built from
+// cardinality alone satisfies the definition and violates the resource, and the
+// server refuses it — correctly, which is why these are stated here rather than
+// the rule being relaxed.
+//
+// It is a short list because it is only the types whose rules the generic
+// builder cannot reach. A type added here means a real invariant somebody has
+// to satisfy, and the lifecycle suite is what says when that is so.
+var satisfyingInvariants = map[string]map[string]string{
+	// org-1, and the same rule under another name.
+	"Organization":  {"name": `"a fixture"`},
+	"InsurancePlan": {"name": `"a fixture"`},
+
+	// ait-1: a clinical status unless the record was entered in error.
+	"AllergyIntolerance": {"clinicalStatus": `{"coding":[{` +
+		`"system":"http://terminology.hl7.org/CodeSystem/allergyintolerance-clinical",` +
+		`"code":"active"}]}`},
+
+	// ppc-1: either a policy or a policy rule.
+	"Consent": {"policyRule": `{"coding":[{"code":"a-fixture"}]}`},
+
+	// trd-3: a named event needs a name.
+	"EventDefinition": {"trigger": `[{"type":"named-event","name":"a fixture"}]`},
+
+	// imr-1: a recommendation names a vaccine or a disease.
+	"ImmunizationRecommendation": {"recommendation": `[{` +
+		`"vaccineCode":[{"coding":[{"code":"a-fixture"}]}],` +
+		`"forecastStatus":{"coding":[{"code":"due"}]}}]`},
+
+	// cpb-1, cpb-2 and cpb-15 together: a statement of a capability names what
+	// it can do and what software does it, and names no implementation.
+	"CapabilityStatement": {
+		"kind":     `"capability"`,
+		"software": `{"name":"a fixture"}`,
+		"rest":     `[{"mode":"server"}]`,
+	},
+
+	// tcp-2 and tcp-4, which are the same two rules for terminology.
+	"TerminologyCapabilities": {
+		"kind":     `"capability"`,
+		"software": `{"name":"a fixture"}`,
+	},
+
+	// sdf-6: a structure is its differential or its snapshot. Every element in
+	// one needs an id, which sdf-14 states, and every path starts with the type
+	// the structure declares, which sdf-8a states — so the type is stated here
+	// too rather than left as the generic fixture's uri.
+	// A structure naming a type R4 already defines is constraining it, and says
+	// so: naming the type alone reads as redefining Patient.
+	"StructureDefinition": {
+		"kind":           `"resource"`,
+		"type":           `"Patient"`,
+		"derivation":     `"constraint"`,
+		"baseDefinition": `"http://hl7.org/fhir/StructureDefinition/Patient"`,
+		"differential":   `{"element":[{"id":"Patient","path":"Patient"}]}`,
+	},
 }
