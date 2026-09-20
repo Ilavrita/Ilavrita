@@ -110,9 +110,13 @@ var (
 		"This server cannot search by that SearchParameter. It indexes token, " +
 			"string, reference and date, over an expression naming one element."}
 
-	conditionalUnavailable = refusal{http.StatusBadRequest, fhir.CodeNotSupported,
-		"This server performs no conditional interaction. Search for the " +
-			"resource and decide for yourself whether to create it."}
+	ambiguousCondition = refusal{http.StatusPreconditionFailed, fhir.CodeConflict,
+		"That condition matches more than one resource, so there is nothing to " +
+			"do that is what you asked for. Narrow it until it matches one."}
+
+	unconditioned = refusal{http.StatusBadRequest, fhir.CodeInvalid,
+		"A conditional interaction states a search that narrows it. Without one " +
+			"this would act on every resource of the type."}
 
 	unreadableTransaction = refusal{http.StatusBadRequest, fhir.CodeInvalid,
 		"A transaction is a Bundle whose entries each create, update or delete " +
@@ -220,6 +224,10 @@ func translate(err error) refusal {
 		return unreadablePayload
 	case errors.Is(err, errInlineAttachment):
 		return inlineAttachment
+	case errors.Is(err, errAmbiguousCondition):
+		return ambiguousCondition
+	case errors.Is(err, errUnconditioned):
+		return unconditioned
 	case errors.Is(err, fhir.ErrPreconditionNotSupported):
 		return conditionalEntry
 	case errors.Is(err, errTooManyEntries):

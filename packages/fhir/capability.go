@@ -240,6 +240,17 @@ type ResourceCapability struct {
 	Operation    []OperationCapability   `json:"operation,omitempty"`
 	Versioning   string                  `json:"versioning"`
 	UpdateCreate bool                    `json:"updateCreate"`
+
+	// The conditional interactions this server performs. They are flags rather
+	// than interactions because a conditional update is an update: R4's
+	// type-restful-interaction value set has no code for one.
+	//
+	// ConditionalDelete is a code rather than a flag, because a server that
+	// deletes one match and one that deletes every match are answering the same
+	// request differently and a client has to know which.
+	ConditionalCreate bool   `json:"conditionalCreate"`
+	ConditionalUpdate bool   `json:"conditionalUpdate"`
+	ConditionalDelete string `json:"conditionalDelete,omitempty"`
 }
 
 // OperationCapability declares one operation a type answers. R4 models an
@@ -316,6 +327,12 @@ type CapabilityConfig struct {
 	// type, such as a transaction.
 	SystemInteractions []Interaction
 
+	// The conditional interactions this server performs, declared for every
+	// type it serves because the routes that answer them are the same.
+	ConditionalCreate bool
+	ConditionalUpdate bool
+	ConditionalDelete string
+
 	// SearchParameters answers what one type may be searched by. It is supplied
 	// rather than known here, because the registry of parameters and the routes
 	// that serve them are the caller's to keep in step; this package would only
@@ -365,10 +382,13 @@ func servedResources(config CapabilityConfig) []ResourceCapability {
 
 	for _, name := range servedResourceTypes {
 		held := ResourceCapability{
-			Type:         name,
-			Interaction:  declared(config.Interactions),
-			Versioning:   "versioned",
-			UpdateCreate: true,
+			Type:              name,
+			Interaction:       declared(config.Interactions),
+			Versioning:        "versioned",
+			UpdateCreate:      true,
+			ConditionalCreate: config.ConditionalCreate,
+			ConditionalUpdate: config.ConditionalUpdate,
+			ConditionalDelete: config.ConditionalDelete,
 		}
 
 		// Parameters are advertised only where the interaction that uses them

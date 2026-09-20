@@ -85,6 +85,18 @@ var validateOperation = servedInteraction{
 	method: http.MethodPost, path: validatePath, handler: validateResource,
 }
 
+// conditionalInteractions name their target by a search rather than an id, so
+// they are served on the type path with a query.
+//
+// They are not interactions of their own: R4's type-restful-interaction value
+// set has no code for one, because a conditional update *is* an update. What
+// declares them is a flag on the resource, which is why these are registered
+// apart from servedInteractions and advertised apart from it too.
+var conditionalInteractions = []servedInteraction{
+	{method: http.MethodPut, path: typePath, code: fhir.InteractionUpdate, handler: updateConditionally},
+	{method: http.MethodDelete, path: typePath, code: fhir.InteractionDelete, handler: deleteConditionally},
+}
+
 // The FHIR surface is owned by Ilavrita. PocketBase collections, admin routes
 // and error shapes must never appear beneath this base path (FR-007, FR-029).
 func registerFHIRRoutes(routes *router.Router[*core.RequestEvent]) {
@@ -109,6 +121,10 @@ func registerFHIRRoutes(routes *router.Router[*core.RequestEvent]) {
 	}
 
 	for _, served := range servedInteractions {
+		base.Route(served.method, served.path, audited(served.code, served.handler))
+	}
+
+	for _, served := range conditionalInteractions {
 		base.Route(served.method, served.path, audited(served.code, served.handler))
 	}
 
@@ -222,6 +238,13 @@ func describeCapabilities(request *core.RequestEvent) error {
 		Operations:         advertisedOperations(),
 		SystemInteractions: advertisedSystemInteractions(),
 		SearchParameters:   advertisedSearchParameters(custom),
+
+		// One match is what a condition has to narrow to here. A server that
+		// deleted every match would be answering a different request, and
+		// "single" is how R4 says which of the two this is.
+		ConditionalCreate: true,
+		ConditionalUpdate: true,
+		ConditionalDelete: "single",
 	})
 
 	return respondFHIR(request, http.StatusOK, statement)

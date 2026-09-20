@@ -357,6 +357,81 @@ paths:
   /fhir/R4/{resourceType}:
     parameters:
       - $ref: "#/components/parameters/ResourceType"
+    put:
+      tags: [FHIR]
+      summary: Conditional update
+      description: |
+        Replaces the one resource the query matches. The query is the condition:
+        `PUT /fhir/R4/Patient?identifier=…`.
+
+        It is run under a grant for *searching* that type, not writing it.
+        Naming a resource by a condition is reading it, so a caller who may
+        write a type and not search it cannot address one this way.
+
+        Nothing matching is a create, which is what `update` does everywhere
+        else here. More than one match is `412`: the client asked about a
+        resource and there are several, so nothing can be done that is what they
+        meant. No query at all is `400`, because without one this would act on
+        every resource of the type.
+      operationId: updateConditionally
+      requestBody:
+        required: true
+        content:
+          application/fhir+json:
+            schema:
+              $ref: "#/components/schemas/Resource"
+      responses:
+        "200":
+          $ref: "#/components/responses/ResourceRead"
+        "201":
+          $ref: "#/components/responses/ResourceCreated"
+        "400":
+          $ref: "#/components/responses/Invalid"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "406":
+          $ref: "#/components/responses/NotAcceptable"
+        "412":
+          $ref: "#/components/responses/PreconditionFailed"
+        "413":
+          $ref: "#/components/responses/TooLarge"
+        "415":
+          $ref: "#/components/responses/UnsupportedMediaType"
+        "500":
+          $ref: "#/components/responses/InternalFailure"
+    delete:
+      tags: [FHIR]
+      summary: Conditional delete
+      description: |
+        Removes the one resource the query matches:
+        `DELETE /fhir/R4/Patient?identifier=…`.
+
+        Nothing matching is answered as done — the client wanted no resource
+        matching, and there is none — so a retry after a successful delete is
+        the ordinary case rather than an error. More than one match is `412`.
+
+        `conditionalDelete` in the CapabilityStatement reads `single`, because a
+        server that removed every match would be answering a different request.
+      operationId: deleteConditionally
+      responses:
+        "204":
+          description: |
+            There is no resource matching that query, either because one was
+            removed or because there was never one.
+        "400":
+          $ref: "#/components/responses/Invalid"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "406":
+          $ref: "#/components/responses/NotAcceptable"
+        "412":
+          $ref: "#/components/responses/PreconditionFailed"
+        "500":
+          $ref: "#/components/responses/InternalFailure"
     get:
       tags: [FHIR]
       summary: Search

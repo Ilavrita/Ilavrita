@@ -25,14 +25,6 @@ var (
 // createResource mints a logical id and stores the submitted resource under it.
 // A body carrying its own id is refused: on this route the server assigns them.
 func createResource(request *core.RequestEvent) error {
-	// R4 makes a create conditional with this header. Nothing here performs a
-	// conditional interaction, and a header quietly dropped is a client that
-	// asked for "only if this is not already here", was given an unconditional
-	// create, and is told nothing about the duplicate it now holds.
-	if request.Request.Header.Get(ifNoneExistField) != "" {
-		return refuse(request, conditionalUnavailable)
-	}
-
 	if carriesRawPayload(request) {
 		return createPayload(request)
 	}
@@ -49,6 +41,23 @@ func createResource(request *core.RequestEvent) error {
 
 	if _, carried := fields[idField]; carried {
 		return refuse(request, assignedID)
+	}
+
+	// R4 makes a create conditional with a header: create this unless one
+	// already matches. A match is answered with what is there and nothing is
+	// written, which is what lets a pipeline retry without making a second
+	// record of the same thing.
+	if asked, err := conditionOf(request, true); err != nil {
+		return refuse(request, err)
+	} else if len(asked) > 0 {
+		handled, err := createConditionally(request, held, asked)
+		if err != nil {
+			return refuse(request, err)
+		}
+
+		if handled {
+			return nil
+		}
 	}
 
 	key, content, err := held.minted(fields)

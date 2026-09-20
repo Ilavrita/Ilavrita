@@ -349,3 +349,16 @@ func readInstant(stated string) (int64, int64, error) {
 
 	return moment.UTC().UnixMilli(), moment.UTC().UnixMilli(), nil
 }
+
+// Narrowed returns the query asking for at most this many matches.
+//
+// A conditional interaction needs to know whether its condition matched one
+// resource or several, and nothing beyond that: counting the rest of a type
+// answers a question nobody asked and reads rows nobody will look at.
+func (q Query) Narrowed(count int) Query {
+	if count > 0 && count < q.count {
+		q.count = count
+	}
+
+	return q
+}

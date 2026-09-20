@@ -200,3 +200,130 @@ func TestANarrowingThisServerDoesNotPerformIsRefused(t *testing.T) {
 		assertIssue(t, answer, http.StatusBadRequest, fhir.CodeInvalid)
 	}
 }
+
+// namedOrganization writes one with an identifier a condition can find it by.
+func namedOrganization(t *testing.T, routes http.Handler, value, name string) string {
+	t.Helper()
+
+	answer := call{
+		method: http.MethodPost, path: fhir.BasePath + "/Organization",
+		body: `{"resourceType":"Organization","name":"` + name + `",` +
+			`"identifier":[{"system":"http://example.test/ids","value":"` + value + `"}]}`,
+	}.send(t, routes)
+
+	assertStatus(t, answer, http.StatusCreated)
+
+	return resourceID(t, answer)
+}
+
+// TestAConditionalUpdateReplacesTheOneItMatches, so a client holding an
+// identifier from its own system can keep a record current without ever
+// learning the id this server minted.
+func TestAConditionalUpdateReplacesTheOneItMatches(t *testing.T) {
+	routes := servingFHIR(t, everyAction)
+
+	id := namedOrganization(t, routes, "keep", "the first name")
+
+	answer := call{
+		method: http.MethodPut,
+		path:   fhir.BasePath + "/Organization?identifier=http://example.test/ids|keep",
+		body: `{"resourceType":"Organization","name":"the second name",` +
+			`"identifier":[{"system":"http://example.test/ids","value":"keep"}]}`,
+	}.send(t, routes)
+
+	assertStatus(t, answer, http.StatusOK)
+
+	if got := resourceID(t, answer); got != id {
+		t.Errorf("a conditional update wrote %s, want %s", got, id)
+	}
+
+	read := call{method: http.MethodGet, path: resourcePath("Organization", id)}.send(t, routes)
+	if !strings.Contains(read.Body.String(), "the second name") {
+		t.Errorf("the resource reads %s", read.Body)
+	}
+
+	// One resource, not two.
+	if found := searchedOrganizations(t, routes); found != 1 {
+		t.Errorf("%d Organizations exist after a conditional update", found)
+	}
+}
+
+// TestAConditionalUpdateMatchingNothingCreates, which is what R4 says and what
+// this server's unconditional update does as well.
+func TestAConditionalUpdateMatchingNothingCreates(t *testing.T) {
+	routes := servingFHIR(t, everyAction)
+
+	answer := call{
+		method: http.MethodPut,
+		path:   fhir.BasePath + "/Organization?identifier=http://example.test/ids|new",
+		body: `{"resourceType":"Organization","name":"brought into being",` +
+			`"identifier":[{"system":"http://example.test/ids","value":"new"}]}`,
+	}.send(t, routes)
+
+	assertStatus(t, answer, http.StatusCreated)
+
+	if found := searchedOrganizations(t, routes); found != 1 {
+		t.Errorf("%d Organizations exist, want the one that was created", found)
+	}
+}
+
+// TestAConditionalDeleteRemovesTheOneItMatches, and treats nothing matching as
+// done: the client wanted none matching, and there are none.
+func TestAConditionalDeleteRemovesTheOneItMatches(t *testing.T) {
+	routes := servingFHIR(t, everyAction)
+
+	id := namedOrganization(t, routes, "gone", "to be removed")
+
+	condition := fhir.BasePath + "/Organization?identifier=http://example.test/ids|gone"
+
+	assertStatus(t, call{method: http.MethodDelete, path: condition}.send(t, routes),
+		http.StatusNoContent)
+
+	assertIssue(t, call{
+		method: http.MethodGet, path: resourcePath("Organization", id),
+	}.send(t, routes), http.StatusGone, fhir.CodeDeleted)
+
+	// Asked again, still done: a retry after a successful delete is ordinary.
+	assertStatus(t, call{method: http.MethodDelete, path: condition}.send(t, routes),
+		http.StatusNoContent)
+}
+
+// TestAConditionalWriteWithNoConditionIsRefused, because without one it would
+// act on every resource of the type.
+func TestAConditionalWriteWithNoConditionIsRefused(t *testing.T) {
+	routes := servingFHIR(t, everyAction)
+
+	namedOrganization(t, routes, "safe", "not to be touched")
+
+	for _, held := range []struct {
+		method, body string
+	}{
+		{http.MethodPut, `{"resourceType":"Organization","name":"x"}`},
+		{http.MethodDelete, ""},
+	} {
+		assertIssue(t, call{
+			method: held.method, path: fhir.BasePath + "/Organization", body: held.body,
+		}.send(t, routes), http.StatusBadRequest, fhir.CodeInvalid)
+	}
+
+	if found := searchedOrganizations(t, routes); found != 1 {
+		t.Errorf("an unconditioned write changed the store: %d remain", found)
+	}
+}
+
+// TestTheStatementDeclaresTheConditionalsItPerforms, because a client reads the
+// statement to know whether it may rely on one.
+func TestTheStatementDeclaresTheConditionalsItPerforms(t *testing.T) {
+	for _, resource := range advertised(t) {
+		if !resource.ConditionalCreate || !resource.ConditionalUpdate {
+			t.Errorf("%s does not declare the conditionals this server performs", resource.Type)
+		}
+
+		// Which kind of conditional delete matters: one that removes every
+		// match and one that removes a single match answer the same request
+		// differently.
+		if resource.ConditionalDelete != "single" {
+			t.Errorf("%s declares conditionalDelete %q", resource.Type, resource.ConditionalDelete)
+		}
+	}
+}

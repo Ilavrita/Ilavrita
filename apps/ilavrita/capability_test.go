@@ -85,9 +85,11 @@ func registeredRoute(code fhir.Interaction) (servedInteraction, bool) {
 }
 
 func isRegistered(method, path string) bool {
-	return slices.ContainsFunc(servedInteractions, func(served servedInteraction) bool {
-		return served.method == method && served.path == path
-	})
+	return slices.ContainsFunc(
+		append(slices.Clone(servedInteractions), conditionalInteractions...),
+		func(served servedInteraction) bool {
+			return served.method == method && served.path == path
+		})
 }
 
 // The statement is built from the table the routes were registered from, so

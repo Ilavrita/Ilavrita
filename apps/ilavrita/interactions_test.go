@@ -335,28 +335,63 @@ func TestCreateRefusesABodyTheURLDisagreesWith(t *testing.T) {
 	}
 }
 
-// TestCreateRefusesAConditionOnItsOwnExistence. `If-None-Exist` is how R4 asks
-// for a create that does nothing if the resource is already there. This server
-// performs no conditional interaction, and a header quietly dropped is worse
-// than one refused: the client believes it was given idempotency and is holding
-// a duplicate it will never look for.
-func TestCreateRefusesAConditionOnItsOwnExistence(t *testing.T) {
+// TestAConditionalCreateMakesOneResourceHoweverOftenItIsAsked.
+//
+// `If-None-Exist` is how a client stays idempotent without holding the ids this
+// server minted. Without it a pipeline that retried would make a second record
+// of the same thing, and nothing downstream could tell which was meant.
+func TestAConditionalCreateMakesOneResourceHoweverOftenItIsAsked(t *testing.T) {
 	routes := servingFHIR(t, everyAction)
 
-	answer := call{
-		method:      http.MethodPost,
-		path:        fhir.BasePath + "/Organization",
-		body:        submission("Organization"),
-		ifNoneExist: "name=the%20same%20one",
+	body := `{"resourceType":"Organization","name":"the only one",` +
+		`"identifier":[{"system":"http://example.test/ids","value":"once"}]}`
+	condition := "identifier=http://example.test/ids|once"
+
+	first := call{
+		method: http.MethodPost, path: fhir.BasePath + "/Organization",
+		body: body, ifNoneExist: condition,
 	}.send(t, routes)
 
-	assertIssue(t, answer, http.StatusBadRequest, fhir.CodeNotSupported)
+	assertStatus(t, first, http.StatusCreated)
 
-	// And nothing was created, so the refusal is not a duplicate with an error
-	// page in front of it.
-	if found := searchedOrganizations(t, routes); found != 0 {
-		t.Errorf("a refused conditional create wrote %d Organization(s)", found)
+	id := resourceID(t, first)
+
+	// Asked again, nothing is written and what is there is answered.
+	second := call{
+		method: http.MethodPost, path: fhir.BasePath + "/Organization",
+		body: body, ifNoneExist: condition,
+	}.send(t, routes)
+
+	assertStatus(t, second, http.StatusOK)
+
+	if got := resourceID(t, second); got != id {
+		t.Errorf("a repeated conditional create answered %s, want %s", got, id)
 	}
+
+	// And there is one of them, which is the whole claim.
+	if found := searchedOrganizations(t, routes); found != 1 {
+		t.Errorf("%d Organizations exist after two conditional creates", found)
+	}
+}
+
+// TestAConditionMatchingSeveralIsRefused, because the client asked about a
+// resource and there are several: nothing can be done that is what they meant.
+func TestAConditionMatchingSeveralIsRefused(t *testing.T) {
+	routes := servingFHIR(t, everyAction)
+
+	for range 2 {
+		assertStatus(t, call{
+			method: http.MethodPost, path: fhir.BasePath + "/Organization",
+			body: `{"resourceType":"Organization","name":"a shared name",` +
+				`"identifier":[{"system":"http://example.test/ids","value":"shared"}]}`,
+		}.send(t, routes), http.StatusCreated)
+	}
+
+	assertIssue(t, call{
+		method: http.MethodPost, path: fhir.BasePath + "/Organization",
+		body:        `{"resourceType":"Organization","name":"a shared name"}`,
+		ifNoneExist: "identifier=http://example.test/ids|shared",
+	}.send(t, routes), http.StatusPreconditionFailed, fhir.CodeConflict)
 }
 
 // The version and the instant belong to the row. A client claiming them must
