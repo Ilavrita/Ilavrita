@@ -137,6 +137,20 @@ CREATE TABLE IF NOT EXISTS client_applications (
   name        TEXT NOT NULL,
   description TEXT NOT NULL DEFAULT '',
   state       TEXT NOT NULL CHECK (state IN ('active', 'suspended', 'revoked')),
+
+  -- Whether this registration keeps a secret, which decides what it must present
+  -- to redeem an authorization code. It is recorded rather than derived from
+  -- whether a live credential exists, because those differ exactly when it
+  -- matters: revoking the last credential of a confidential client would
+  -- otherwise turn it into one that redeems codes presenting nothing.
+  --
+  -- The default is for the rebuild alone. Every registration that predates this
+  -- column was issued a secret when it was created, so confidential is what it
+  -- already was. Go refuses a registration naming no kind, so nothing new
+  -- reaches this default.
+  kind        TEXT NOT NULL DEFAULT 'confidential'
+                CHECK (kind IN ('public', 'confidential')),
+
   created_at  BIGINT NOT NULL,
   updated_at  BIGINT NOT NULL,
   revoked_at  BIGINT,
@@ -159,6 +173,36 @@ CREATE UNIQUE INDEX IF NOT EXISTS ux_client_applications_name
 
 CREATE INDEX IF NOT EXISTS ix_client_applications_state
   ON client_applications (project_id, state, id);
+
+-- The addresses an authorization code may be handed back to.
+
+-- They are rows rather than a delimited column because the comparison that
+-- matters is exact equality against one of them, and a delimited column makes
+-- that a scan over a parsed list — which is where a separator inside an address
+-- becomes two addresses. One row is one address, and the primary key says the
+-- same address cannot be registered twice.
+
+-- The check is deliberately weak: what an address must be is stated in Go, by
+-- ParseRedirectURI, and restating a URL grammar in SQL would be a second
+-- definition that drifts. What SQL states is what SQL can hold honestly — an
+-- address is not empty, and it carries no fragment, because a fragment never
+-- reaches a server and an address carrying one means something it cannot do.
+
+-- tenant: project_id
+CREATE TABLE IF NOT EXISTS client_redirect_uris (
+  project_id            TEXT NOT NULL,
+  client_application_id TEXT NOT NULL,
+  uri                   TEXT NOT NULL,
+  created_at            BIGINT NOT NULL,
+
+  PRIMARY KEY (project_id, client_application_id, uri),
+
+  CHECK (uri <> ''),
+  CHECK (instr(uri, '#') = 0),
+
+  FOREIGN KEY (project_id, client_application_id)
+    REFERENCES client_applications (project_id, id) ON DELETE CASCADE ON UPDATE RESTRICT
+);
 
 -- A bot is invoked by this server rather than authenticated by it. No credential
 -- table names this one and no column here holds a hash, so a bot secret is

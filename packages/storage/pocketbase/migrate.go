@@ -46,6 +46,14 @@ var (
 	ErrSessionLaunchMissing = errors.New(
 		"pocketbase: sessions cannot record what a SMART app was granted")
 
+	// ErrClientKindMissing reports a client_applications table that cannot say
+	// whether a registration keeps a secret. Without it the token endpoint has
+	// no way to know which proof to demand, and the safe reading — demand a
+	// secret from everything — would lock out every public app rather than
+	// admitting one. A database that cannot answer is refused.
+	ErrClientKindMissing = errors.New(
+		"pocketbase: client_applications cannot say whether a registration keeps a secret")
+
 	// ErrRebuildWouldDropColumn reports an old table holding a column the current
 	// declaration does not. The rebuild copies rows, so a dropped column is lost
 	// data and the rebuild refuses rather than performing it.
@@ -94,6 +102,13 @@ const (
 	// grantedScopesColumn is what a session records an app's grant in, and what
 	// an install that predates SMART does not declare.
 	grantedScopesColumn = "granted_scopes"
+
+	// clientTable holds the registrations an authorization code is issued to.
+	clientTable = "client_applications"
+
+	// clientKindColumn is what a registration records its proof in, and what an
+	// install that predates the OAuth endpoints does not declare.
+	clientKindColumn = "kind"
 )
 
 // principalParents are the registries project_memberships must name, each with
@@ -169,27 +184,34 @@ func PrepareSchema(ctx context.Context, db *sql.DB) error {
 		}
 	}
 
-	if err := AssertMembershipPrincipalKeys(ctx, db); err != nil {
-		return err
+	return assertServable(ctx, db)
+}
+
+// assertServable refuses a database missing a guarantee the declarations depend
+// on. Every check here answers a shape a migration was supposed to produce, so
+// reaching one of these errors means a rebuild ran and silently did nothing.
+//
+// They are a list rather than a run of statements in PrepareSchema so that a
+// test can exercise the list itself. Inlined, each check was unreachable from
+// outside — the migration that would make one fail is the same migration that
+// runs immediately before it — and an assertion nothing can fail is one that can
+// be deleted without any test noticing.
+func assertServable(ctx context.Context, db *sql.DB) error {
+	for _, assert := range []func(context.Context, *sql.DB) error{
+		AssertMembershipPrincipalKeys,
+		AssertRuleRestrictionColumns,
+		AssertFactorReplacement,
+		AssertQueueClaims,
+		AssertSessionLaunch,
+		AssertClientKind,
+		AssertNoSystemClientApplicationDocuments,
+	} {
+		if err := assert(ctx, db); err != nil {
+			return err
+		}
 	}
 
-	if err := AssertRuleRestrictionColumns(ctx, db); err != nil {
-		return err
-	}
-
-	if err := AssertFactorReplacement(ctx, db); err != nil {
-		return err
-	}
-
-	if err := AssertQueueClaims(ctx, db); err != nil {
-		return err
-	}
-
-	if err := AssertSessionLaunch(ctx, db); err != nil {
-		return err
-	}
-
-	return AssertNoSystemClientApplicationDocuments(ctx, db)
+	return nil
 }
 
 // schemaMigration is one migration and the job it is recorded as.
@@ -274,6 +296,14 @@ func schemaMigrations() []schemaMigration {
 			},
 			rebuild: rebuildSessionLaunch,
 			applied: "launch_patient and granted_scopes, so a SMART app's session says what it may reach",
+		},
+		{
+			job: SuperJob{
+				Name: "migrate.client_applications.kind",
+				Kind: JobMigration, Subject: clientTable,
+			},
+			rebuild: rebuildClientKind,
+			applied: "kind, so a registration says which proof the token endpoint demands of it",
 		},
 	}
 }
@@ -529,6 +559,54 @@ func rebuildSessionLaunch(ctx context.Context, db *sql.DB) (bool, error) {
 	}
 
 	return true, nil
+}
+
+// rebuildClientKind adopts the kind column onto a client_applications table
+// that predates the OAuth endpoints.
+//
+// Every registration it carries across was issued a client secret when it was
+// created — that is the only way this server has ever registered one — so the
+// column's default states what each of them already was, and the copy has
+// nothing the new check rejects.
+func rebuildClientKind(ctx context.Context, db *sql.DB) (bool, error) {
+	present, err := hasColumn(ctx, db, clientTable, clientKindColumn)
+	if err != nil || present {
+		return false, err
+	}
+
+	// A table that is not there yet is created by the schema with the column
+	// already in it, and has nothing to carry across.
+	declared, err := hasTable(ctx, db, clientTable)
+	if err != nil || !declared {
+		return false, err
+	}
+
+	plan, err := planRebuild(ctx, db, clientTable)
+	if err != nil {
+		return false, err
+	}
+
+	if err := performRebuild(ctx, db, plan); err != nil {
+		return false, err
+	}
+
+	return true, nil
+}
+
+// AssertClientKind refuses a database whose registrations cannot say whether
+// they keep a secret. The token endpoint would have to guess which proof to
+// demand, and every reading of that guess is wrong for half the clients.
+func AssertClientKind(ctx context.Context, db *sql.DB) error {
+	present, err := hasColumn(ctx, db, clientTable, clientKindColumn)
+	if err != nil {
+		return err
+	}
+
+	if !present {
+		return fmt.Errorf("%w: %s.%s", ErrClientKindMissing, clientTable, clientKindColumn)
+	}
+
+	return nil
 }
 
 // AssertSessionLaunch refuses a database whose sessions cannot say what a SMART

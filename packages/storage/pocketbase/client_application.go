@@ -41,7 +41,7 @@ const secretOnFile = project.CredentialHash("[secret on file]")
 
 // clientApplicationColumns is what every read selects, in the order the scan
 // reads them.
-const clientApplicationColumns = "id, name, description, state, version"
+const clientApplicationColumns = "id, name, description, state, kind, version"
 
 // credentialColumns is what every credential read selects. The hash appears only
 // as the single fact the domain asks of it; no projection in this package selects
@@ -51,10 +51,19 @@ const credentialColumns = "id, client_application_id," +
 
 const (
 	createApplication = "INSERT INTO client_applications" +
-		" (project_id, id, name, description, state, created_at, updated_at, revoked_at, version)" +
-		" VALUES (?, ?, ?, ?, ?, ?, ?, NULL, 1)" +
+		" (project_id, id, name, description, state, kind," +
+		" created_at, updated_at, revoked_at, version)" +
+		" VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, 1)" +
 		" ON CONFLICT (project_id, name) DO NOTHING" +
 		" RETURNING version"
+
+	createRedirectURI = "INSERT INTO client_redirect_uris" +
+		" (project_id, client_application_id, uri, created_at) VALUES (?, ?, ?, ?)"
+
+	// Ordered, so a registration reads back the way it was written and two reads
+	// of one registration compare equal.
+	readRedirectURIs = "SELECT uri FROM client_redirect_uris" +
+		" WHERE project_id = ? AND client_application_id = ? ORDER BY uri"
 
 	readApplication = "SELECT " + clientApplicationColumns +
 		" FROM client_applications WHERE project_id = ? AND id = ?"
@@ -128,7 +137,7 @@ func (s *ClientApplicationStore) Create(
 
 	err := conn(ctx, s.db).QueryRowContext(ctx, createApplication,
 		string(app.Project()), string(app.ID()), app.Name(), app.Description(),
-		string(app.State()), stamp, stamp,
+		string(app.State()), string(app.Kind()), stamp, stamp,
 	).Scan(&version)
 
 	switch {
@@ -138,7 +147,55 @@ func (s *ClientApplicationStore) Create(
 		return 0, fmt.Errorf("pocketbase: create client application: %w", err)
 	}
 
+	// Written in whatever transaction the caller opened. A registration whose
+	// addresses failed to land would be one that redeems no code, and a caller
+	// that read it back would see a client which had registered none — so the
+	// two go together or neither does.
+	for _, address := range app.RedirectURIs().Stated() {
+		if _, err := conn(ctx, s.db).ExecContext(ctx, createRedirectURI,
+			string(app.Project()), string(app.ID()), string(address), stamp,
+		); err != nil {
+			return 0, fmt.Errorf("pocketbase: register redirect uri for %s: %w", app.ID(), err)
+		}
+	}
+
 	return ClientApplicationVersion(version), nil
+}
+
+// redirectURIs reads the addresses one registration named.
+func (s *ClientApplicationStore) redirectURIs(
+	ctx context.Context, proj project.ID, id project.ClientApplicationID,
+) (project.RedirectURIs, error) {
+	rows, err := conn(ctx, s.db).QueryContext(ctx, readRedirectURIs, string(proj), string(id))
+	if err != nil {
+		return project.RedirectURIs{}, fmt.Errorf("pocketbase: read redirect uris for %s: %w", id, err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	var stated []string
+
+	for rows.Next() {
+		var address string
+		if err := rows.Scan(&address); err != nil {
+			return project.RedirectURIs{}, fmt.Errorf("pocketbase: scan redirect uri for %s: %w", id, err)
+		}
+
+		stated = append(stated, address)
+	}
+
+	if err := rows.Err(); err != nil {
+		return project.RedirectURIs{}, fmt.Errorf("pocketbase: read redirect uris for %s: %w", id, err)
+	}
+
+	// Rebuilt through the same constructor a fresh registration goes through, so
+	// an address nothing could have written is refused rather than served as one
+	// a code may be handed back to.
+	held, err := project.NewRedirectURIs(stated...)
+	if err != nil {
+		return project.RedirectURIs{}, fmt.Errorf("pocketbase: rebuild redirect uris for %s: %w", id, err)
+	}
+
+	return held, nil
 }
 
 // ByID reads one registration inside one Project. An absent row is a clean miss,
@@ -155,12 +212,12 @@ func (s *ClientApplicationStore) ByID(
 	}
 
 	var (
-		scannedID, name, description, state string
-		version                             int64
+		scannedID, name, description, state, kind string
+		version                                   int64
 	)
 
 	err := conn(ctx, s.db).QueryRowContext(ctx, readApplication, string(proj), string(id)).Scan(
-		&scannedID, &name, &description, &state, &version)
+		&scannedID, &name, &description, &state, &kind, &version)
 
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
@@ -169,9 +226,20 @@ func (s *ClientApplicationStore) ByID(
 		return project.ClientApplication{}, 0, false, fmt.Errorf("pocketbase: read client application: %w", err)
 	}
 
+	// Read with the registration rather than on demand, so nothing holds a
+	// ClientApplication whose addresses it has not looked up: a registration that
+	// answered "no address registered" because nobody fetched them would refuse
+	// every redirect rather than the wrong ones, but it would refuse them for a
+	// reason no operator could find.
+	addresses, err := s.redirectURIs(ctx, proj, project.ClientApplicationID(scannedID))
+	if err != nil {
+		return project.ClientApplication{}, 0, false, err
+	}
+
 	app, err := project.NewClientApplication(proj, project.ClientApplicationConfig{
 		ID: project.ClientApplicationID(scannedID), Name: name,
 		Description: description, State: project.ServiceState(state),
+		Kind: project.ClientKind(kind), RedirectURIs: addresses,
 	})
 	if err != nil {
 		return project.ClientApplication{}, 0, false,

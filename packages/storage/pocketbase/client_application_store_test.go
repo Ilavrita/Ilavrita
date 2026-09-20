@@ -38,7 +38,7 @@ func registration(
 	t.Helper()
 
 	app, err := project.NewClientApplication(owner, project.ClientApplicationConfig{
-		ID: id, Name: name, State: project.ServiceActive,
+		ID: id, Name: name, State: project.ServiceActive, Kind: project.ClientConfidential,
 	})
 	if err != nil {
 		t.Fatalf("NewClientApplication: %v", err)
