@@ -119,7 +119,7 @@ func TestASmartSessionRoundTripsThroughTheDatabase(t *testing.T) {
 	}
 
 	issued, token, err := project.IssueAppSession(
-		"prj_a", "ses_app", "usr_1", "pm_1", granted, sessionAt, time.Hour, rand.Reader)
+		"prj_a", "ses_app", "usr_1", "pm_1", granted, "", sessionAt, time.Hour, rand.Reader)
 	if err != nil {
 		t.Fatalf("IssueAppSession: %v", err)
 	}
@@ -219,5 +219,97 @@ func TestTheTableRefusesAnEmptyGrant(t *testing.T) {
 
 	if err == nil {
 		t.Fatal("the table accepted an empty grant")
+	}
+}
+
+// launchedSessionsDatabase builds a database one release behind: its sessions
+// carry a launch context but cannot say which refresh grant minted them.
+//
+// It exists because the pre-SMART fixture never reaches the refresh_chain
+// migration. That table is rebuilt once, from the current declaration, and
+// adopts every column at the same moment — so the migration that adds
+// refresh_chain alone has no work to do, and would look covered while never
+// having run.
+func launchedSessionsDatabase(t *testing.T) *sql.DB {
+	t.Helper()
+
+	db, err := sql.Open("sqlite", "file:"+t.TempDir()+"/launched.db?_pragma=foreign_keys(ON)")
+	if err != nil {
+		t.Fatalf("open database: %v", err)
+	}
+
+	db.SetMaxOpenConns(1)
+	t.Cleanup(func() { _ = db.Close() })
+
+	if err := ApplySchema(t.Context(), db); err != nil {
+		t.Fatalf("apply the schema: %v", err)
+	}
+
+	// refresh_tokens names sessions through nothing, but authorization codes and
+	// refresh rows outlive the drop, so they go first.
+	execAll(t, db, []string{"DROP TABLE sessions"})
+
+	legacy, err := os.ReadFile(filepath.Join("testdata", "legacy_sessions_launched.sql"))
+	if err != nil {
+		t.Fatalf("read the legacy declaration: %v", err)
+	}
+
+	applyStatements(t, db, string(legacy))
+
+	execAll(t, db, []string{
+		"INSERT INTO projects (id, kind, slug, name, state, created_at, updated_at, state_changed_at)" +
+			" VALUES ('prj_a', 'standard', 'prj_a', 'prj_a', 'active', 0, 0, 0)",
+		"INSERT INTO users (id, scope, email_normalized, email_display, state, created_at, updated_at)" +
+			" VALUES ('usr_1', 'server', 'one@example.test', 'one@example.test', 'active', 0, 0)",
+		"INSERT INTO project_memberships (project_id, id, project_kind, user_id, state," +
+			" invitation_source, created_at, updated_at, activated_at)" +
+			" VALUES ('prj_a', 'pm_1', 'standard', 'usr_1', 'active', 'api', 0, 0, 0)",
+		"INSERT INTO sessions (project_id, id, token_hash, user_id, membership_id, state," +
+			" launch_patient, granted_scopes, created_at, expires_at, revoked_at)" +
+			" VALUES ('prj_a', 'ses_app', 'a digest', 'usr_1', 'pm_1', 'active'," +
+			" 'pat_7', 'patient/Observation.read', 0, 3600000, NULL)",
+	})
+
+	return db
+}
+
+// TestAnInstallOneReleaseBehindGainsSomewhereToNameTheGrantThatMintedASession.
+//
+// Without it, detecting a replayed refresh token would revoke the chain while
+// leaving every access token that grant already produced alive until it expired
+// on its own.
+func TestAnInstallOneReleaseBehindGainsSomewhereToNameTheGrantThatMintedASession(t *testing.T) {
+	db := launchedSessionsDatabase(t)
+
+	if err := AssertSessionRefreshChain(t.Context(), db); !errors.Is(err, ErrSessionRefreshChainMissing) {
+		t.Fatalf("before the migration: got %v, want ErrSessionRefreshChainMissing", err)
+	}
+
+	if err := PrepareSchema(t.Context(), db); err != nil {
+		t.Fatalf("prepare: %v", err)
+	}
+
+	if err := AssertSessionRefreshChain(t.Context(), db); err != nil {
+		t.Fatalf("after the migration: %v", err)
+	}
+
+	// And the app's session came across whole: its launch context is what
+	// narrows it, so losing that would widen what the app reaches.
+	var patient, scopes, chain sql.NullString
+
+	if err := db.QueryRowContext(t.Context(),
+		"SELECT launch_patient, granted_scopes, refresh_chain FROM sessions WHERE id = 'ses_app'",
+	).Scan(&patient, &scopes, &chain); err != nil {
+		t.Fatalf("read the carried session: %v", err)
+	}
+
+	if patient.String != "pat_7" || scopes.String != "patient/Observation.read" {
+		t.Errorf("the carried session lost its launch context: %v/%v", patient, scopes)
+	}
+
+	// A session that predates the refresh grant was minted by a login or a code
+	// redemption, neither of which belongs to a chain.
+	if chain.Valid {
+		t.Errorf("a session that predates the refresh grant came across naming chain %q", chain.String)
 	}
 }

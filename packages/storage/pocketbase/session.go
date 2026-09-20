@@ -25,15 +25,17 @@ const sessionColumns = "project_id, id, user_id, membership_id," +
 	// Absence is NULL in the table and the empty string in the record, and the
 	// two mean the same thing: a login nobody's app holds, narrowed by nothing.
 	" COALESCE(launch_patient, ''), COALESCE(granted_scopes, '')," +
+	" COALESCE(refresh_chain, '')," +
 	" created_at, expires_at, COALESCE(revoked_at, 0)"
 
 const (
 	createSession = "INSERT INTO sessions" +
 		" (project_id, id, token_hash, user_id, membership_id, state," +
-		" launch_patient, granted_scopes, created_at, expires_at, revoked_at)" +
+		" launch_patient, granted_scopes, refresh_chain," +
+		" created_at, expires_at, revoked_at)" +
 		// NULLIF writes absence as NULL rather than as an empty string the
 		// CHECK refuses, so the record's zero value and the row's agree.
-		" VALUES (?, ?, ?, ?, ?, 'active', NULLIF(?, ''), NULLIF(?, ''), ?, ?, NULL)" +
+		" VALUES (?, ?, ?, ?, ?, 'active', NULLIF(?, ''), NULLIF(?, ''), NULLIF(?, ''), ?, ?, NULL)" +
 		// The uniqueness index is partial, so the conflict target repeats its
 		// predicate: without it SQLite matches no index and refuses the statement.
 		" ON CONFLICT (token_hash) WHERE token_hash IS NOT NULL DO NOTHING" +
@@ -78,7 +80,7 @@ func (s *SessionStore) Issue(ctx context.Context, session project.Session) error
 	err := conn(ctx, s.db).QueryRowContext(ctx, createSession,
 		string(session.Project()), string(session.ID()), session.Digest(),
 		string(session.User()), string(session.Membership()),
-		launch.Patient(), launch.Scopes(),
+		launch.Patient(), launch.Scopes(), string(session.RefreshChain()),
 		session.CreatedAt().UnixMilli(), session.ExpiresAt().UnixMilli(),
 	).Scan(&written)
 
@@ -105,13 +107,13 @@ func (s *SessionStore) Resolve(
 
 	var (
 		proj, id, user, membership, digest, state string
-		launchPatient, grantedScopes              string
+		launchPatient, grantedScopes, chain       string
 		createdAt, expiresAt, revokedAt           int64
 	)
 
 	switch err := conn(ctx, s.db).QueryRowContext(ctx, resolveSession, token.Digest()).Scan(
 		&proj, &id, &user, &membership, &digest, &state,
-		&launchPatient, &grantedScopes,
+		&launchPatient, &grantedScopes, &chain,
 		&createdAt, &expiresAt, &revokedAt); {
 	case errors.Is(err, sql.ErrNoRows):
 		return project.Session{}, false, nil
@@ -124,7 +126,8 @@ func (s *SessionStore) Resolve(
 		Membership: project.MembershipID(membership), Digest: digest,
 		State:         project.SessionState(state),
 		LaunchPatient: launchPatient, GrantedScopes: grantedScopes,
-		CreatedAt: time.UnixMilli(createdAt).UTC(), ExpiresAt: time.UnixMilli(expiresAt).UTC(),
+		RefreshChain: project.RefreshChainID(chain),
+		CreatedAt:    time.UnixMilli(createdAt).UTC(), ExpiresAt: time.UnixMilli(expiresAt).UTC(),
 	}
 
 	if revokedAt != 0 {

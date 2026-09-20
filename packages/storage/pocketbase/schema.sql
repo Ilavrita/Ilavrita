@@ -274,6 +274,83 @@ CREATE TABLE IF NOT EXISTS authorization_codes (
 CREATE UNIQUE INDEX IF NOT EXISTS ux_authorization_codes_hash
   ON authorization_codes (code_hash);
 
+-- One grant, refreshable until its chain expires.
+
+-- A refresh token is rotated on every use: redeeming one writes its successor
+-- and marks it spent. Its row is kept rather than deleted, because a spent token
+-- presented again is the one signal that a copy of it exists somewhere it should
+-- not — and a deleted row would answer "unknown", which is exactly what a guess
+-- answers. The digest of a spent token is therefore retained, and is no longer a
+-- credential: it authorizes nothing and exists only to be recognised.
+
+-- Every rotation carries the same chain_id, which is what makes them one grant.
+-- Detecting a replay revokes the chain, and the sessions it minted along with
+-- it: sessions.refresh_chain is what makes that reachable.
+
+-- tenant: project_id
+-- tenant-exempt: ux_refresh_tokens_hash, because the digest is the lookup key
+-- and the row it finds is what names the Project
+CREATE TABLE IF NOT EXISTS refresh_tokens (
+  project_id            TEXT NOT NULL,
+  id                    TEXT NOT NULL,
+  chain_id              TEXT NOT NULL,
+
+  token_hash            TEXT NOT NULL,
+
+  client_application_id TEXT NOT NULL,
+  user_id               TEXT NOT NULL REFERENCES users (id) ON DELETE RESTRICT ON UPDATE RESTRICT,
+  membership_id         TEXT NOT NULL,
+
+  launch_patient        TEXT,
+  granted_scopes        TEXT NOT NULL,
+
+  state                 TEXT NOT NULL CHECK (state IN ('active', 'spent')),
+
+  created_at            BIGINT NOT NULL,
+  expires_at            BIGINT NOT NULL,
+
+  PRIMARY KEY (project_id, id),
+
+  CHECK (substr(id, 1, 4) = 'rft_'),
+  CHECK (substr(chain_id, 1, 4) = 'rch_'),
+
+  -- A grant that outlives the month it was approved in is one nobody re-approved.
+  CHECK (expires_at > created_at AND expires_at <= created_at + 2592000000),
+
+  -- A token holding nothing to compare against would answer every presenter,
+  -- and a spent one holding nothing could not be recognised as a replay.
+  CHECK (token_hash <> ''),
+
+  -- A grant exchangeable for nothing would mint a session narrowed by nothing.
+  CHECK (granted_scopes <> ''),
+
+  FOREIGN KEY (project_id, client_application_id)
+    REFERENCES client_applications (project_id, id) ON DELETE CASCADE ON UPDATE RESTRICT,
+
+  FOREIGN KEY (project_id, membership_id)
+    REFERENCES project_memberships (project_id, id) ON DELETE RESTRICT ON UPDATE RESTRICT
+);
+
+-- The digest is the lookup key, so it is unique across the install. It covers
+-- spent rows too, which is what makes a replay resolve to the chain it belongs
+-- to rather than to nothing.
+CREATE UNIQUE INDEX IF NOT EXISTS ux_refresh_tokens_hash
+  ON refresh_tokens (token_hash);
+
+-- One chain's rotations, for revoking all of them at once.
+CREATE INDEX IF NOT EXISTS ix_refresh_tokens_chain
+  ON refresh_tokens (project_id, chain_id);
+
+-- For sweeping what expired without anyone refreshing it.
+CREATE INDEX IF NOT EXISTS ix_refresh_tokens_expiry
+  ON refresh_tokens (expires_at);
+
+-- sessions.refresh_chain carries no index of its own, deliberately. This file is
+-- applied before any rebuild runs, so an index over a column a rebuild is about
+-- to add would fail on exactly the installs that need the rebuild. The one query
+-- that reads it runs when a replay is detected, which is rare enough that a scan
+-- bounded by project_id costs nothing worth this risk.
+
 -- For sweeping what expired without anyone redeeming it.
 CREATE INDEX IF NOT EXISTS ix_authorization_codes_expiry
   ON authorization_codes (expires_at);
@@ -1199,6 +1276,13 @@ CREATE TABLE IF NOT EXISTS sessions (
   -- Stored verbatim so what the app was told it holds and what this server
   -- narrows by are the same text rather than two renderings of it.
   granted_scopes TEXT,
+
+  -- The refresh chain this session was minted from, NULL when it was not minted
+  -- from one. It is recorded so that detecting a replayed refresh token can
+  -- revoke the access tokens that grant already produced: revoking only the
+  -- chain would stop the next refresh while leaving whatever the replayer
+  -- already obtained alive until it expired on its own.
+  refresh_chain TEXT,
 
   created_at    BIGINT NOT NULL,
   expires_at    BIGINT NOT NULL,

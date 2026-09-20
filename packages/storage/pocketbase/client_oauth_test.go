@@ -225,6 +225,7 @@ func TestEveryGuaranteeADeclarationDependsOnIsAsserted(t *testing.T) {
 		"queues predating their claim columns": {legacyQueueDatabase, ErrQueueClaimsMissing},
 		"sessions predating SMART":             {legacySessionsDatabase, ErrSessionLaunchMissing},
 		"registrations predating OAuth":        {legacyClientDatabase, ErrClientKindMissing},
+		"sessions one release behind":          {launchedSessionsDatabase, ErrSessionRefreshChainMissing},
 	} {
 		t.Run(name, func(t *testing.T) {
 			db := held.build(t)

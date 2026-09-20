@@ -54,6 +54,14 @@ var (
 	ErrClientKindMissing = errors.New(
 		"pocketbase: client_applications cannot say whether a registration keeps a secret")
 
+	// ErrSessionRefreshChainMissing reports a sessions table that cannot say
+	// which refresh chain minted a session. Detecting a replayed refresh token
+	// would then revoke the chain while leaving every access token that grant
+	// already produced alive until it expired on its own, which is the half of
+	// the response that matters least.
+	ErrSessionRefreshChainMissing = errors.New(
+		"pocketbase: sessions cannot say which refresh chain minted them")
+
 	// ErrRebuildWouldDropColumn reports an old table holding a column the current
 	// declaration does not. The rebuild copies rows, so a dropped column is lost
 	// data and the rebuild refuses rather than performing it.
@@ -109,6 +117,10 @@ const (
 	// clientKindColumn is what a registration records its proof in, and what an
 	// install that predates the OAuth endpoints does not declare.
 	clientKindColumn = "kind"
+
+	// refreshChainColumn is what a session records the grant that minted it in,
+	// and what an install that predates the refresh grant does not declare.
+	refreshChainColumn = "refresh_chain"
 )
 
 // principalParents are the registries project_memberships must name, each with
@@ -204,6 +216,7 @@ func assertServable(ctx context.Context, db *sql.DB) error {
 		AssertQueueClaims,
 		AssertSessionLaunch,
 		AssertClientKind,
+		AssertSessionRefreshChain,
 		AssertNoSystemClientApplicationDocuments,
 	} {
 		if err := assert(ctx, db); err != nil {
@@ -304,6 +317,14 @@ func schemaMigrations() []schemaMigration {
 			},
 			rebuild: rebuildClientKind,
 			applied: "kind, so a registration says which proof the token endpoint demands of it",
+		},
+		{
+			job: SuperJob{
+				Name: "migrate.sessions.refresh_chain",
+				Kind: JobMigration, Subject: sessionTable,
+			},
+			rebuild: rebuildSessionRefreshChain,
+			applied: "refresh_chain, so a replayed refresh token can revoke what it already minted",
 		},
 	}
 }
@@ -604,6 +625,51 @@ func AssertClientKind(ctx context.Context, db *sql.DB) error {
 
 	if !present {
 		return fmt.Errorf("%w: %s.%s", ErrClientKindMissing, clientTable, clientKindColumn)
+	}
+
+	return nil
+}
+
+// rebuildSessionRefreshChain adopts the refresh chain column onto a sessions
+// table that predates the refresh grant.
+//
+// Every session it carries across was minted by a login or by a code redemption,
+// neither of which belongs to a chain, so NULL is what each of them already
+// meant.
+func rebuildSessionRefreshChain(ctx context.Context, db *sql.DB) (bool, error) {
+	present, err := hasColumn(ctx, db, sessionTable, refreshChainColumn)
+	if err != nil || present {
+		return false, err
+	}
+
+	declared, err := hasTable(ctx, db, sessionTable)
+	if err != nil || !declared {
+		return false, err
+	}
+
+	plan, err := planRebuild(ctx, db, sessionTable)
+	if err != nil {
+		return false, err
+	}
+
+	if err := performRebuild(ctx, db, plan); err != nil {
+		return false, err
+	}
+
+	return true, nil
+}
+
+// AssertSessionRefreshChain refuses a database whose sessions cannot name the
+// grant that minted them, because the response to a replayed refresh token
+// depends on reaching them.
+func AssertSessionRefreshChain(ctx context.Context, db *sql.DB) error {
+	present, err := hasColumn(ctx, db, sessionTable, refreshChainColumn)
+	if err != nil {
+		return err
+	}
+
+	if !present {
+		return fmt.Errorf("%w: %s.%s", ErrSessionRefreshChainMissing, sessionTable, refreshChainColumn)
 	}
 
 	return nil
