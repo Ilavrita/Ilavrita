@@ -36,7 +36,10 @@ type backend struct {
 	applications *sqlite.ClientApplicationStore
 
 	// codes holds the approvals a person gave, waiting to be redeemed once.
-	codes     *sqlite.AuthorizationCodeStore
+	codes *sqlite.AuthorizationCodeStore
+
+	// refreshes holds the grants an app may exchange for a new session.
+	refreshes *sqlite.RefreshStore
 	resolvers authz.Resolvers
 
 	// sockets holds the subscribers connected to this process. A deployment
@@ -251,6 +254,7 @@ func newBackend(db *sql.DB, dataDir string) *backend {
 		memberships:   sqlite.NewMembershipStore(db),
 		applications:  sqlite.NewClientApplicationStore(db),
 		codes:         sqlite.NewAuthorizationCodeStore(db),
+		refreshes:     sqlite.NewRefreshStore(db),
 		audits:        sqlite.NewAuditStore(db),
 		factors:       sqlite.NewFactorStore(db, sealingKey()),
 		definitions:   sqlite.NewCanonicalStore(db),

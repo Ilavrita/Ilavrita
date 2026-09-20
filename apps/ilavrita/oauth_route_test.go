@@ -52,6 +52,7 @@ func launchingServer(t *testing.T, kind project.ClientKind) (http.Handler, *sql.
 		memberships:  sqlite.NewMembershipStore(db),
 		applications: sqlite.NewClientApplicationStore(db),
 		codes:        sqlite.NewAuthorizationCodeStore(db),
+		refreshes:    sqlite.NewRefreshStore(db),
 		audits:       sqlite.NewAuditStore(db),
 		attempts:     newAttemptLimiter(sqlite.NewAttemptStore(db), testKeys, nil),
 		resolvers: authz.Resolvers{
@@ -62,13 +63,21 @@ func launchingServer(t *testing.T, kind project.ClientKind) (http.Handler, *sql.
 		},
 	})
 
-	registerApp(t, db, kind)
+	registerApp(t, db, kind, "cli_ward", "Ward app")
+
+	// A second, equally real registration. Without it, a test that redeems as
+	// another client would be refused for naming a registration nobody made —
+	// which is a different refusal from the one it means to prove.
+	registerApp(t, db, project.ClientPublic, "cli_other", "Another app")
 
 	return allRoutes(t), db
 }
 
 // registerApp writes one registration for the tests to authorize.
-func registerApp(t *testing.T, db *sql.DB, kind project.ClientKind) {
+func registerApp(
+	t *testing.T, db *sql.DB, kind project.ClientKind,
+	id project.ClientApplicationID, name string,
+) {
 	t.Helper()
 
 	addresses, err := project.NewRedirectURIs(appRedirect)
@@ -77,7 +86,7 @@ func registerApp(t *testing.T, db *sql.DB, kind project.ClientKind) {
 	}
 
 	app, err := project.NewClientApplication("clinic-a", project.ClientApplicationConfig{
-		ID: "cli_ward", Name: "Ward app", State: project.ServiceActive,
+		ID: id, Name: name, State: project.ServiceActive,
 		Kind: kind, RedirectURIs: addresses,
 	})
 	if err != nil {
@@ -663,5 +672,223 @@ func TestDiscoveryAdvertisesOnlyWhatThisServerDoes(t *testing.T) {
 			t.Errorf("discovery names %s at %q, where nothing answers %s",
 				name, parsed.Path, held.method)
 		}
+	}
+}
+
+// refreshScope is an approval that asked to outlive its session.
+const refreshScope = "user/Organization.read offline_access"
+
+// tokensFrom runs the whole flow and returns the token response.
+func tokensFrom(t *testing.T, routes http.Handler, person, scope string) tokenResponse {
+	t.Helper()
+
+	approving := authorizing(t, routes, http.MethodPost, person, askingFor(scope), "")
+	if approving.Code != http.StatusOK {
+		t.Fatalf("approve: %d %s", approving.Code, approving.Body)
+	}
+
+	redeemed := redeeming(t, routes, url.Values{
+		"grant_type":    {"authorization_code"},
+		"code":          {codeFrom(t, approving)},
+		"redirect_uri":  {appRedirect},
+		"client_id":     {"cli_ward"},
+		"code_verifier": {appVerifier},
+	})
+	if redeemed.Code != http.StatusOK {
+		t.Fatalf("redeem: %d %s", redeemed.Code, redeemed.Body)
+	}
+
+	var issued tokenResponse
+	if err := json.Unmarshal(redeemed.Body.Bytes(), &issued); err != nil {
+		t.Fatalf("decode the token: %v", err)
+	}
+
+	return issued
+}
+
+// refreshing sends one refresh request.
+func refreshing(t *testing.T, routes http.Handler, token string) *httptest.ResponseRecorder {
+	t.Helper()
+
+	return redeeming(t, routes, url.Values{
+		"grant_type":    {"refresh_token"},
+		"refresh_token": {token},
+		"client_id":     {"cli_ward"},
+	})
+}
+
+// TestARefreshTokenIsIssuedOnlyWhenTheApprovalAskedToOutliveItsSession.
+//
+// An approval naming neither offline_access nor online_access is one the person
+// agreed to for this session. Issuing a refresh token anyway would extend a
+// grant nobody extended — and the client learns which it got from the response
+// rather than an hour later.
+func TestARefreshTokenIsIssuedOnlyWhenTheApprovalAskedToOutliveItsSession(t *testing.T) {
+	routes, _ := launchingServer(t, project.ClientPublic)
+	person := signedIn(t, routes)
+
+	if held := tokensFrom(t, routes, person, "user/Organization.read"); held.RefreshToken != "" {
+		t.Error("an approval that asked for no refresh was given one")
+	}
+
+	if held := tokensFrom(t, routes, person, refreshScope); held.RefreshToken == "" {
+		t.Error("an approval that asked to outlive its session was given no refresh token")
+	}
+}
+
+// TestARefreshMintsANewSessionCarryingTheSameApproval, without re-running
+// consent and without re-reading the scopes from the client.
+func TestARefreshMintsANewSessionCarryingTheSameApproval(t *testing.T) {
+	routes, _ := launchingServer(t, project.ClientPublic)
+	person := signedIn(t, routes)
+
+	first := tokensFrom(t, routes, person, refreshScope)
+
+	refreshed := refreshing(t, routes, first.RefreshToken)
+	if refreshed.Code != http.StatusOK {
+		t.Fatalf("refresh: %d %s", refreshed.Code, refreshed.Body)
+	}
+
+	var second tokenResponse
+	if err := json.Unmarshal(refreshed.Body.Bytes(), &second); err != nil {
+		t.Fatalf("decode the refresh: %v", err)
+	}
+
+	if second.AccessToken == "" || second.AccessToken == first.AccessToken {
+		t.Error("a refresh handed back the same access token")
+	}
+
+	if second.Scope != first.Scope {
+		t.Errorf("a refresh changed the approval from %q to %q", first.Scope, second.Scope)
+	}
+
+	// The new access token carries the same narrowing, so what the app may reach
+	// did not widen across the refresh.
+	if wrote := organizationWrite(t, routes, second.AccessToken); wrote == http.StatusCreated {
+		t.Error("a refreshed session could write, which the approval never granted")
+	}
+}
+
+// TestARefreshTokenIsRotatedOnEveryUse, so a token read out of a log is already
+// dead by the time anybody tries it.
+func TestARefreshTokenIsRotatedOnEveryUse(t *testing.T) {
+	routes, _ := launchingServer(t, project.ClientPublic)
+	person := signedIn(t, routes)
+
+	first := tokensFrom(t, routes, person, refreshScope)
+
+	refreshed := refreshing(t, routes, first.RefreshToken)
+	if refreshed.Code != http.StatusOK {
+		t.Fatalf("refresh: %d %s", refreshed.Code, refreshed.Body)
+	}
+
+	var second tokenResponse
+	if err := json.Unmarshal(refreshed.Body.Bytes(), &second); err != nil {
+		t.Fatalf("decode the refresh: %v", err)
+	}
+
+	if second.RefreshToken == "" {
+		t.Fatal("a refresh handed back no successor, so the grant is unusable")
+	}
+
+	if second.RefreshToken == first.RefreshToken {
+		t.Error("a refresh handed back the same token, so nothing rotated")
+	}
+}
+
+// TestReplayingASpentRefreshTokenKillsTheWholeGrant.
+//
+// A spent token presented again is a copy somebody else is holding. Stopping the
+// next refresh is only half a response: whatever the replayer already obtained
+// would otherwise live out its hour, so the sessions that grant minted die too.
+func TestReplayingASpentRefreshTokenKillsTheWholeGrant(t *testing.T) {
+	routes, db := launchingServer(t, project.ClientPublic)
+	person := signedIn(t, routes)
+
+	first := tokensFrom(t, routes, person, refreshScope)
+
+	refreshed := refreshing(t, routes, first.RefreshToken)
+	if refreshed.Code != http.StatusOK {
+		t.Fatalf("refresh: %d %s", refreshed.Code, refreshed.Body)
+	}
+
+	var second tokenResponse
+	if err := json.Unmarshal(refreshed.Body.Bytes(), &second); err != nil {
+		t.Fatalf("decode the refresh: %v", err)
+	}
+
+	// The access token the legitimate refresh produced works right up to the
+	// replay, so what follows is the replay's doing and not a broken session.
+	if reached := organizationRead(t, routes, second.AccessToken); reached == http.StatusUnauthorized {
+		t.Fatalf("the refreshed session was already dead: %d", reached)
+	}
+
+	// Somebody presents the spent token.
+	if replayed := refreshing(t, routes, first.RefreshToken); replayed.Code == http.StatusOK {
+		t.Fatalf("a spent refresh token was honoured: %s", replayed.Body)
+	}
+
+	// The successor is dead too, so the replayer gains nothing by holding it.
+	if after := refreshing(t, routes, second.RefreshToken); after.Code == http.StatusOK {
+		t.Errorf("the grant survived a replay: %s", after.Body)
+	}
+
+	// And so is the access token that grant already minted.
+	if reached := organizationRead(t, routes, second.AccessToken); reached != http.StatusUnauthorized {
+		t.Errorf("a session the replayed grant minted still answers: %d", reached)
+	}
+
+	// Nothing of the chain is left to present.
+	var left int
+
+	if err := db.QueryRowContext(context.Background(),
+		"SELECT count(*) FROM refresh_tokens").Scan(&left); err != nil {
+		t.Fatalf("count: %v", err)
+	}
+
+	if left != 0 {
+		t.Errorf("%d rotations survived the revocation", left)
+	}
+}
+
+// organizationRead attempts a read and reports the status.
+func organizationRead(t *testing.T, routes http.Handler, token string) int {
+	t.Helper()
+
+	sent := httptest.NewRequest(http.MethodGet, fhir.BasePath+"/Organization/org-1", nil)
+	sent.Host = testHost
+	sent.Header.Set(authorizationField, bearerPrefix+token)
+
+	recorder := httptest.NewRecorder()
+	routes.ServeHTTP(recorder, sent)
+
+	return recorder.Code
+}
+
+// TestARefreshTokenIsRedeemedOnlyByTheClientItWasIssuedTo.
+func TestARefreshTokenIsRedeemedOnlyByTheClientItWasIssuedTo(t *testing.T) {
+	routes, _ := launchingServer(t, project.ClientPublic)
+	person := signedIn(t, routes)
+
+	first := tokensFrom(t, routes, person, refreshScope)
+
+	for name, form := range map[string]url.Values{
+		"as another client": {
+			"grant_type": {"refresh_token"}, "refresh_token": {first.RefreshToken},
+			"client_id": {"cli_other"},
+		},
+		"with no token at all": {
+			"grant_type": {"refresh_token"}, "client_id": {"cli_ward"},
+		},
+		"with a token nobody issued": {
+			"grant_type": {"refresh_token"}, "refresh_token": {"invented"},
+			"client_id": {"cli_ward"},
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if recorder := redeeming(t, routes, form); recorder.Code == http.StatusOK {
+				t.Errorf("a refresh token was redeemed wrongly: %s", recorder.Body)
+			}
+		})
 	}
 }

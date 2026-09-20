@@ -48,10 +48,10 @@ func describeSmartConfiguration(request *core.RequestEvent) error {
 		AuthorizationEndpoint: origin + oauthBasePath + authorizePath,
 		TokenEndpoint:         origin + oauthBasePath + tokenPath,
 
-		// What issueToken actually answers to. Refresh and client credentials
-		// are absent because they are not built; advertising them would make
-		// this document a promise the token endpoint breaks.
-		GrantTypes:    []string{"authorization_code"},
+		// What issueToken actually answers to. client_credentials is absent
+		// because private_key_jwt is not built; advertising it would make this
+		// document a promise the token endpoint breaks.
+		GrantTypes:    []string{"authorization_code", "refresh_token"},
 		ResponseTypes: []string{"code"},
 
 		// S256 alone. "plain" is unrepresentable here, so naming it would

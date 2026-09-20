@@ -14,6 +14,7 @@ import (
 
 	"github.com/Ilavrita/Ilavrita/packages/authz"
 	"github.com/Ilavrita/Ilavrita/packages/project"
+	sqlite "github.com/Ilavrita/Ilavrita/packages/storage/pocketbase"
 	"github.com/pocketbase/pocketbase/apis"
 	"github.com/pocketbase/pocketbase/core"
 	"github.com/pocketbase/pocketbase/tools/router"
@@ -39,6 +40,12 @@ const appSessionLifetime = time.Hour
 // authorizationCodeLifetime is how long an app has to redeem its code. It is the
 // round trip the app is already making.
 const authorizationCodeLifetime = 60 * time.Second
+
+// refreshLifetime is how long one grant may be refreshed for before the person
+// is asked again. The ceiling travels across rotations rather than restarting,
+// so an app that refreshes hourly still expires on the same day as one that
+// refreshed once.
+const refreshLifetime = 30 * 24 * time.Hour
 
 // oauthFailure is one refusal in the shape RFC 6749 section 5.2 names. It is not
 // an OperationOutcome: this surface is OAuth rather than FHIR, and a client
@@ -504,11 +511,12 @@ func redirectWith(address string, token project.AuthorizationCodeToken, state st
 // tokenResponse is what a client receives, in the shape RFC 6749 section 5.1
 // names plus the SMART launch parameters.
 type tokenResponse struct {
-	AccessToken string `json:"access_token"`
-	TokenType   string `json:"token_type"`
-	ExpiresIn   int    `json:"expires_in"`
-	Scope       string `json:"scope"`
-	Patient     string `json:"patient,omitempty"`
+	AccessToken  string `json:"access_token"`
+	TokenType    string `json:"token_type"`
+	ExpiresIn    int    `json:"expires_in"`
+	Scope        string `json:"scope"`
+	Patient      string `json:"patient,omitempty"`
+	RefreshToken string `json:"refresh_token,omitempty"`
 }
 
 // issueToken exchanges a grant for an access token.
@@ -524,6 +532,8 @@ func issueToken(request *core.RequestEvent) error {
 	switch grant := request.Request.PostForm.Get("grant_type"); grant {
 	case "authorization_code":
 		return issueFromCode(request)
+	case "refresh_token":
+		return issueFromRefresh(request)
 	case "":
 		return refuseOAuth(request, invalidRequest("grant_type is required"))
 	default:
@@ -564,17 +574,140 @@ func issueFromCode(request *core.RequestEvent) error {
 		return refuseOAuth(request, err)
 	}
 
-	issued, token, err := serving.issueAppSession(ctx, code)
+	// The refresh grant is opened before the session, so the session can record
+	// which grant minted it: a session that forgot would survive the revocation
+	// a replay of that grant triggers.
+	chain, refresh, err := serving.openRefreshChain(
+		ctx, code.Project(), code.Client(), code.User(), code.Membership(), code.Launch())
+	if err != nil {
+		return refuseOAuth(request, err)
+	}
+
+	issued, token, err := serving.issueAppSession(
+		ctx, code.Project(), code.User(), code.Membership(), code.Launch(), chain)
 	if err != nil {
 		return refuseOAuth(request, err)
 	}
 
 	return request.JSON(http.StatusOK, tokenResponse{
-		AccessToken: token.Reveal(),
-		TokenType:   "Bearer",
-		ExpiresIn:   int(time.Until(issued.ExpiresAt()).Seconds()),
-		Scope:       code.Launch().Scopes(),
-		Patient:     code.Launch().Patient(),
+		AccessToken:  token.Reveal(),
+		TokenType:    "Bearer",
+		ExpiresIn:    int(time.Until(issued.ExpiresAt()).Seconds()),
+		Scope:        code.Launch().Scopes(),
+		Patient:      code.Launch().Patient(),
+		RefreshToken: refresh,
+	})
+}
+
+// openRefreshChain starts a grant an app may refresh, when the approval asked
+// for one.
+//
+// An approval that named neither offline_access nor online_access is one the
+// person agreed to for this session. Issuing a refresh token for it anyway would
+// extend a grant nobody extended, so the empty chain comes back and the token
+// response carries no refresh_token — which is how a client learns it must send
+// the person back rather than discovering it an hour later.
+func (b *backend) openRefreshChain(
+	ctx context.Context, proj project.ID, client project.ClientApplicationID,
+	user project.UserID, membership project.MembershipID, launch project.LaunchContext,
+) (project.RefreshChainID, string, error) {
+	if !project.RefreshRequested(launch) {
+		return "", "", nil
+	}
+
+	chain, err := project.MintRefreshChainID(rand.Reader)
+	if err != nil {
+		return "", "", serverFailure()
+	}
+
+	id, err := project.MintRefreshTokenID(rand.Reader)
+	if err != nil {
+		return "", "", serverFailure()
+	}
+
+	grant, token, err := project.IssueRefreshToken(
+		proj, id, chain, client, user, membership, launch,
+		time.Now().UTC(), refreshLifetime, rand.Reader)
+	if err != nil {
+		return "", "", serverFailure()
+	}
+
+	if err := b.refreshes.Issue(ctx, grant); err != nil {
+		return "", "", serverFailure()
+	}
+
+	return chain, token.Reveal(), nil
+}
+
+// issueFromRefresh exchanges a refresh token for a new session.
+//
+// Consent is not re-run and the scopes are not re-read from the client: the new
+// session carries the launch context the original approval produced, and the
+// narrowing happens per request against whatever the policy says then. That is
+// the whole reason scopes are stored with the session rather than baked into a
+// token.
+func issueFromRefresh(request *core.RequestEvent) error {
+	held := request.Request.PostForm
+
+	presented, err := project.ParseRefreshToken(held.Get("refresh_token"))
+	if err != nil {
+		return refuseOAuth(request, invalidGrant("no refresh token was presented"))
+	}
+
+	client, secret, err := presentedClient(request)
+	if err != nil {
+		return refuseOAuth(request, err)
+	}
+
+	ctx := request.Request.Context()
+
+	next, err := project.MintRefreshTokenID(rand.Reader)
+	if err != nil {
+		return refuseOAuth(request, serverFailure())
+	}
+
+	rotated, refresh, found, err := serving.refreshes.Rotate(
+		ctx, presented, client, next, time.Now().UTC(), rand.Reader)
+
+	// A token this server issued and already spent is a copy somebody else is
+	// holding. The grant dies — every rotation of it, and every session it
+	// minted — because the alternative is letting whoever replayed it keep what
+	// they already obtained until it expired on its own.
+	if errors.Is(err, sqlite.ErrRefreshReplayed) {
+		if err := serving.refreshes.RevokeChain(
+			ctx, rotated.Project(), rotated.Chain(), time.Now().UTC()); err != nil {
+			return refuseOAuth(request, serverFailure())
+		}
+
+		return refuseOAuth(request, invalidGrant("that refresh token has already been used"))
+	}
+
+	if err != nil {
+		return refuseOAuth(request, serverFailure())
+	}
+
+	if !found {
+		return refuseOAuth(request, invalidGrant("that refresh token cannot be redeemed"))
+	}
+
+	if err := serving.clientProved(ctx, rotated.Project(), client, secret); err != nil {
+		return refuseOAuth(request, err)
+	}
+
+	issued, token, err := serving.issueAppSession(
+		ctx, rotated.Project(), rotated.User(), rotated.Membership(),
+		rotated.Launch(), rotated.Chain())
+	if err != nil {
+		return refuseOAuth(request, err)
+	}
+
+	return request.JSON(http.StatusOK, tokenResponse{
+		AccessToken:  token.Reveal(),
+		TokenType:    "Bearer",
+		ExpiresIn:    int(time.Until(issued.ExpiresAt()).Seconds()),
+		Scope:        rotated.Launch().Scopes(),
+		Patient:      rotated.Launch().Patient(),
+		RefreshToken: refresh.Reveal(),
 	})
 }
 
@@ -646,9 +779,12 @@ func (b *backend) clientProved(
 	return nil
 }
 
-// issueAppSession mints the access token a redeemed code stands for.
+// issueAppSession mints one access token for an approval, recording which
+// refresh grant minted it so a replay of that grant can revoke this too.
 func (b *backend) issueAppSession(
-	ctx context.Context, code project.AuthorizationCode,
+	ctx context.Context,
+	proj project.ID, user project.UserID, membership project.MembershipID,
+	launch project.LaunchContext, chain project.RefreshChainID,
 ) (project.Session, project.SessionToken, error) {
 	id, err := project.MintSessionID(rand.Reader)
 	if err != nil {
@@ -656,7 +792,7 @@ func (b *backend) issueAppSession(
 	}
 
 	issued, token, err := project.IssueAppSession(
-		code.Project(), id, code.User(), code.Membership(), code.Launch(),
+		proj, id, user, membership, launch, chain,
 		time.Now().UTC(), appSessionLifetime, rand.Reader)
 	if err != nil {
 		return project.Session{}, project.SessionToken{}, serverFailure()
