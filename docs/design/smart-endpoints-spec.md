@@ -21,21 +21,30 @@ copy of the standing, and a copy is what goes stale when a policy changes.
 
 ## 2. Consent, on a server with no frontend
 
-This server renders no HTML. So the authorization endpoint is two calls, not a page (decision):
+This server renders no HTML. So consent is a separate resource from the authorization endpoint,
+and the page that renders it belongs to the deployment (decision):
 
-- `GET /oauth2/authorize` — with an authenticated session, validates the request and answers with
-  the pending authorization: the client, the scopes it asked for, which of them this server would
+- `GET`/`POST /oauth2/authorize` — SMART's own endpoint. A browser arrives from an app and leaves
+  for whatever `ILAVRITA_CONSENT_URL` names, carrying the request. It authenticates nobody, because
+  nobody has signed in yet. Both methods, because SMART requires both: an app serialises the
+  request into the query or into a form, and the server accepts whichever it chose. A form request
+  is answered 303, since the page being sent to is a `GET`.
+- `GET /oauth2/consent` — with an authenticated session, validates the request and answers with the
+  pending authorization: the client, the scopes it asked for, which of them this server would
   grant, and which it refuses and why. It writes nothing.
-- `POST /oauth2/authorize` — records the person's approval and answers with the redirect target
+- `POST /oauth2/consent` — records the person's approval and answers with the redirect target
   carrying `code` and `state`.
 
-A UI renders the first and submits the second. Nothing about the flow requires that UI to be ours,
-and a server that shipped a consent page would be a server whose consent page had to be styled,
-translated and kept accessible by whoever deployed it.
+The consent pair is this server's own API, which is why it is not under the authorization
+endpoint: that endpoint belongs to the app, and this pair belongs to the page. A UI renders the
+second and submits the third. Nothing about the flow requires that UI to be ours, and a server
+that shipped a consent page would be a server whose consent page had to be styled, translated and
+kept accessible by whoever deployed it.
 
-**The approval names the scopes.** `POST` carries the exact scopes the person approved, and they
-must be a subset of what `GET` reported as grantable. A client cannot widen between the two calls,
-and a UI that lets somebody deselect a scope works without this server knowing it happened.
+**The approval names the scopes.** The `POST` carries the exact scopes the person approved, and
+they must be a subset of what the `GET` reported as grantable. A client cannot widen between the
+two calls, and a UI that lets somebody deselect a scope works without this server knowing it
+happened.
 
 ## 3. The authorization code
 
@@ -113,7 +122,7 @@ does not serve, `c` without `u` — is therefore visible to the app rather than 
 
 1. ~~Redirect URIs and public/confidential on `ClientApplication`~~ — **built**
 2. ~~The authorization code: domain type, table, store~~ — **built**
-3. ~~`GET`/`POST /oauth2/authorize`~~ — **built**
+3. ~~`GET`/`POST /oauth2/authorize` and the consent pair~~ — **built**
 4. ~~`POST /oauth2/token`, `authorization_code` grant~~ — **built**
 5. ~~Refresh tokens and the `refresh_token` grant~~ — **built**
 6. `private_key_jwt` and the `client_credentials` grant, which is what unblocks `system/` —
@@ -123,9 +132,10 @@ does not serve, `c` without `u` — is therefore visible to the app rather than 
 
 ## 10. What the standalone launch does today
 
-A public or confidential client registers its redirect addresses, sends a person to
-`GET /oauth2/authorize`, which answers with what it would grant and what it refuses and why; the
-person's UI posts the approval; the code comes back on the registered address; the client redeems
+A public or confidential client registers its redirect addresses and sends a person to
+`/oauth2/authorize`, which redirects them to the consent page; that page reads
+`GET /oauth2/consent` for what would be granted and what is refused and why, and posts the
+approval; the code comes back on the registered address; the client redeems
 it at `POST /oauth2/token` with its verifier, and receives a session narrowed to what was
 approved. `authz.Narrow` applies at every request thereafter, against whatever the policy says
 then.

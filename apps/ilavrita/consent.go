@@ -111,7 +111,22 @@ func beginAuthorization(request *core.RequestEvent) error {
 		return refuseOAuth(request, serverFailure())
 	}
 
-	return request.Redirect(http.StatusFound, sent)
+	return request.Redirect(redirectStatus(request.Request.Method), sent)
+}
+
+// redirectStatus says how to send a browser onward from here.
+//
+// A form-encoded authorization request arrives by POST, and the consent page it
+// is being sent to is a GET. RFC 7231 section 6.4.4 is the status that means
+// exactly that change of method; 302 only permits it, which browsers happen to
+// do but nothing requires. A request that was already a GET keeps 302, which is
+// what every OAuth client expects to see there.
+func redirectStatus(method string) int {
+	if method == http.MethodPost {
+		return http.StatusSeeOther
+	}
+
+	return http.StatusFound
 }
 
 // consentAddress builds where the person is sent, carrying the request they are

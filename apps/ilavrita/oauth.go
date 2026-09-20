@@ -122,13 +122,23 @@ func registerOAuthRoutes(routes *router.Router[*core.RequestEvent]) {
 	// The authorization endpoint is SMART's, so a browser reaches it and leaves
 	// for the consent page. It authenticates nobody: the person has not signed
 	// in yet, which is the whole reason they are being sent somewhere.
+	//
+	// Both methods, because SMART App Launch requires both: an app serialises
+	// the request into the query or into a form, and the server has to accept
+	// whichever it chose. The same handler answers each, since the difference is
+	// only where the parameters were written.
 	base.GET(authorizePath, beginAuthorization)
+	base.POST(authorizePath, beginAuthorization)
 
-	// The consent page reads this and posts to the one below, both carrying the
-	// person's own session. That is a bearer credential, so these two answer no
-	// preflight — the page is the deployment's own and shares its origin.
+	// The consent page reads the first and posts to the second, both carrying
+	// the person's own session. That is a bearer credential, so these two answer
+	// no preflight — the page is the deployment's own and shares its origin.
+	//
+	// They are this server's own API rather than anything SMART describes, which
+	// is why the approval lives here and not under the authorization endpoint:
+	// that endpoint belongs to the app, and this pair belongs to the page.
 	base.GET(consentPath, describeAuthorization)
-	base.POST(authorizePath, approveAuthorization)
+	base.POST(consentPath, approveAuthorization)
 
 	// The token endpoint keeps the runtime's cross-origin handling, because a
 	// browser app redeems its own code from its own origin. A code plus a
@@ -166,8 +176,10 @@ func readAsk(request *core.RequestEvent) (authorizationAsk, error) {
 			return authorizationAsk{}, invalidRequest("the request body is not a form")
 		}
 
-		// A form-encoded approval states the request again; a JSON one states it
-		// in the query, because a JSON body cannot also be a form.
+		// A form carries the whole request in the body: that is how an app may
+		// serialise an authorization request, and how the consent page restates
+		// one. A JSON body cannot also be a form, so an approval sent that way
+		// leaves the request in the query and the body holds only the approval.
 		if len(request.Request.PostForm) > 0 {
 			held = request.Request.PostForm
 		}

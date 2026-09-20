@@ -233,7 +233,7 @@ func (a *approver) approved(token string, ask url.Values, scopes []string) (stri
 	}
 
 	request, err := http.NewRequest( //nolint:gosec // the host is operator configuration, fixed at start
-		http.MethodPost, a.server+"/oauth2/authorize?"+ask.Encode(), bytes.NewReader(body))
+		http.MethodPost, a.server+"/oauth2/consent?"+ask.Encode(), bytes.NewReader(body))
 	if err != nil {
 		return "", err
 	}

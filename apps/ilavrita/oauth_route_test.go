@@ -178,15 +178,10 @@ func authorizing(
 ) *httptest.ResponseRecorder {
 	t.Helper()
 
-	// The describe reads the consent route; the approval posts to the
-	// authorization one. A browser reaches neither: it reaches the redirect
-	// endpoint, which is tested separately.
-	route := authorizePath
-	if method == http.MethodGet {
-		route = consentPath
-	}
-
-	path := oauthBasePath + route + "?" + ask.Encode()
+	// Both the describe and the approval are this server's own consent API. A
+	// browser reaches neither: it reaches the authorization endpoint, which is
+	// tested separately.
+	path := oauthBasePath + consentPath + "?" + ask.Encode()
 
 	sent := httptest.NewRequest(method, path, strings.NewReader(body))
 	sent.Host = testHost
@@ -1430,5 +1425,53 @@ func TestAServiceWithNoStandingIsRefusedRatherThanGivenAUselessToken(t *testing.
 	answer := asService(t, routes, signedAssertion(t, key, nil), "system/Organization.read")
 	if answer.Code == http.StatusOK {
 		t.Errorf("a service holding no standing was given a token: %s", answer.Body)
+	}
+}
+
+// TestTheAuthorizationEndpointReadsAFormAsWellAsAQuery.
+//
+// SMART App Launch: "Authorization Servers SHALL support the use of the HTTP GET
+// and POST methods at the Authorization Endpoint." An app chooses which, and a
+// server that reads only one is a server half the apps cannot launch against.
+func TestTheAuthorizationEndpointReadsAFormAsWellAsAQuery(t *testing.T) {
+	routes, _ := launchingServer(t, project.ClientPublic)
+	consentedAt(t, "https://console.example.test/approve")
+
+	ask := askingFor("user/Organization.read")
+
+	sent := httptest.NewRequest(
+		http.MethodPost, oauthBasePath+authorizePath, strings.NewReader(ask.Encode()))
+	sent.Host = testHost
+	sent.Header.Set(contentTypeField, "application/x-www-form-urlencoded")
+
+	recorder := httptest.NewRecorder()
+	routes.ServeHTTP(recorder, sent)
+
+	// See Other, because the page being sent to is a GET and 302 only permits
+	// that change of method rather than requiring it.
+	if recorder.Code != http.StatusSeeOther {
+		t.Fatalf("a form authorization answered %d, want %d: %s",
+			recorder.Code, http.StatusSeeOther, recorder.Body)
+	}
+
+	where, err := url.Parse(recorder.Header().Get("Location"))
+	if err != nil {
+		t.Fatalf("parse the redirect: %v", err)
+	}
+
+	if where.Host != "console.example.test" || where.Path != "/approve" {
+		t.Fatalf("a form authorization sent the person to %q", where)
+	}
+
+	// The parameters came out of the body, so a server reading only the query
+	// would have redirected with none of them.
+	for _, name := range []string{
+		"response_type", "client_id", "redirect_uri", "scope",
+		"aud", "code_challenge", "code_challenge_method",
+	} {
+		if where.Query().Get(name) != ask.Get(name) {
+			t.Errorf("%s reached the consent page as %q, want %q",
+				name, where.Query().Get(name), ask.Get(name))
+		}
 	}
 }
