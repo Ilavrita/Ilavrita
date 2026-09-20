@@ -530,3 +530,71 @@ func constraintsOf(held snapshotElement) []Constraint {
 
 	return kept
 }
+
+// ConstraintsIn reads the invariants one StructureDefinition states about the
+// resource as a whole, and the type it constrains.
+//
+// Only the ones attached to its own root. An invariant sits on an element and
+// is evaluated with that element as the context — "must have either extensions
+// or value, not both" is about an extension, and asking it of the resource
+// answers about a resource's own extensions, which is a different question with
+// a different answer.
+//
+// Applying a profile's deeper invariants means resolving each one's path
+// through the resource, which this build does not do; docs/known-limitations.md
+// says so rather than this pretending otherwise.
+//
+// A profile is written as a differential and a base definition as a snapshot.
+// Both are read, because a profile may be published either way.
+func ConstraintsIn(content []byte) ([]Constraint, string, error) {
+	var held struct {
+		ResourceType string `json:"resourceType"`
+		Type         string `json:"type"`
+		Snapshot     struct {
+			Element []snapshotElement `json:"element"`
+		} `json:"snapshot"`
+		Differential struct {
+			Element []snapshotElement `json:"element"`
+		} `json:"differential"`
+	}
+
+	if err := json.Unmarshal(content, &held); err != nil {
+		return nil, "", fmt.Errorf("conformance: read a StructureDefinition: %w", err)
+	}
+
+	if held.ResourceType != "StructureDefinition" {
+		return nil, "", fmt.Errorf("conformance: that is a %s, not a StructureDefinition",
+			held.ResourceType)
+	}
+
+	var found []Constraint
+
+	for _, element := range append(
+		append([]snapshotElement{}, held.Differential.Element...),
+		held.Snapshot.Element...,
+	) {
+		// The root is the element whose path is the definition's own name, with
+		// nothing beneath it.
+		if strings.Contains(element.Path, ".") {
+			continue
+		}
+
+		for _, one := range constraintsOf(element) {
+			found = appendConstraintOnce(found, one)
+		}
+	}
+
+	return found, held.Type, nil
+}
+
+// appendConstraintOnce keeps a rule once when a definition states it in both a
+// differential and a snapshot.
+func appendConstraintOnce(held []Constraint, one Constraint) []Constraint {
+	for _, kept := range held {
+		if kept.Key == one.Key {
+			return held
+		}
+	}
+
+	return append(held, one)
+}

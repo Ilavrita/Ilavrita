@@ -327,6 +327,10 @@ func (g granted) replace(
 		return storage.ResourceRecord{}, err
 	}
 
+	if err := checkProfiles(ctx, key.Type, content); err != nil {
+		return storage.ResourceRecord{}, err
+	}
+
 	row, carried, err := splitPayload(key, content)
 	if err != nil {
 		return storage.ResourceRecord{}, err
@@ -379,6 +383,10 @@ func (g granted) create(
 	}
 
 	if err := checkSearchParameter(key, content); err != nil {
+		return storage.ResourceRecord{}, err
+	}
+
+	if err := checkProfiles(ctx, key.Type, content); err != nil {
 		return storage.ResourceRecord{}, err
 	}
 

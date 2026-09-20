@@ -117,7 +117,19 @@ func (r Report) Error() string {
 	return strings.Join(stated, "; ")
 }
 
+// Note records one finding, for a caller checking something this package does
+// not: a profile it had to resolve first, or a reference it had to look up.
+func (r *Report) Note(severity Severity, expression, detail string) {
+	r.note(severity, expression, detail)
+}
+
 // note records one finding.
 func (r *Report) note(severity Severity, expression, detail string) {
 	r.issues = append(r.issues, Issue{Severity: severity, Expression: expression, Detail: detail})
+}
+
+// Absorb takes on what another report found, so a caller that checked
+// something this package cannot answers with one outcome rather than several.
+func (r *Report) Absorb(other Report) {
+	r.issues = append(r.issues, other.issues...)
 }

@@ -249,3 +249,35 @@ func (s *CanonicalStore) WithinTransaction(
 
 	return nil
 }
+
+// ReadByURL resolves a canonical resource by the url it publishes itself under,
+// which is how a profile is named: meta.profile carries a url, never an id.
+func (s *CanonicalStore) ReadByURL(
+	ctx context.Context, url string,
+) (storage.ResourceRecord, bool, error) {
+	const query = "SELECT res_type, res_id, content FROM canonical_resource" +
+		" WHERE url = ? ORDER BY version DESC LIMIT 1"
+
+	var (
+		resourceType string
+		id           string
+		content      []byte
+	)
+
+	switch err := conn(ctx, s.db).QueryRowContext(ctx, query, url).
+		Scan(&resourceType, &id, &content); {
+	case errors.Is(err, sql.ErrNoRows):
+		return storage.ResourceRecord{}, false, nil
+	case err != nil:
+		return storage.ResourceRecord{}, false,
+			fmt.Errorf("pocketbase: resolve the canonical url %q: %w", url, err)
+	}
+
+	return storage.ResourceRecord{
+		Key: storage.ResourceKey{
+			Type: storage.ResourceType(resourceType), ID: storage.LogicalID(id),
+		},
+		Version: canonicalVersion,
+		Content: content,
+	}, true, nil
+}
