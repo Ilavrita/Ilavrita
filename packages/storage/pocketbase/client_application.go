@@ -576,3 +576,65 @@ func (s *ClientApplicationStore) ProvesSecret(
 
 	return proved, nil
 }
+
+const (
+	// Spending is the insert. A jti already present conflicts and writes
+	// nothing, which is the whole of replay detection: there is no read to race
+	// against, because the write is the check.
+	spendAssertion = "INSERT INTO client_assertion_jtis" +
+		" (project_id, client_application_id, jti, expires_at) VALUES (?, ?, ?, ?)" +
+		" ON CONFLICT (project_id, client_application_id, jti) DO NOTHING" +
+		" RETURNING jti"
+
+	sweepSpentAssertions = "DELETE FROM client_assertion_jtis WHERE expires_at <= ?"
+)
+
+// SpendAssertion records that one client assertion has been used, and reports
+// whether this was the first time.
+//
+// The write is the check. A read that asked "has this jti been seen?" and an
+// insert that recorded it would leave a window two concurrent presentations both
+// passed through, and an assertion used twice is the one thing a jti exists to
+// stop — so the conflict does the deciding, and a second presentation writes
+// nothing and is told so.
+func (s *ClientApplicationStore) SpendAssertion(
+	ctx context.Context, proj project.ID, held project.ClientAssertion,
+) (bool, error) {
+	if err := project.ValidateID(proj); err != nil {
+		return false, err
+	}
+
+	var spent string
+
+	err := conn(ctx, s.db).QueryRowContext(ctx, spendAssertion,
+		string(proj), string(held.Client()), held.ID(), held.ExpiresAt().UnixMilli(),
+	).Scan(&spent)
+
+	switch {
+	case errors.Is(err, sql.ErrNoRows):
+		return false, nil
+	case err != nil:
+		return false, fmt.Errorf("pocketbase: spend the assertion of %s: %w", held.Client(), err)
+	}
+
+	return true, nil
+}
+
+// SweepAssertions forgets the jtis whose assertions have expired. After that the
+// expiry refuses them, and remembering one longer would be remembering something
+// nothing can present.
+func (s *ClientApplicationStore) SweepAssertions(
+	ctx context.Context, now time.Time,
+) (int64, error) {
+	result, err := conn(ctx, s.db).ExecContext(ctx, sweepSpentAssertions, now.UnixMilli())
+	if err != nil {
+		return 0, fmt.Errorf("pocketbase: sweep spent assertions: %w", err)
+	}
+
+	swept, err := result.RowsAffected()
+	if err != nil {
+		return 0, fmt.Errorf("pocketbase: count swept assertions: %w", err)
+	}
+
+	return swept, nil
+}
