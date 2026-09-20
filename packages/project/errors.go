@@ -110,6 +110,17 @@ var (
 	// principal id alone, so two families sharing one id would be one principal.
 	ErrInvalidServiceID = errors.New("project: identifier is outside its principal namespace")
 
+	// ErrInvalidAuthorizationCode reports a code whose material, lifetime or
+	// binding contradict each other, or a redemption presenting none. Nothing is
+	// read as an approval that merely happens to be shaped like one.
+	ErrInvalidAuthorizationCode = errors.New("project: invalid authorization code")
+
+	// ErrInvalidCodeChallenge reports a PKCE challenge this server does not
+	// accept: a method other than S256, or a value that is not the base64url of
+	// a SHA-256. "plain" is refused rather than supported, because a challenge
+	// equal to its verifier protects against nobody who intercepted the code.
+	ErrInvalidCodeChallenge = errors.New("project: invalid pkce challenge")
+
 	// ErrInvalidRedirectURI reports an address an authorization code must not be
 	// handed back to: one that is relative, carries a fragment, is cleartext
 	// somewhere other than loopback, or names a scheme that runs its content
