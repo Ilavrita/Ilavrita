@@ -520,9 +520,13 @@ differently on a day that server is slow, and this build resolves no terminology
 of its own to check against anyway. The one check that would need it cannot be
 resolved by the public terminology server either.
 
-**What this is not.** It validates representation, not behaviour. It is also not
-wired into CI: it needs Docker and takes minutes rather than seconds, so it is
-run deliberately and its result is not a gate anything blocks on yet.
+**What this is not.** It validates representation, not behaviour.
+
+It runs in CI as its own workflow — nightly, on demand, and on a change to
+anything that decides what goes on the wire — rather than as one of the checks
+every push waits for. It pulls the HL7 validator image and takes minutes rather
+than seconds, so gating every push on it would trade a fast signal for a slow one
+on work that mostly cannot break it.
 
 Of Inferno's own test kits, every one layers an implementation guide — US Core,
 SMART App Launch, Da Vinci, CARIN — on top of R4. **SMART App Launch is now

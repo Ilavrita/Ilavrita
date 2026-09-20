@@ -1,0 +1,82 @@
+name: Conformance
+
+# What an outside implementation says about the bytes this server puts on the
+# wire. The Go suite checks Ilavrita against its own reading of R4 — the reading
+# that wrote the server — and cannot catch the two of them being wrong the same
+# way. Twice it did not.
+#
+# This is deliberately not one of CI's required checks. It pulls the HL7
+# validator image and takes minutes rather than seconds, so gating every push on
+# it would trade a fast signal for a slow one on work that mostly cannot break
+# it. It runs on a schedule, on demand, and whenever something it actually
+# judges has changed.
+
+on:
+  # The paths that decide what goes on the wire: the handlers, the types they
+  # serialise, the harness itself, and the definitions they are checked against.
+  push:
+    branches: [main, dev]
+    paths:
+      - "apps/ilavrita/**"
+      - "packages/fhir/**"
+      - "packages/validate/**"
+      - "packages/conformance/**"
+      - "packages/storage/**"
+      - "scripts/conformance.*"
+      - ".github/workflows/conformance.yml"
+  pull_request:
+    paths:
+      - "apps/ilavrita/**"
+      - "packages/fhir/**"
+      - "packages/validate/**"
+      - "packages/conformance/**"
+      - "packages/storage/**"
+      - "scripts/conformance.*"
+      - ".github/workflows/conformance.yml"
+
+  # Nightly, so a finding that appears without anybody touching the wire — a new
+  # validator release judging the same bytes differently — is noticed by a run
+  # rather than by whoever reaches for the script next.
+  schedule:
+    - cron: "17 3 * * *"
+
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: conformance-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  wire:
+    name: What goes on the wire
+    runs-on: ubuntu-latest
+
+    # The validator is a Java service behind an HTTP API and starts slowly.
+    # Twenty minutes is generous for the whole run and short enough that a hung
+    # container is reported rather than left holding a runner.
+    timeout-minutes: 20
+
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          submodules: recursive
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      # Pulled as its own step so a registry outage reads as a registry outage
+      # rather than as a conformance failure.
+      - name: Fetch the HL7 validator
+        run: docker pull infernocommunity/fhir-validator-service:latest
+
+      # Every shape this server serves, judged by the validator Inferno runs.
+      # The script accepts a finding only with a stated reason and prints how
+      # many each reason covers, so a class quietly absorbing findings shows up
+      # in the log rather than in nothing.
+      - name: Validate every shape
+        run: ./scripts/conformance.sh

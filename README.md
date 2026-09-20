@@ -95,7 +95,7 @@ and an architecture that does not have to be rewritten to reach a clustered one.
 | Resource validation, `$validate` | Against the R4 base definitions, required bindings and every FHIRPath invariant R4 states |
 | Declared profiles | `meta.profile` is resolved and its resource-level rules applied; one this server does not hold is reported, never silently passed |
 | Reference integrity | `$validate` reports a relative reference that leads nowhere; writes do not refuse one, because R4 permits it |
-| FHIR R4 representation | Checked against the HL7 validator by `scripts/conformance.sh`, not only against our own tests |
+| FHIR R4 representation | Checked against the HL7 validator by `scripts/conformance.sh`, in CI nightly and on any change to what goes on the wire |
 | Search parameters | Built-in set, plus any a Project defines with a `SearchParameter`; new ones backfill in the background |
 | Search modifiers | `:missing`, `:exact`, `:contains`, `:not` — every other one is refused by name |
 | LOINC and SNOMED | Not resolved — a code is stored and read back, never looked up or checked |
