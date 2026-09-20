@@ -597,6 +597,8 @@ func issueToken(request *core.RequestEvent) error {
 		return issueFromCode(request)
 	case "refresh_token":
 		return issueFromRefresh(request)
+	case "client_credentials":
+		return issueFromClientCredentials(request)
 	case "":
 		return refuseOAuth(request, invalidRequest("grant_type is required"))
 	default:
@@ -857,6 +859,227 @@ func (b *backend) issueAppSession(
 	issued, token, err := project.IssueAppSession(
 		proj, id, user, membership, launch, chain,
 		time.Now().UTC(), appSessionLifetime, rand.Reader)
+	if err != nil {
+		return project.Session{}, project.SessionToken{}, serverFailure()
+	}
+
+	if err := b.sessions.Issue(ctx, issued); err != nil {
+		return project.Session{}, project.SessionToken{}, serverFailure()
+	}
+
+	return issued, token, nil
+}
+
+// assertionType is the client authentication SMART Backend Services names.
+const assertionType = "urn:ietf:params:oauth:client-assertion-type:jwt-bearer"
+
+// backendSessionLifetime is how long a backend service's access token lives.
+//
+// Shorter than an app's, because a service can obtain another whenever it likes:
+// it holds a signing key rather than somebody's consent, so there is nobody to
+// interrupt by expiring sooner.
+const backendSessionLifetime = 15 * time.Minute
+
+// issueFromClientCredentials authenticates a backend service by the key it
+// signed with, and issues a token narrowed to what its own standing permits.
+//
+// The whole flow authenticates a *client*, never a person. That is why only
+// system scopes are honoured here and why the authorization endpoint refuses
+// them: a system scope narrows against whoever is asking, so one approved by a
+// person would narrow against that person's standing rather than the service's.
+func issueFromClientCredentials(request *core.RequestEvent) error {
+	held := request.Request.PostForm
+
+	if held.Get("client_assertion_type") != assertionType {
+		return refuseOAuth(request, invalidClient(
+			"a backend service authenticates with "+assertionType))
+	}
+
+	assertion := held.Get("client_assertion")
+	if assertion == "" {
+		return refuseOAuth(request, invalidClient("no client assertion was presented"))
+	}
+
+	proved, proj, err := serving.provedByAssertion(request, assertion)
+	if err != nil {
+		return refuseOAuth(request, err)
+	}
+
+	launch, err := systemScopesOf(held.Get("scope"))
+	if err != nil {
+		return refuseOAuth(request, err)
+	}
+
+	ctx := request.Request.Context()
+
+	// Spent only once everything else has held, so a request refused for its
+	// scopes does not burn the jti a corrected retry would use.
+	fresh, err := serving.applications.SpendAssertion(ctx, proj, proved)
+	if err != nil {
+		return refuseOAuth(request, serverFailure())
+	}
+
+	if !fresh {
+		return refuseOAuth(request, invalidClient("that assertion has already been used"))
+	}
+
+	issued, token, err := serving.issueServiceSession(ctx, proj, proved.Client(), launch)
+	if err != nil {
+		return refuseOAuth(request, err)
+	}
+
+	return request.JSON(http.StatusOK, tokenResponse{
+		AccessToken: token.Reveal(),
+		TokenType:   "Bearer",
+		ExpiresIn:   int(time.Until(issued.ExpiresAt()).Seconds()),
+		Scope:       launch.Scopes(),
+	})
+}
+
+// provedByAssertion works out which registration signed, by finding the one
+// whose key verifies.
+//
+// An assertion names no Project and a client id is unique within one, so the id
+// alone selects nothing. The signature selects: every registration bearing the
+// id is tried, and the one whose key verifies is the one asking. That is as
+// sound as a tenant predicate, because a signature cannot be forged — and unlike
+// a tenant predicate it needs nothing the assertion does not already carry.
+//
+// Every candidate is tried rather than stopping at the first, so the work does
+// not depend on which Project happens to be listed first. Two verifying means
+// two Projects hold the same private key, which makes them one service wearing
+// two names; that is refused rather than resolved by picking.
+func (b *backend) provedByAssertion(
+	request *core.RequestEvent, assertion string,
+) (project.ClientAssertion, project.ID, error) {
+	named, err := project.ClientIDFromAssertion(assertion)
+	if err != nil {
+		return project.ClientAssertion{}, "", invalidClient("that is not a client assertion")
+	}
+
+	borne, err := b.applications.Bearing(request.Request.Context(), named)
+	if err != nil {
+		return project.ClientAssertion{}, "", serverFailure()
+	}
+
+	audience, err := tokenEndpointURL(request)
+	if err != nil {
+		return project.ClientAssertion{}, "", serverFailure()
+	}
+
+	now := time.Now().UTC()
+
+	var (
+		proved  project.ClientAssertion
+		owner   project.ID
+		matched int
+	)
+
+	for _, held := range borne {
+		if held.Application.State() != project.ServiceActive {
+			continue
+		}
+
+		verified, err := project.VerifyClientAssertion(assertion, held.Application, audience, now)
+		if err != nil {
+			continue
+		}
+
+		proved, owner = verified, held.Project
+		matched++
+	}
+
+	switch {
+	case matched == 1:
+		return proved, owner, nil
+	case matched > 1:
+		// Two Projects holding one private key is a registration mistake, not a
+		// request this server can answer: choosing either would decide whose
+		// data a service reaches on the strength of a row order.
+		return project.ClientAssertion{}, "",
+			invalidClient("that key is registered in more than one project")
+	default:
+		// An unknown client and a wrong signature answer alike, because telling
+		// them apart tells a caller which client ids exist.
+		return project.ClientAssertion{}, "", invalidClient("that assertion does not prove this client")
+	}
+}
+
+// tokenEndpointURL is what an assertion's audience must name.
+func tokenEndpointURL(request *core.RequestEvent) (string, error) {
+	origin, err := publishing.origin(request.Request)
+	if err != nil {
+		return "", err
+	}
+
+	return origin + oauthBasePath + tokenPath, nil
+}
+
+// systemScopesOf reads what a backend service asked for, refusing anything that
+// is not a system scope.
+//
+// A service holds no consent, so there is nobody whose standing a patient or
+// user scope could narrow. Honouring one would mean deciding on a person's
+// behalf which person that was.
+func systemScopesOf(stated string) (project.LaunchContext, error) {
+	asked := strings.Fields(stated)
+	if len(asked) == 0 {
+		return project.LaunchContext{}, invalidScope("a backend service states the scopes it needs")
+	}
+
+	for _, one := range asked {
+		parsed, err := authz.ParseScope(one)
+		if err != nil {
+			return project.LaunchContext{}, invalidScope(one + ": " + reasonFor(err))
+		}
+
+		if parsed.Context != authz.ContextSystem {
+			return project.LaunchContext{}, invalidScope(
+				one + ": a backend service acts for nobody, so only a system scope means anything to it")
+		}
+	}
+
+	launch, err := project.NewLaunchContext("", strings.Join(asked, " "))
+	if err != nil {
+		return project.LaunchContext{}, invalidScope("nothing was granted")
+	}
+
+	return launch, nil
+}
+
+// issueServiceSession mints the access token a proved assertion stands for.
+//
+// The principal is the registration itself, which is what makes a system scope
+// narrow against the service's own standing: BuildScope resolves the client
+// application's membership and policy exactly as it resolves a person's.
+func (b *backend) issueServiceSession(
+	ctx context.Context, proj project.ID,
+	client project.ClientApplicationID, launch project.LaunchContext,
+) (project.Session, project.SessionToken, error) {
+	membership, found, err := b.resolvers.Memberships.Membership(ctx, proj,
+		project.PrincipalRef{Kind: project.PrincipalClientApplication, ID: project.PrincipalID(client)})
+	if err != nil {
+		return project.Session{}, project.SessionToken{}, serverFailure()
+	}
+
+	// A registration holding no standing is one no policy names. It would
+	// authenticate and reach nothing, which is refused here rather than answered
+	// with a token that authorizes nothing: a service handed a useless token
+	// looks like a policy problem at its first request instead of a registration
+	// problem now.
+	if !found || !membership.HoldsStanding() {
+		return project.Session{}, project.SessionToken{},
+			invalidClient("that registration holds no standing in its project")
+	}
+
+	id, err := project.MintSessionID(rand.Reader)
+	if err != nil {
+		return project.Session{}, project.SessionToken{}, serverFailure()
+	}
+
+	issued, token, err := project.IssueServiceSession(
+		proj, id, client, membership.ID(), launch,
+		time.Now().UTC(), backendSessionLifetime, rand.Reader)
 	if err != nil {
 		return project.Session{}, project.SessionToken{}, serverFailure()
 	}

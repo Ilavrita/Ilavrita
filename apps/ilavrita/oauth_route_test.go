@@ -2,8 +2,11 @@ package main
 
 import (
 	"context"
+	"crypto"
 	"crypto/rand"
+	"crypto/rsa"
 	"crypto/sha256"
+	"crypto/sha512"
 	"database/sql"
 	"encoding/base64"
 	"encoding/json"
@@ -1166,5 +1169,266 @@ func TestBothPublicDiscoveryEndpointsAreReadableCrossOrigin(t *testing.T) {
 
 	if recorder.Header().Get("Access-Control-Allow-Origin") != "" {
 		t.Error("a resource route is readable cross-origin")
+	}
+}
+
+// serviceKey is one backend service's key pair and the set its registration
+// holds.
+type serviceKey struct {
+	private *rsa.PrivateKey
+	set     string
+}
+
+// aServiceKey generates one.
+func aServiceKey(t *testing.T) serviceKey {
+	t.Helper()
+
+	key, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatalf("GenerateKey: %v", err)
+	}
+
+	set, err := json.Marshal(map[string]any{"keys": []map[string]string{{
+		"kty": "RSA", "kid": "svc", "alg": "RS384",
+		"n": base64.RawURLEncoding.EncodeToString(key.N.Bytes()),
+		"e": base64.RawURLEncoding.EncodeToString([]byte{1, 0, 1}),
+	}}})
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+
+	return serviceKey{private: key, set: string(set)}
+}
+
+// signedAssertion builds one client assertion, letting a caller change any claim
+// so each refusal is about exactly one thing.
+func signedAssertion(t *testing.T, key serviceKey, change func(map[string]any)) string {
+	t.Helper()
+
+	claims := map[string]any{
+		"iss": "cli_service",
+		"sub": "cli_service",
+		"aud": "http://" + testHost + oauthBasePath + tokenPath,
+		"exp": time.Now().Add(2 * time.Minute).Unix(),
+		"jti": "jti-" + time.Now().Format(time.RFC3339Nano),
+	}
+
+	if change != nil {
+		change(claims)
+	}
+
+	encode := func(held map[string]any) string {
+		raw, err := json.Marshal(held)
+		if err != nil {
+			t.Fatalf("Marshal: %v", err)
+		}
+
+		return base64.RawURLEncoding.EncodeToString(raw)
+	}
+
+	signed := encode(map[string]any{"alg": "RS384", "typ": "JWT", "kid": "svc"}) + "." + encode(claims)
+	digest := sha512.Sum384([]byte(signed))
+
+	signature, err := rsa.SignPKCS1v15(rand.Reader, key.private, crypto.SHA384, digest[:])
+	if err != nil {
+		t.Fatalf("sign: %v", err)
+	}
+
+	return signed + "." + base64.RawURLEncoding.EncodeToString(signature)
+}
+
+// registerService writes a backend service holding a key, standing and a policy
+// that reaches Organization.
+func registerService(t *testing.T, db *sql.DB, key serviceKey) {
+	t.Helper()
+
+	keys, err := project.ParseJWKS(key.set)
+	if err != nil {
+		t.Fatalf("ParseJWKS: %v", err)
+	}
+
+	app, err := project.NewClientApplication("clinic-a", project.ClientApplicationConfig{
+		ID: "cli_service", Name: "Nightly service", State: project.ServiceActive,
+		Kind: project.ClientConfidential, JWKS: keys,
+	})
+	if err != nil {
+		t.Fatalf("NewClientApplication: %v", err)
+	}
+
+	if _, err := sqlite.NewClientApplicationStore(db).Create(context.Background(), app); err != nil {
+		t.Fatalf("register the service: %v", err)
+	}
+
+	member, err := project.NewMembership(project.MembershipConfig{
+		ID: "pm_service", Project: "clinic-a", ProjectKind: project.KindStandard,
+		Principal: project.PrincipalRef{
+			Kind: project.PrincipalClientApplication, ID: "cli_service",
+		},
+		State: project.MembershipActive, Source: project.SourceAPI,
+		Policies: []project.PolicyAttachment{{Policy: "pol_ward"}},
+	})
+	if err != nil {
+		t.Fatalf("NewMembership: %v", err)
+	}
+
+	if err := sqlite.NewMembershipStore(db).Create(context.Background(), member); err != nil {
+		t.Fatalf("give the service standing: %v", err)
+	}
+}
+
+// asService sends one client-credentials request.
+func asService(t *testing.T, routes http.Handler, assertion, scope string) *httptest.ResponseRecorder {
+	t.Helper()
+
+	return redeeming(t, routes, url.Values{
+		"grant_type":            {"client_credentials"},
+		"scope":                 {scope},
+		"client_assertion_type": {assertionType},
+		"client_assertion":      {assertion},
+	})
+}
+
+// TestABackendServiceAuthenticatesByTheKeyItSignedWith.
+//
+// This is the whole of SMART Backend Services: no person, no consent, no
+// secret — a signature over a short-lived assertion, against a key the
+// registration published. What it then reaches is the service's own standing,
+// narrowed to the system scopes it asked for.
+func TestABackendServiceAuthenticatesByTheKeyItSignedWith(t *testing.T) {
+	routes, db := launchingServer(t, project.ClientPublic)
+	key := aServiceKey(t)
+	registerService(t, db, key)
+
+	answer := asService(t, routes, signedAssertion(t, key, nil), "system/Organization.read")
+	if answer.Code != http.StatusOK {
+		t.Fatalf("client credentials: %d %s", answer.Code, answer.Body)
+	}
+
+	var issued tokenResponse
+	if err := json.Unmarshal(answer.Body.Bytes(), &issued); err != nil {
+		t.Fatalf("decode the token: %v", err)
+	}
+
+	if issued.TokenType != "Bearer" || issued.AccessToken == "" {
+		t.Fatalf("the token response carried %+v", issued)
+	}
+
+	if issued.Scope != "system/Organization.read" {
+		t.Errorf("granted %q, want the scope it asked for", issued.Scope)
+	}
+
+	// A service holds no consent, so nothing about it is a person's session.
+	if issued.RefreshToken != "" || issued.Patient != "" {
+		t.Errorf("a service was given a refresh token or a patient: %+v", issued)
+	}
+
+	// It reaches what it was granted, and not the write its standing also holds.
+	if wrote := organizationWrite(t, routes, issued.AccessToken); wrote == http.StatusCreated {
+		t.Error("a service granted only a read wrote anyway")
+	}
+}
+
+// TestAnAssertionThisServerCannotBelieveAuthenticatesNobody.
+func TestAnAssertionThisServerCannotBelieveAuthenticatesNobody(t *testing.T) {
+	for name, held := range map[string]struct {
+		change func(map[string]any)
+		signer bool
+	}{
+		"signed by another key":     {nil, true},
+		"claiming another client":   {func(c map[string]any) { c["iss"] = "cli_other"; c["sub"] = "cli_other" }, false},
+		"aimed at another server":   {func(c map[string]any) { c["aud"] = "https://elsewhere.test/token" }, false},
+		"already expired":           {func(c map[string]any) { c["exp"] = time.Now().Add(-time.Minute).Unix() }, false},
+		"living longer than it may": {func(c map[string]any) { c["exp"] = time.Now().Add(time.Hour).Unix() }, false},
+		"carrying no jti":           {func(c map[string]any) { delete(c, "jti") }, false},
+	} {
+		t.Run(name, func(t *testing.T) {
+			routes, db := launchingServer(t, project.ClientPublic)
+			key := aServiceKey(t)
+			registerService(t, db, key)
+
+			signing := key
+			if held.signer {
+				signing = aServiceKey(t)
+			}
+
+			answer := asService(t, routes, signedAssertion(t, signing, held.change), "system/Organization.read")
+			if answer.Code == http.StatusOK {
+				t.Errorf("an assertion this server cannot believe authenticated: %s", answer.Body)
+			}
+		})
+	}
+}
+
+// TestOneAssertionAuthenticatesOnce, which is what the jti is for: a replayed
+// assertion is one somebody other than the service is holding.
+func TestOneAssertionAuthenticatesOnce(t *testing.T) {
+	routes, db := launchingServer(t, project.ClientPublic)
+	key := aServiceKey(t)
+	registerService(t, db, key)
+
+	assertion := signedAssertion(t, key, nil)
+
+	if first := asService(t, routes, assertion, "system/Organization.read"); first.Code != http.StatusOK {
+		t.Fatalf("first: %d %s", first.Code, first.Body)
+	}
+
+	if second := asService(t, routes, assertion, "system/Organization.read"); second.Code == http.StatusOK {
+		t.Errorf("one assertion authenticated twice: %s", second.Body)
+	}
+}
+
+// TestABackendServiceAsksForSystemScopesOrNothing.
+//
+// A service acts for nobody, so there is no standing a patient or user scope
+// could narrow. Honouring one would mean deciding on a person's behalf which
+// person that was.
+func TestABackendServiceAsksForSystemScopesOrNothing(t *testing.T) {
+	routes, db := launchingServer(t, project.ClientPublic)
+	key := aServiceKey(t)
+	registerService(t, db, key)
+
+	for name, scope := range map[string]string{
+		"a user scope":    "user/Organization.read",
+		"a patient scope": "patient/Observation.read",
+		"nothing at all":  "",
+		"not a scope":     "nonsense",
+	} {
+		t.Run(name, func(t *testing.T) {
+			if answer := asService(
+				t, routes, signedAssertion(t, key, nil), scope,
+			); answer.Code == http.StatusOK {
+				t.Errorf("a service was granted %q: %s", scope, answer.Body)
+			}
+		})
+	}
+}
+
+// TestAServiceWithNoStandingIsRefusedRatherThanGivenAUselessToken, so a
+// registration nobody gave a policy looks like a registration problem now
+// instead of a policy problem at its first request.
+func TestAServiceWithNoStandingIsRefusedRatherThanGivenAUselessToken(t *testing.T) {
+	routes, db := launchingServer(t, project.ClientPublic)
+	key := aServiceKey(t)
+
+	keys, err := project.ParseJWKS(key.set)
+	if err != nil {
+		t.Fatalf("ParseJWKS: %v", err)
+	}
+
+	app, err := project.NewClientApplication("clinic-a", project.ClientApplicationConfig{
+		ID: "cli_service", Name: "Nightly service", State: project.ServiceActive,
+		Kind: project.ClientConfidential, JWKS: keys,
+	})
+	if err != nil {
+		t.Fatalf("NewClientApplication: %v", err)
+	}
+
+	if _, err := sqlite.NewClientApplicationStore(db).Create(context.Background(), app); err != nil {
+		t.Fatalf("register the service: %v", err)
+	}
+
+	answer := asService(t, routes, signedAssertion(t, key, nil), "system/Organization.read")
+	if answer.Code == http.StatusOK {
+		t.Errorf("a service holding no standing was given a token: %s", answer.Body)
 	}
 }

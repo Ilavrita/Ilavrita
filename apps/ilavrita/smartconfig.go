@@ -48,26 +48,24 @@ func describeSmartConfiguration(request *core.RequestEvent) error {
 		AuthorizationEndpoint: origin + oauthBasePath + authorizePath,
 		TokenEndpoint:         origin + oauthBasePath + tokenPath,
 
-		// SMART names two options here — authorization_code and
-		// client_credentials — so only those appear, and client_credentials is
-		// absent because private_key_jwt is not built. The refresh grant is
-		// served and is deliberately not listed: it is a grant this endpoint
-		// answers, but not one of the two this field enumerates, and a document
-		// that invents entries in a closed list is one a validator reads as
-		// wrong rather than as generous.
-		GrantTypes:    []string{"authorization_code"},
+		// SMART names two options here, and this server answers both. The
+		// refresh grant is served too and is deliberately not listed: it is a
+		// grant this endpoint answers, but not one of the two this field
+		// enumerates, and a document that invents entries in a closed list is
+		// one a validator reads as wrong rather than as generous.
+		GrantTypes:    []string{"authorization_code", "client_credentials"},
 		ResponseTypes: []string{"code"},
 
 		// S256 alone. "plain" is unrepresentable here, so naming it would
 		// advertise a downgrade ParseCodeChallenge refuses.
 		ChallengeMethods: []string{"S256"},
 
-		// SMART names three: client_secret_post, client_secret_basic and
-		// private_key_jwt. A public client authenticates with PKCE alone, which
-		// RFC 8414 spells "none" and SMART does not list — so it is left out
-		// rather than added to a closed list. That a public client needs no
-		// secret is said by the client-public capability below.
-		TokenEndpointAuthWays: []string{"client_secret_basic"},
+		// SMART names three, and this server answers two of them. A public
+		// client authenticates with PKCE alone, which RFC 8414 spells "none" and
+		// SMART does not list — so it is left out rather than added to a closed
+		// list. That a public client needs no secret is said by the
+		// client-public capability below.
+		TokenEndpointAuthWays: []string{"client_secret_basic", "private_key_jwt"},
 
 		// Every scope here is one this server grants, because SMART says a
 		// server SHALL support all of them. launch/encounter is absent: there is
@@ -84,12 +82,13 @@ func describeSmartConfiguration(request *core.RequestEvent) error {
 		// Standalone Apps", and permission-user what completes the clinician
 		// set beside it.
 		//
-		// sso-openid-connect, launch-ehr and client-confidential-asymmetric are
-		// absent because they are not built.
+		// sso-openid-connect and launch-ehr are absent because they are not
+		// built.
 		Capabilities: []string{
 			"launch-standalone",
 			"client-public",
 			"client-confidential-symmetric",
+			"client-confidential-asymmetric",
 			"context-standalone-patient",
 			"permission-patient",
 			"permission-user",
