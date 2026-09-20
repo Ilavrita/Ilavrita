@@ -110,6 +110,12 @@ var (
 	// principal id alone, so two families sharing one id would be one principal.
 	ErrInvalidServiceID = errors.New("project: identifier is outside its principal namespace")
 
+	// ErrInvalidJWKS reports a registered key set this server cannot verify
+	// against: a key type or curve it does not support, a key too short to be
+	// signing with, a malformed member, or one carrying private material — which
+	// is a key its owner has already published.
+	ErrInvalidJWKS = errors.New("project: invalid key set")
+
 	// ErrInvalidRefreshToken reports a token whose material, state or lifetime
 	// contradict each other, a redemption presenting none, or a rotation of one
 	// that is not the live rotation of its chain.
