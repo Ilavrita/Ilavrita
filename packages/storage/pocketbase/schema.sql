@@ -1069,6 +1069,19 @@ CREATE TABLE IF NOT EXISTS sessions (
   user_id       TEXT NOT NULL REFERENCES users (id) ON DELETE RESTRICT ON UPDATE RESTRICT,
   membership_id TEXT NOT NULL,
   state         TEXT NOT NULL CHECK (state IN ('active', 'revoked')),
+
+  -- What a SMART app's session was launched with, both NULL for an ordinary
+  -- login. They live in this row rather than a table beside it so that a
+  -- session an app holds cannot be read without reading what that app was
+  -- granted: a launch context that went missing would read as a login nobody's
+  -- app holds, and that one is narrowed by nothing.
+  launch_patient TEXT,
+
+  -- The granted scopes as the token response reported them, space-delimited.
+  -- Stored verbatim so what the app was told it holds and what this server
+  -- narrows by are the same text rather than two renderings of it.
+  granted_scopes TEXT,
+
   created_at    BIGINT NOT NULL,
   expires_at    BIGINT NOT NULL,
   revoked_at    BIGINT,
@@ -1076,6 +1089,15 @@ CREATE TABLE IF NOT EXISTS sessions (
   PRIMARY KEY (project_id, id),
 
   CHECK (substr(id, 1, 4) = 'ses_'),
+
+  -- A patient without scopes is a session that was launched and granted
+  -- nothing. It would rebuild as an ordinary login while looking like an app's
+  -- session to anyone reading the table, so it is unrepresentable.
+  CHECK (launch_patient IS NULL OR granted_scopes IS NOT NULL),
+
+  -- Absence is NULL. The empty string would be a second way to say it, and the
+  -- two would not narrow alike.
+  CHECK (granted_scopes IS NULL OR granted_scopes <> ''),
 
   -- A session that outlives the day it was issued on is one nobody re-proved a
   -- credential for. NOT NULL alone permits the year 3000, so the ceiling is

@@ -38,6 +38,14 @@ var (
 	ErrRuleRestrictionColumnsMissing = errors.New(
 		"pocketbase: access_policy_rules is missing its restriction columns")
 
+	// ErrSessionLaunchMissing reports a sessions table with nowhere to record
+	// what a SMART app was granted. A session that cannot say so reads as an
+	// ordinary login, and an ordinary login is narrowed by nothing — so serving
+	// such a database would hand every app the whole of what the person it acts
+	// for may reach. It is refused.
+	ErrSessionLaunchMissing = errors.New(
+		"pocketbase: sessions cannot record what a SMART app was granted")
+
 	// ErrRebuildWouldDropColumn reports an old table holding a column the current
 	// declaration does not. The rebuild copies rows, so a dropped column is lost
 	// data and the rebuild refuses rather than performing it.
@@ -78,6 +86,14 @@ const (
 
 	// factorTable holds the second factor an identity proved.
 	factorTable = "user_second_factors"
+
+	// sessionTable holds what a later request is served as, and what a SMART app
+	// holding that session was granted.
+	sessionTable = "sessions"
+
+	// grantedScopesColumn is what a session records an app's grant in, and what
+	// an install that predates SMART does not declare.
+	grantedScopesColumn = "granted_scopes"
 )
 
 // principalParents are the registries project_memberships must name, each with
@@ -169,6 +185,10 @@ func PrepareSchema(ctx context.Context, db *sql.DB) error {
 		return err
 	}
 
+	if err := AssertSessionLaunch(ctx, db); err != nil {
+		return err
+	}
+
 	return AssertNoSystemClientApplicationDocuments(ctx, db)
 }
 
@@ -246,6 +266,14 @@ func schemaMigrations() []schemaMigration {
 			},
 			rebuild: rebuildQueueClaims,
 			applied: "claimed_by and claimed_until on both queues",
+		},
+		{
+			job: SuperJob{
+				Name: "migrate.sessions.launch_context",
+				Kind: JobMigration, Subject: sessionTable,
+			},
+			rebuild: rebuildSessionLaunch,
+			applied: "launch_patient and granted_scopes, so a SMART app's session says what it may reach",
 		},
 	}
 }
@@ -469,6 +497,55 @@ func rebuildFactorReplacement(ctx context.Context, db *sql.DB) (bool, error) {
 	}
 
 	return true, nil
+}
+
+// rebuildSessionLaunch adopts the launch context columns onto a sessions table
+// that predates SMART.
+//
+// Every row it carries across is an ordinary login, and takes NULL for both: a
+// session issued before this server could record a grant was issued to somebody
+// signing in, never to an app. So the copy has nothing the new checks reject,
+// and no existing session is narrowed by the migration.
+func rebuildSessionLaunch(ctx context.Context, db *sql.DB) (bool, error) {
+	present, err := hasColumn(ctx, db, sessionTable, grantedScopesColumn)
+	if err != nil || present {
+		return false, err
+	}
+
+	// A table that is not there yet is created by the schema with the columns
+	// already in it, and has nothing to carry across.
+	declared, err := hasTable(ctx, db, sessionTable)
+	if err != nil || !declared {
+		return false, err
+	}
+
+	plan, err := planRebuild(ctx, db, sessionTable)
+	if err != nil {
+		return false, err
+	}
+
+	if err := performRebuild(ctx, db, plan); err != nil {
+		return false, err
+	}
+
+	return true, nil
+}
+
+// AssertSessionLaunch refuses a database whose sessions cannot say what a SMART
+// app was granted. Such a session reads as an ordinary login, and an ordinary
+// login is narrowed by nothing, so every app would hold the whole of what the
+// person it acts for may reach.
+func AssertSessionLaunch(ctx context.Context, db *sql.DB) error {
+	present, err := hasColumn(ctx, db, sessionTable, grantedScopesColumn)
+	if err != nil {
+		return err
+	}
+
+	if !present {
+		return fmt.Errorf("%w: %s.%s", ErrSessionLaunchMissing, sessionTable, grantedScopesColumn)
+	}
+
+	return nil
 }
 
 // AssertFactorReplacement refuses a database that cannot hold a replacement
