@@ -109,6 +109,19 @@ func refuseOAuth(request *core.RequestEvent, err error) error {
 	return request.JSON(failure.status, failure)
 }
 
+// answerToken writes a token response, uncacheable.
+//
+// RFC 6749 section 5.1 requires Cache-Control: no-store on any response holding
+// a token, and Pragma: no-cache alongside it. A proxy or a browser that kept one
+// would be holding somebody's credential for whoever asked next, so this is the
+// one place that answers with a token and it sets both.
+func answerToken(request *core.RequestEvent, held tokenResponse) error {
+	request.Response.Header().Set("Cache-Control", "no-store")
+	request.Response.Header().Set("Pragma", "no-cache")
+
+	return request.JSON(http.StatusOK, held)
+}
+
 // registerOAuthRoutes publishes the SMART endpoints.
 func registerOAuthRoutes(routes *router.Router[*core.RequestEvent]) {
 	base := routes.Group(oauthBasePath)
@@ -666,7 +679,7 @@ func issueFromCode(request *core.RequestEvent) error {
 		return refuseOAuth(request, err)
 	}
 
-	return request.JSON(http.StatusOK, tokenResponse{
+	return answerToken(request, tokenResponse{
 		AccessToken:  token.Reveal(),
 		TokenType:    "Bearer",
 		ExpiresIn:    int(time.Until(issued.ExpiresAt()).Seconds()),
@@ -778,7 +791,7 @@ func issueFromRefresh(request *core.RequestEvent) error {
 		return refuseOAuth(request, err)
 	}
 
-	return request.JSON(http.StatusOK, tokenResponse{
+	return answerToken(request, tokenResponse{
 		AccessToken:  token.Reveal(),
 		TokenType:    "Bearer",
 		ExpiresIn:    int(time.Until(issued.ExpiresAt()).Seconds()),
@@ -940,7 +953,7 @@ func issueFromClientCredentials(request *core.RequestEvent) error {
 		return refuseOAuth(request, err)
 	}
 
-	return request.JSON(http.StatusOK, tokenResponse{
+	return answerToken(request, tokenResponse{
 		AccessToken: token.Reveal(),
 		TokenType:   "Bearer",
 		ExpiresIn:   int(time.Until(issued.ExpiresAt()).Seconds()),

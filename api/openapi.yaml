@@ -1952,6 +1952,16 @@ components:
       description: |
         The access token, and the refresh token when the approval asked to
         outlive its session.
+      headers:
+        Cache-Control:
+          description: |
+            Always `no-store`. RFC 6749 section 5.1 requires it on any response
+            holding a token: a cache that kept one would be holding somebody's
+            credential ready for whoever asked next.
+          schema: { type: string, enum: [no-store] }
+        Pragma:
+          description: Always `no-cache`, alongside `Cache-Control`.
+          schema: { type: string, enum: [no-cache] }
       content:
         application/json:
           schema:

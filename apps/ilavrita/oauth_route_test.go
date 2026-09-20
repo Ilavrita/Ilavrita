@@ -1475,3 +1475,57 @@ func TestTheAuthorizationEndpointReadsAFormAsWellAsAQuery(t *testing.T) {
 		}
 	}
 }
+
+// TestNoResponseCarryingATokenMayBeCached.
+//
+// RFC 6749 section 5.1: a response holding a token must carry Cache-Control:
+// no-store. A proxy or a browser that kept one would be holding somebody's
+// credential ready for whoever asked next.
+func TestNoResponseCarryingATokenMayBeCached(t *testing.T) {
+	routes, db := launchingServer(t, project.ClientPublic)
+	person := signedIn(t, routes)
+
+	approved := authorizing(t, routes, http.MethodPost, person, askingFor(refreshScope), "")
+	if approved.Code != http.StatusOK {
+		t.Fatalf("approve: %d %s", approved.Code, approved.Body)
+	}
+
+	redeemed := redeeming(t, routes, url.Values{
+		"grant_type":    {"authorization_code"},
+		"code":          {codeFrom(t, approved)},
+		"redirect_uri":  {appRedirect},
+		"client_id":     {"cli_ward"},
+		"code_verifier": {appVerifier},
+	})
+
+	var issued tokenResponse
+	if err := json.Unmarshal(redeemed.Body.Bytes(), &issued); err != nil {
+		t.Fatalf("decode the token: %v", err)
+	}
+
+	key := aServiceKey(t)
+	registerService(t, db, key)
+
+	// Every grant, because each one answers from its own place and a header
+	// added to two of three still leaves a token in somebody's cache.
+	for name, recorder := range map[string]*httptest.ResponseRecorder{
+		"an authorization code": redeemed,
+		"a refresh":             refreshing(t, routes, issued.RefreshToken),
+		"client credentials": asService(
+			t, routes, signedAssertion(t, key, nil), "system/Organization.read"),
+	} {
+		t.Run(name, func(t *testing.T) {
+			if recorder.Code != http.StatusOK {
+				t.Fatalf("%s: %d %s", name, recorder.Code, recorder.Body)
+			}
+
+			if held := recorder.Header().Get("Cache-Control"); !strings.Contains(held, "no-store") {
+				t.Errorf("%s answered Cache-Control %q, want no-store", name, held)
+			}
+
+			if held := recorder.Header().Get("Pragma"); held != "no-cache" {
+				t.Errorf("%s answered Pragma %q, want no-cache", name, held)
+			}
+		})
+	}
+}
