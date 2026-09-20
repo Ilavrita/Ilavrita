@@ -99,6 +99,15 @@ const (
 
 	listCredentials = "SELECT " + credentialColumns + " FROM client_application_credentials" +
 		" WHERE project_id = ? AND client_application_id = ? ORDER BY created_at, id"
+
+	// The hash is selected here because this is the comparison, the same way a
+	// session resolve selects the token digest it is about to compare. It is the
+	// only other projection in this package that reads one, and it never leaves
+	// the method below.
+	provableCredentials = "SELECT id, COALESCE(secret_hash, ''), state," +
+		" created_at, expires_at, COALESCE(revoked_at, 0)" +
+		" FROM client_application_credentials" +
+		" WHERE project_id = ? AND client_application_id = ? AND state <> 'revoked'"
 )
 
 // ClientApplicationVersion is the optimistic-concurrency counter
@@ -483,4 +492,77 @@ func heldSecret(held bool) project.CredentialHash {
 	}
 
 	return secretOnFile
+}
+
+// ProvesSecret reports whether a presented secret is one this registration
+// currently holds.
+//
+// The comparison happens here rather than in a caller because Credentials
+// deliberately rebuilds every record with a sentinel in place of the hash: no
+// read in this package hands a digest out, so nothing outside could perform this
+// comparison even if it wanted to. That is the same rule a session resolve
+// follows, and this is the second and last place it is bent.
+//
+// A registration holding no live credential proves nothing, which is the answer
+// a revoked secret leaves behind: revocation destroys the material, so there is
+// nothing left to match.
+func (s *ClientApplicationStore) ProvesSecret(
+	ctx context.Context, proj project.ID, client project.ClientApplicationID,
+	secret project.ClientSecret, now time.Time,
+) (bool, error) {
+	if err := project.ValidateID(proj); err != nil {
+		return false, err
+	}
+
+	if err := project.ValidateClientApplicationID(client); err != nil {
+		return false, err
+	}
+
+	rows, err := conn(ctx, s.db).QueryContext(ctx, provableCredentials, string(proj), string(client))
+	if err != nil {
+		return false, fmt.Errorf("pocketbase: read credentials for %s: %w", client, err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	proved := false
+
+	for rows.Next() {
+		var (
+			id, hash, state                 string
+			createdAt, expiresAt, revokedAt int64
+		)
+
+		if err := rows.Scan(&id, &hash, &state, &createdAt, &expiresAt, &revokedAt); err != nil {
+			return false, fmt.Errorf("pocketbase: scan credential for %s: %w", client, err)
+		}
+
+		record := project.CredentialRecord{
+			ID: project.CredentialID(id), Client: client,
+			Hash: project.CredentialHash(hash), State: project.CredentialState(state),
+			CreatedAt: time.UnixMilli(createdAt).UTC(), ExpiresAt: time.UnixMilli(expiresAt).UTC(),
+		}
+
+		if revokedAt != 0 {
+			record.RevokedAt = time.UnixMilli(revokedAt).UTC()
+		}
+
+		credential, err := project.NewCredential(proj, record)
+		if err != nil {
+			return false, fmt.Errorf("pocketbase: rebuild credential %s: %w", id, err)
+		}
+
+		// Every credential is compared, and the loop does not stop at the first
+		// match: stopping early makes the work depend on which secret was
+		// presented, and the comparison inside is constant time precisely so
+		// that it does not.
+		if credential.Matches(secret, now) {
+			proved = true
+		}
+	}
+
+	if err := rows.Err(); err != nil {
+		return false, fmt.Errorf("pocketbase: read credentials for %s: %w", client, err)
+	}
+
+	return proved, nil
 }
