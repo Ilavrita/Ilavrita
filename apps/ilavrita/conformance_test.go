@@ -398,11 +398,17 @@ type call struct {
 	body        string
 	ifMatch     string
 	ifNoneExist string
-	accept      string
-	contentType string
-	host        string
-	origin      string
-	bearer      string
+	ifNoneMatch string
+
+	// ifModifiedSince and prefer are how a client reads conditionally and says
+	// what it wants a write to answer with.
+	ifModifiedSince string
+	prefer          string
+	accept          string
+	contentType     string
+	host            string
+	origin          string
+	bearer          string
 
 	// securityContext is the header a raw Binary submission names its access
 	// context in, because a PDF has nowhere else to say it.
@@ -434,6 +440,18 @@ func (c call) send(t *testing.T, routes http.Handler) *httptest.ResponseRecorder
 
 	if c.ifNoneExist != "" {
 		sent.Header.Set(ifNoneExistField, c.ifNoneExist)
+	}
+
+	if c.ifNoneMatch != "" {
+		sent.Header.Set(ifNoneMatchField, c.ifNoneMatch)
+	}
+
+	if c.ifModifiedSince != "" {
+		sent.Header.Set(ifModifiedSinceField, c.ifModifiedSince)
+	}
+
+	if c.prefer != "" {
+		sent.Header.Set(preferField, c.prefer)
 	}
 
 	if c.accept != "" {
