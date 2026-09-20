@@ -85,7 +85,12 @@ single security and Project model, even though they ship in phases.
       directory and spent once, which is what an external tool needs before it
       can authenticate at all
 - [ ] SMART App Launch and an OAuth2 authorization server, with
-      `.well-known/smart-configuration` beside it
+      `.well-known/smart-configuration` beside it. How a SMART scope becomes a
+      `storage.Scope` is specified in `docs/design/smart-scope-spec.md`; the
+      endpoints are ordinary once that is settled and unsafe before it is
+- [ ] ABDM profiles (NRCeS) — 38 core profiles and 42 value sets, which needs
+      profile application beyond the root invariants this build checks today,
+      and the terminology directory back for SNOMED CT India and LOINC
 - [ ] Single binary and container image
 
 **Conditional interactions are now the one that matters most.** Several
