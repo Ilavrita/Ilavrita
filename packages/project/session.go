@@ -130,6 +130,7 @@ type Session struct {
 	membership MembershipID
 	digest     string
 	state      SessionState
+	launch     LaunchContext
 	createdAt  time.Time
 	expiresAt  time.Time
 	revokedAt  time.Time
@@ -142,9 +143,17 @@ type SessionRecord struct {
 	Membership MembershipID
 	Digest     string
 	State      SessionState
-	CreatedAt  time.Time
-	ExpiresAt  time.Time
-	RevokedAt  time.Time
+
+	// LaunchPatient and GrantedScopes are what an app's session was launched
+	// with, both empty for an ordinary login. They travel in the session's own
+	// row rather than a table beside it, so a session an app holds cannot be
+	// read without reading what that app was granted.
+	LaunchPatient string
+	GrantedScopes string
+
+	CreatedAt time.Time
+	ExpiresAt time.Time
+	RevokedAt time.Time
 }
 
 // IssueSession mints one session for an authenticated identity and returns the
@@ -153,6 +162,32 @@ type SessionRecord struct {
 // to decide which standing a token carries (FR-048).
 func IssueSession(
 	owner ID, id SessionID, user UserID, membership MembershipID,
+	issuedAt time.Time, lifetime time.Duration, random io.Reader,
+) (Session, SessionToken, error) {
+	return issueSession(owner, id, user, membership, LaunchContext{}, issuedAt, lifetime, random)
+}
+
+// IssueAppSession mints one session for an app acting for an authenticated
+// identity. It takes the launch context rather than accepting one afterwards,
+// because a session that is an app's and does not say what the app was granted
+// is one nothing narrows: it would reach everything the person reaches, which is
+// the whole of what a SMART scope exists to prevent.
+func IssueAppSession(
+	owner ID, id SessionID, user UserID, membership MembershipID, launch LaunchContext,
+	issuedAt time.Time, lifetime time.Duration, random io.Reader,
+) (Session, SessionToken, error) {
+	if launch.IsZero() {
+		return Session{}, SessionToken{}, fmt.Errorf(
+			"%w: an app's session states what the app was granted", ErrInvalidLaunch)
+	}
+
+	return issueSession(owner, id, user, membership, launch, issuedAt, lifetime, random)
+}
+
+// issueSession is what both minting paths come to, so neither can validate less
+// than the other.
+func issueSession(
+	owner ID, id SessionID, user UserID, membership MembershipID, launch LaunchContext,
 	issuedAt time.Time, lifetime time.Duration, random io.Reader,
 ) (Session, SessionToken, error) {
 	if err := ValidateID(owner); err != nil {
@@ -183,7 +218,7 @@ func IssueSession(
 
 	return Session{
 		id: id, project: owner, user: user, membership: membership,
-		digest: token.Digest(), state: SessionActive,
+		digest: token.Digest(), state: SessionActive, launch: launch,
 		createdAt: issuedAt.UTC(), expiresAt: issuedAt.Add(lifetime).UTC(),
 	}, token, nil
 }
@@ -212,11 +247,41 @@ func NewSession(owner ID, rec SessionRecord) (Session, error) {
 		return Session{}, err
 	}
 
+	launch, err := rec.launchContext()
+	if err != nil {
+		return Session{}, err
+	}
+
 	return Session{
 		id: rec.ID, project: owner, user: rec.User, membership: rec.Membership,
-		digest: rec.Digest, state: rec.State,
+		digest: rec.Digest, state: rec.State, launch: launch,
 		createdAt: rec.CreatedAt.UTC(), expiresAt: rec.ExpiresAt.UTC(), revokedAt: rec.RevokedAt.UTC(),
 	}, nil
+}
+
+// launchContext rebuilds what an app's session was launched with, through the
+// same constructor a fresh one goes through, so a row nothing could have written
+// is refused rather than served.
+//
+// A row naming a patient but granting nothing is the dangerous shape: it would
+// rebuild as an ordinary login, which is narrowed by nothing, while looking like
+// an app's session to anyone reading the table. It is refused.
+func (r SessionRecord) launchContext() (LaunchContext, error) {
+	if r.GrantedScopes == "" {
+		if r.LaunchPatient != "" {
+			return LaunchContext{}, fmt.Errorf(
+				"%w: %s names a launch patient and no granted scopes", ErrInvalidLaunch, r.ID)
+		}
+
+		return LaunchContext{}, nil
+	}
+
+	launch, err := NewLaunchContext(r.LaunchPatient, r.GrantedScopes)
+	if err != nil {
+		return LaunchContext{}, fmt.Errorf("%s: %w", r.ID, err)
+	}
+
+	return launch, nil
 }
 
 // validateMaterial pairs the state against the token, which is what the row's two
@@ -281,6 +346,13 @@ func (s Session) Digest() string {
 	return s.digest
 }
 
+// Launch returns what an app's session was launched with. The zero value means
+// an ordinary login, which no app asked to narrow and which therefore reaches
+// exactly what the person's own standing reaches.
+func (s Session) Launch() LaunchContext {
+	return s.launch
+}
+
 // Principal names the identity a request carrying this session is served as.
 func (s Session) Principal() PrincipalRef {
 	return PrincipalRef{Kind: PrincipalUser, ID: PrincipalID(s.user)}
@@ -320,10 +392,12 @@ func (s Session) Revoke(at time.Time) (Session, error) {
 	return s, nil
 }
 
-// String renders a session without its material.
+// String renders a session without its material. The launch context is named
+// because whether a session is an app's decides what it reaches, and a log line
+// that omitted it would read the same for a narrowed session and an open one.
 func (s Session) String() string {
-	return fmt.Sprintf("session %s for %s in %s (%s, expires %s)",
-		s.id, s.user, s.project, s.state, s.expiresAt.Format(time.RFC3339))
+	return fmt.Sprintf("session %s for %s in %s (%s, expires %s, %s)",
+		s.id, s.user, s.project, s.state, s.expiresAt.Format(time.RFC3339), s.launch)
 }
 
 // GoString redacts too, because %#v reaches the unexported fields directly.

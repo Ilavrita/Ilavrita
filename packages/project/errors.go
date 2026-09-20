@@ -144,6 +144,12 @@ var (
 	// read as a session that merely happens to be shaped like one.
 	ErrInvalidSession = errors.New("project: invalid session")
 
+	// ErrInvalidLaunch reports a launch context that grants nothing, or one whose
+	// patient is not a single logical id. An app's session that cannot say what
+	// the app was granted is one nothing narrows, so it is refused rather than
+	// stored and later read as an ordinary login.
+	ErrInvalidLaunch = errors.New("project: invalid launch context")
+
 	// ErrMachinePrincipalProfile reports a profile on a client application or a
 	// bot. A machine principal's authority is its AccessPolicy, never a
 	// compartment it occupies.
