@@ -150,6 +150,16 @@ func startServing(app core.App) error {
 
 	publishing = published
 
+	// Where a person approves an authorization. Read here so a deployment that
+	// configured an address this server cannot redirect to learns at startup
+	// rather than at the first launch.
+	consent, err := configuredConsentPage()
+	if err != nil {
+		return err
+	}
+
+	consentPage = consent
+
 	db, err := openDatabase(app.DataDir())
 	if err != nil {
 		return err

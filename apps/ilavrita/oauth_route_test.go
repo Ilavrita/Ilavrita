@@ -7,11 +7,13 @@ import (
 	"database/sql"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -173,7 +175,15 @@ func authorizing(
 ) *httptest.ResponseRecorder {
 	t.Helper()
 
-	path := oauthBasePath + authorizePath + "?" + ask.Encode()
+	// The describe reads the consent route; the approval posts to the
+	// authorization one. A browser reaches neither: it reaches the redirect
+	// endpoint, which is tested separately.
+	route := authorizePath
+	if method == http.MethodGet {
+		route = consentPath
+	}
+
+	path := oauthBasePath + route + "?" + ask.Encode()
 
 	sent := httptest.NewRequest(method, path, strings.NewReader(body))
 	sent.Host = testHost
@@ -623,8 +633,36 @@ func TestDiscoveryAdvertisesOnlyWhatThisServerDoes(t *testing.T) {
 		t.Fatalf("decode the document: %v", err)
 	}
 
-	if held.Issuer != appAudience {
-		t.Errorf("issuer is %q, want the base an aud must name", held.Issuer)
+	// SMART makes issuer conditional on sso-openid-connect and says "otherwise,
+	// omitted". This build issues no identity token, so publishing one would be
+	// naming an OpenID Connect issuer that answers nothing.
+	if held.Issuer != "" {
+		t.Errorf("issuer is %q, and this build supports no OpenID Connect", held.Issuer)
+	}
+
+	// Every advertised scope must be one this server grants: SMART says a server
+	// SHALL support all of them, so this list is a promise rather than a menu.
+	for _, scope := range held.ScopesSupported {
+		if slices.Contains(sessionScopes, scope) {
+			continue
+		}
+
+		if _, err := authz.ParseScope(scope); err != nil {
+			t.Errorf("discovery advertises the %q scope, which this build refuses: %v", scope, err)
+		}
+	}
+
+	// And a closed enumeration is not somewhere to add entries.
+	for _, held := range [][2][]string{
+		{held.GrantTypes, {"authorization_code", "client_credentials"}},
+		{held.TokenEndpointAuthWays, {"client_secret_post", "client_secret_basic", "private_key_jwt"}},
+	} {
+		for _, stated := range held[0] {
+			if !slices.Contains(held[1], stated) {
+				t.Errorf("discovery states %q, which is outside what SMART enumerates: %v",
+					stated, held[1])
+			}
+		}
 	}
 
 	// Every advertised challenge method must be one this build accepts.
@@ -918,6 +956,7 @@ func TestEveryRouteThisSurfaceServesIsDescribed(t *testing.T) {
 
 	for name, path := range map[string]string{
 		"the authorization endpoint": oauthBasePath + authorizePath,
+		"the consent description":    oauthBasePath + consentPath,
 		"the token endpoint":         oauthBasePath + tokenPath,
 		"the discovery document":     smartConfigurationPath,
 		"login":                      authBasePath + loginPath,
@@ -932,5 +971,152 @@ func TestEveryRouteThisSurfaceServesIsDescribed(t *testing.T) {
 				t.Errorf("%s is served at %q and the description does not declare it", name, path)
 			}
 		})
+	}
+}
+
+// consentedAt points the authorization endpoint at a page for the duration of
+// one test.
+func consentedAt(t *testing.T, page string) {
+	t.Helper()
+
+	held := consentPage
+	consentPage = page
+
+	t.Cleanup(func() { consentPage = held })
+}
+
+// beginning sends one browser request to the authorization endpoint.
+func beginning(t *testing.T, routes http.Handler, ask url.Values) *httptest.ResponseRecorder {
+	t.Helper()
+
+	sent := httptest.NewRequest(
+		http.MethodGet, oauthBasePath+authorizePath+"?"+ask.Encode(), nil)
+	sent.Host = testHost
+
+	recorder := httptest.NewRecorder()
+	routes.ServeHTTP(recorder, sent)
+
+	return recorder
+}
+
+// TestTheAuthorizationEndpointSendsABrowserSomewhereItCanApprove.
+//
+// SMART's authorization endpoint is a browser endpoint: an app sends a person
+// there and expects them back at the redirect address with a code. A JSON API
+// at that path is not that endpoint, however correct its contents — no app and
+// no conformance suite can drive one.
+func TestTheAuthorizationEndpointSendsABrowserSomewhereItCanApprove(t *testing.T) {
+	routes, _ := launchingServer(t, project.ClientPublic)
+	consentedAt(t, "https://console.example.test/approve")
+
+	ask := askingFor("user/Organization.read")
+
+	recorder := beginning(t, routes, ask)
+	if recorder.Code != http.StatusFound {
+		t.Fatalf("authorize answered %d, want a redirect: %s", recorder.Code, recorder.Body)
+	}
+
+	sent, err := url.Parse(recorder.Header().Get("Location"))
+	if err != nil {
+		t.Fatalf("parse the redirect: %v", err)
+	}
+
+	if sent.Host != "console.example.test" || sent.Path != "/approve" {
+		t.Errorf("a person was sent to %q, not the configured consent page", sent)
+	}
+
+	// Every parameter travels, so the page can describe what is being approved
+	// without inventing any of it.
+	for _, name := range []string{
+		"response_type", "client_id", "redirect_uri", "scope",
+		"state", "aud", "code_challenge", "code_challenge_method",
+	} {
+		if sent.Query().Get(name) != ask.Get(name) {
+			t.Errorf("%s reached the consent page as %q, want %q",
+				name, sent.Query().Get(name), ask.Get(name))
+		}
+	}
+}
+
+// TestTheAuthorizationEndpointNeedsNobodySignedIn, because the person being sent
+// to sign in is the point of it.
+func TestTheAuthorizationEndpointNeedsNobodySignedIn(t *testing.T) {
+	routes, _ := launchingServer(t, project.ClientPublic)
+	consentedAt(t, "https://console.example.test/approve")
+
+	if recorder := beginning(t, routes, askingFor("user/Organization.read")); recorder.Code != http.StatusFound {
+		t.Fatalf("an unauthenticated browser got %d, want a redirect: %s", recorder.Code, recorder.Body)
+	}
+}
+
+// TestAMalformedAuthorizationIsAnsweredRatherThanRedirected.
+//
+// Nothing has been verified at this point — no client resolved, no address
+// checked — so there is nowhere a refusal could safely be sent. It is answered
+// directly, which is also what stops the endpoint becoming a way to bounce a
+// browser anywhere a query parameter names.
+func TestAMalformedAuthorizationIsAnsweredRatherThanRedirected(t *testing.T) {
+	for name, change := range map[string]func(url.Values){
+		"no client":            func(v url.Values) { v.Del("client_id") },
+		"no address":           func(v url.Values) { v.Del("redirect_uri") },
+		"no audience":          func(v url.Values) { v.Del("aud") },
+		"no challenge":         func(v url.Values) { v.Del("code_challenge") },
+		"no scope":             func(v url.Values) { v.Del("scope") },
+		"an implicit response": func(v url.Values) { v.Set("response_type", "token") },
+	} {
+		t.Run(name, func(t *testing.T) {
+			routes, _ := launchingServer(t, project.ClientPublic)
+			consentedAt(t, "https://console.example.test/approve")
+
+			ask := askingFor("user/Organization.read")
+			change(ask)
+
+			recorder := beginning(t, routes, ask)
+			if recorder.Code == http.StatusFound {
+				t.Errorf("a malformed request was redirected to %q",
+					recorder.Header().Get("Location"))
+			}
+		})
+	}
+}
+
+// TestADeploymentWithNoConsentPageAuthorizesNobody, rather than redirecting to
+// an empty address and leaving a browser somewhere nobody chose.
+func TestADeploymentWithNoConsentPageAuthorizesNobody(t *testing.T) {
+	routes, _ := launchingServer(t, project.ClientPublic)
+	consentedAt(t, "")
+
+	recorder := beginning(t, routes, askingFor("user/Organization.read"))
+	if recorder.Code == http.StatusFound {
+		t.Errorf("a deployment with no consent page redirected to %q",
+			recorder.Header().Get("Location"))
+	}
+}
+
+// TestAConsentPageThisServerCannotRedirectToIsRefusedAtStartup, so a deployment
+// learns when it starts rather than when somebody tries to launch an app.
+func TestAConsentPageThisServerCannotRedirectToIsRefusedAtStartup(t *testing.T) {
+	for name, stated := range map[string]string{
+		"relative":            "/approve",
+		"carrying a fragment": "https://console.example.test/approve#here",
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Setenv(consentURLVariable, stated)
+
+			if _, err := configuredConsentPage(); !errors.Is(err, errNoConsentPage) {
+				t.Fatalf("error: got %v, want errNoConsentPage", err)
+			}
+		})
+	}
+
+	t.Setenv(consentURLVariable, "https://console.example.test/approve")
+
+	held, err := configuredConsentPage()
+	if err != nil {
+		t.Fatalf("a usable consent page was refused: %v", err)
+	}
+
+	if held != "https://console.example.test/approve" {
+		t.Errorf("read %q", held)
 	}
 }

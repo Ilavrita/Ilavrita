@@ -29,6 +29,7 @@ import (
 const (
 	oauthBasePath = "/oauth2"
 	authorizePath = "/authorize"
+	consentPath   = "/consent"
 	tokenPath     = "/token"
 )
 
@@ -118,7 +119,15 @@ func registerOAuthRoutes(routes *router.Router[*core.RequestEvent]) {
 	// same stance the login surface takes.
 	base.Unbind(apis.DefaultCorsMiddlewareId)
 
-	base.GET(authorizePath, describeAuthorization)
+	// The authorization endpoint is SMART's, so a browser reaches it and leaves
+	// for the consent page. It authenticates nobody: the person has not signed
+	// in yet, which is the whole reason they are being sent somewhere.
+	base.GET(authorizePath, beginAuthorization)
+
+	// The consent page reads this and posts to the one below, both carrying the
+	// person's own session. That is a bearer credential, so these two answer no
+	// preflight — the page is the deployment's own and shares its origin.
+	base.GET(consentPath, describeAuthorization)
 	base.POST(authorizePath, approveAuthorization)
 
 	// The token endpoint keeps the runtime's cross-origin handling, because a
@@ -292,9 +301,20 @@ func audienceMatches(request *core.RequestEvent, stated string) error {
 // granted; nothing downstream narrows by them, and authz.Narrow ignores them
 // because they name no resource type.
 var sessionScopes = []string{
-	"launch", "launch/patient", "launch/encounter",
-	"online_access", "offline_access",
+	"launch/patient", "online_access", "offline_access",
 }
+
+// contextScopes ask for a launch context this build does not convey.
+//
+// launch is the EHR-launch scope, and there is no EHR launch here; the launch
+// parameter this server reads is a patient id rather than the opaque handle an
+// EHR issues. launch/encounter asks for an encounter in the token response, and
+// nothing puts one there.
+//
+// They are refused by name for the same reason the identity scopes are: a client
+// told it was granted launch/encounter will look for an encounter and find
+// nothing, and a scope honoured in name only is worse than one plainly refused.
+var contextScopes = []string{"launch", "launch/encounter"}
 
 // identityScopes ask for an OpenID Connect identity token, and this build issues
 // none.
@@ -323,6 +343,15 @@ func sortScopes(stated string) ([]string, []refusedScope) {
 			refused = append(refused, refusedScope{
 				Scope:  one,
 				Reason: "this server issues no identity token",
+			})
+
+			continue
+		}
+
+		if slices.Contains(contextScopes, one) {
+			refused = append(refused, refusedScope{
+				Scope:  one,
+				Reason: "this server conveys no launch context beyond the patient",
 			})
 
 			continue
