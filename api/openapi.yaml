@@ -53,6 +53,11 @@ tags:
       monitoring a deployment never depends on the healthcare API surface.
   - name: FHIR
     description: The FHIR R4 surface, rooted at `/fhir/R4`.
+  - name: SMART App Launch
+    description: |
+      The OAuth surface an app authorizes through. Consent is two calls rather
+      than a page, because this server renders no HTML: a UI reads the first and
+      submits the second.
 
 paths:
   /healthz:
@@ -332,6 +337,133 @@ paths:
           $ref: "#/components/responses/InternalFailure"
         "501":
           $ref: "#/components/responses/NotImplemented"
+
+  /oauth2/authorize:
+    get:
+      tags: [SMART App Launch]
+      summary: Describe a pending authorization
+      description: |
+        Answers what a client asked for and what this server would grant, for a
+        consent screen to render. It writes nothing: approving is a separate
+        call, and a GET that created an approval would be one a link could
+        trigger.
+
+        The caller is the person who would approve, carrying their own session.
+        A request nobody is signed in for is refused: a scope narrows somebody's
+        standing, and without a person there is nobody's to narrow.
+
+        `refused` names every scope this server will not grant, with a reason.
+        SMART requires a client to read what it was granted, so a scope quietly
+        dropped would be one the app believes it holds.
+      operationId: describeAuthorization
+      parameters:
+        - { in: query, name: response_type, required: true, schema: { type: string, enum: [code] } }
+        - { in: query, name: client_id, required: true, schema: { type: string } }
+        - { in: query, name: redirect_uri, required: true, schema: { type: string } }
+        - { in: query, name: scope, required: true, schema: { type: string } }
+        - { in: query, name: aud, required: true, schema: { type: string } }
+        - { in: query, name: code_challenge, required: true, schema: { type: string } }
+        - { in: query, name: code_challenge_method, required: true, schema: { type: string, enum: [S256] } }
+        - { in: query, name: state, required: false, schema: { type: string } }
+        - { in: query, name: launch, required: false, schema: { type: string } }
+      responses:
+        "200":
+          $ref: "#/components/responses/AuthorizationDescribed"
+        "400":
+          $ref: "#/components/responses/OAuthRefused"
+        "401":
+          $ref: "#/components/responses/OAuthRefused"
+        "500":
+          $ref: "#/components/responses/OAuthRefused"
+
+    post:
+      tags: [SMART App Launch]
+      summary: Approve an authorization
+      description: |
+        Records the person's approval and answers with the address the client is
+        sent back to, carrying the code and the state it chose.
+
+        The body may name which of the offered scopes were approved. A body
+        naming none approves everything the GET reported as grantable; one
+        naming a scope this server refused is a client widening between the two
+        calls, and is refused.
+      operationId: approveAuthorization
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ApprovalRequest"
+      responses:
+        "200":
+          $ref: "#/components/responses/AuthorizationApproved"
+        "400":
+          $ref: "#/components/responses/OAuthRefused"
+        "401":
+          $ref: "#/components/responses/OAuthRefused"
+        "500":
+          $ref: "#/components/responses/OAuthRefused"
+
+  /oauth2/token:
+    post:
+      tags: [SMART App Launch]
+      summary: Exchange a grant for an access token
+      description: |
+        Answers the `authorization_code` and `refresh_token` grants. The access
+        token is a session: there is no second kind of bearer credential here,
+        and what it reaches is narrowed per request against whatever the policy
+        says then rather than against a copy taken when the token was minted.
+
+        Redeeming an authorization code destroys it, whether or not the
+        redemption succeeded. A code left alive after somebody holding it
+        guessed wrong at the verifier is one they may keep attacking.
+
+        A refresh token is rotated on every use. A spent one presented again is
+        a copy somebody else is holding, so the grant dies — every rotation of
+        it, and every session it minted.
+
+        A public client authenticates with PKCE alone; a confidential one also
+        presents its secret over HTTP Basic. Which is demanded is decided by the
+        registration, never by whether a secret happened to arrive.
+      operationId: issueToken
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: "#/components/schemas/TokenRequest"
+      responses:
+        "200":
+          $ref: "#/components/responses/TokenIssued"
+        "400":
+          $ref: "#/components/responses/OAuthRefused"
+        "401":
+          $ref: "#/components/responses/OAuthRefused"
+        "500":
+          $ref: "#/components/responses/OAuthRefused"
+
+  /fhir/R4/.well-known/smart-configuration:
+    get:
+      tags: [SMART App Launch]
+      summary: Describe this server's SMART configuration
+      description: |
+        Where a client goes and what it may ask for. Everything here is derived
+        from what this server actually serves: the endpoints from the same
+        origin the CapabilityStatement publishes, the challenge methods from
+        what the code challenge parser accepts, and the grant types from what
+        the token endpoint answers to.
+
+        A grant it does not serve is absent rather than listed, because a
+        discovery document is what a conformance suite and every client library
+        believe without checking.
+      operationId: describeSmartConfiguration
+      security: []
+      responses:
+        "200":
+          $ref: "#/components/responses/SmartConfiguration"
+        "500":
+          $ref: "#/components/responses/OAuthRefused"
 
   /fhir/R4:
     post:
@@ -1153,6 +1285,45 @@ components:
       example: Bearer realm="Ilavrita FHIR"
 
   schemas:
+    ApprovalRequest:
+      type: object
+      description: Which of the offered scopes the person approved.
+      properties:
+        approved:
+          type: array
+          description: |
+            A subset of what the describe call reported as grantable. Naming none
+            approves everything it offered; naming one this server refused is a
+            client widening between the two calls.
+          items: { type: string }
+
+    TokenRequest:
+      type: object
+      required: [grant_type]
+      properties:
+        grant_type:
+          type: string
+          enum: [authorization_code, refresh_token]
+        code:
+          type: string
+          description: The authorization code, for the `authorization_code` grant.
+        redirect_uri:
+          type: string
+          description: |
+            The same address the code was issued for, compared character for
+            character.
+        code_verifier:
+          type: string
+          description: The PKCE verifier the challenge was derived from.
+        refresh_token:
+          type: string
+          description: The refresh token, for the `refresh_token` grant.
+        client_id:
+          type: string
+          description: |
+            The registration redeeming. A confidential client presents its
+            secret over HTTP Basic instead.
+
     HealthReport:
       type: object
       required: [status]
@@ -1631,6 +1802,111 @@ components:
             traces or internal identifiers.
 
   responses:
+    AuthorizationDescribed:
+      description: What the client asked for, and what this server would grant.
+      content:
+        application/json:
+          schema:
+            type: object
+            properties:
+              client: { type: string }
+              clientId: { type: string }
+              description: { type: string }
+              redirectUri: { type: string }
+              state: { type: string }
+              grantable:
+                type: array
+                items: { type: string }
+              refused:
+                type: array
+                description: Every scope this server will not grant, each with its reason.
+                items:
+                  type: object
+                  properties:
+                    scope: { type: string }
+                    reason: { type: string }
+              launchPatient: { type: string }
+
+    AuthorizationApproved:
+      description: The address the client is sent back to, carrying the code.
+      content:
+        application/json:
+          schema:
+            type: object
+            properties:
+              redirect: { type: string }
+
+    TokenIssued:
+      description: |
+        The access token, and the refresh token when the approval asked to
+        outlive its session.
+      content:
+        application/json:
+          schema:
+            type: object
+            properties:
+              access_token: { type: string }
+              token_type: { type: string, enum: [Bearer] }
+              expires_in: { type: integer }
+              scope:
+                type: string
+                description: |
+                  What was granted, which may be less than what was asked for.
+              patient: { type: string }
+              refresh_token: { type: string }
+
+    SmartConfiguration:
+      description: Where a client goes and what it may ask for.
+      content:
+        application/json:
+          schema:
+            type: object
+            properties:
+              issuer: { type: string }
+              authorization_endpoint: { type: string }
+              token_endpoint: { type: string }
+              grant_types_supported:
+                type: array
+                items: { type: string }
+              response_types_supported:
+                type: array
+                items: { type: string }
+              code_challenge_methods_supported:
+                type: array
+                items: { type: string }
+              token_endpoint_auth_methods_supported:
+                type: array
+                items: { type: string }
+              scopes_supported:
+                type: array
+                items: { type: string }
+              capabilities:
+                type: array
+                items: { type: string }
+
+    OAuthRefused:
+      description: |
+        A refusal in the shape RFC 6749 section 5.2 names. It is not an
+        OperationOutcome: this surface is OAuth rather than FHIR, and a client
+        library reading it expects the OAuth shape.
+      content:
+        application/json:
+          schema:
+            type: object
+            required: [error]
+            properties:
+              error:
+                type: string
+                enum:
+                  - invalid_request
+                  - invalid_client
+                  - invalid_grant
+                  - invalid_scope
+                  - unsupported_grant_type
+                  - unsupported_response_type
+                  - server_error
+              error_description: { type: string }
+
     ResourceRead:
       description: The resource, at the version the `ETag` names.
       headers:

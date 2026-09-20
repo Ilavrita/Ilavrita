@@ -10,6 +10,8 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -888,6 +890,46 @@ func TestARefreshTokenIsRedeemedOnlyByTheClientItWasIssuedTo(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			if recorder := redeeming(t, routes, form); recorder.Code == http.StatusOK {
 				t.Errorf("a refresh token was redeemed wrongly: %s", recorder.Body)
+			}
+		})
+	}
+}
+
+// TestEveryRouteThisSurfaceServesIsDescribed.
+//
+// scripts/verify-openapi.sh walks the description and probes the server, so it
+// catches a documented route that drifted. It cannot catch the opposite — a
+// route the server serves and the description never mentions — because it has no
+// list of what is served to compare against.
+//
+// That gap is how the whole SMART surface shipped undocumented while the
+// verifier passed. This closes it for these routes by naming the same constants
+// the router registers: a path that changes fails here, and the description has
+// to change with it.
+//
+// It does not close it in general. A route added to a file this test does not
+// name is still invisible, and the honest fix for that is a router that can
+// enumerate itself.
+func TestEveryRouteThisSurfaceServesIsDescribed(t *testing.T) {
+	described, err := os.ReadFile(filepath.Join("..", "..", "api", "openapi.yaml"))
+	if err != nil {
+		t.Fatalf("read the description: %v", err)
+	}
+
+	for name, path := range map[string]string{
+		"the authorization endpoint": oauthBasePath + authorizePath,
+		"the token endpoint":         oauthBasePath + tokenPath,
+		"the discovery document":     smartConfigurationPath,
+		"login":                      authBasePath + loginPath,
+		"logout":                     authBasePath + logoutPath,
+		"the session description":    authBasePath + sessionPath,
+		"the install claim":          authBasePath + claimPath,
+	} {
+		t.Run(name, func(t *testing.T) {
+			// Anchored to the start of a line and followed by a colon, so a path
+			// merely mentioned in prose does not count as described.
+			if !strings.Contains(string(described), "\n  "+path+":\n") {
+				t.Errorf("%s is served at %q and the description does not declare it", name, path)
 			}
 		})
 	}
