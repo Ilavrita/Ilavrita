@@ -65,8 +65,22 @@ func validateResource(request *core.RequestEvent) error {
 		return refuse(request, err)
 	}
 
-	return request.JSON(http.StatusOK,
-		validate.Resource(held.custom, held.resourceType, content).Outcome())
+	report := validate.Resource(held.custom, held.resourceType, content)
+
+	ctx := request.Request.Context()
+
+	// What $validate says beyond the definition: whether the profiles this
+	// resource claims are met, and whether the references it states lead
+	// anywhere. Neither is a refusal on a write — the first because a profile
+	// from elsewhere is not a client error, the second because R4 permits a
+	// reference this server does not hold.
+	if profiles, err := checkDeclaredProfiles(ctx, held.resourceType, content); err == nil {
+		report.Absorb(profiles)
+	}
+
+	report.Absorb(checkReferencesResolve(request, content))
+
+	return request.JSON(http.StatusOK, report.Outcome())
 }
 
 // invalidResource renders a refused submission as the outcome that says which

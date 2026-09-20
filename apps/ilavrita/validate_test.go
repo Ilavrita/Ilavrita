@@ -41,6 +41,13 @@ func outcomeOf(t *testing.T, answer *httptest.ResponseRecorder) fhir.OperationOu
 func TestValidateAnswersWhatItFoundAndStoresNothing(t *testing.T) {
 	routes := servingFHIR(t, everyAction)
 
+	// The subject is provisioned first: $validate reports a reference that
+	// leads nowhere, and this test is about something else.
+	assertStatus(t, call{
+		method: http.MethodPut, path: resourcePath("Patient", string(conformancePatient)),
+		body: `{"resourceType":"Patient","id":"` + string(conformancePatient) + `"}`,
+	}.send(t, routes), http.StatusCreated)
+
 	clean := validating(t, routes, "Observation", valid("Observation", map[string]string{
 		"status":  `"final"`,
 		"subject": `{"reference":"Patient/` + string(conformancePatient) + `"}`,
@@ -279,4 +286,101 @@ func decodeType(t *testing.T, body string) string {
 	}
 
 	return held.ResourceType
+}
+
+// TestAProfileThisServerDoesNotHoldIsSaidSoRatherThanPassed.
+//
+// A resource declaring a profile is claiming to conform to it. A server that
+// stored the claim and checked nothing would be handing every reader a line
+// saying this was verified, when nobody looked.
+func TestAProfileThisServerDoesNotHoldIsSaidSoRatherThanPassed(t *testing.T) {
+	routes := definedServer(t)
+
+	body := `{"resourceType":"Organization","name":"a named one",` +
+		`"meta":{"profile":["http://example.test/StructureDefinition/Nowhere"]}}`
+
+	// It is stored: naming a profile from somewhere else is not a client error.
+	assertStatus(t, call{
+		method: http.MethodPost, path: fhir.BasePath + "/Organization", body: body,
+	}.send(t, routes), http.StatusCreated)
+
+	// And $validate says the claim went unchecked.
+	answer := call{
+		method: http.MethodPost, path: fhir.BasePath + "/Organization/$validate", body: body,
+	}.send(t, routes)
+
+	assertStatus(t, answer, http.StatusOK)
+
+	if !strings.Contains(answer.Body.String(), "does not hold") {
+		t.Errorf("an unheld profile was not reported: %s", answer.Body)
+	}
+}
+
+// TestAProfileIsCheckedAgainstTheTypeItConstrains.
+//
+// The other half: a claim this server can check, it checks. An Organization
+// declaring the Patient definition is well formed as an Organization and is
+// claiming something untrue — which only reading the profile can catch, so it
+// is what says the profile was read at all.
+func TestAProfileIsCheckedAgainstTheTypeItConstrains(t *testing.T) {
+	routes := definedServer(t)
+
+	answer := call{
+		method: http.MethodPost, path: fhir.BasePath + "/Organization",
+		body: `{"resourceType":"Organization","name":"a named one",` +
+			`"meta":{"profile":["http://hl7.org/fhir/StructureDefinition/Patient"]}}`,
+	}.send(t, routes)
+
+	assertStatus(t, answer, http.StatusBadRequest)
+
+	if !strings.Contains(answer.Body.String(), "constrains Patient") {
+		t.Errorf("a profile for another type was accepted: %s", answer.Body)
+	}
+
+	// And declaring the definition of what it actually is, is fine.
+	assertStatus(t, call{
+		method: http.MethodPost, path: fhir.BasePath + "/Organization",
+		body: `{"resourceType":"Organization","name":"a named one",` +
+			`"meta":{"profile":["http://hl7.org/fhir/StructureDefinition/Organization"]}}`,
+	}.send(t, routes), http.StatusCreated)
+}
+
+// TestADanglingReferenceIsReportedAndNotRefused.
+//
+// R4 permits a reference to name something this server does not hold, and this
+// build depends on it: a confined grant names a compartment before the Patient
+// exists. So it is answered by $validate rather than enforced on the way in.
+func TestADanglingReferenceIsReportedAndNotRefused(t *testing.T) {
+	routes := servingFHIR(t, everyAction)
+
+	body := `{"resourceType":"Observation","status":"final",` +
+		`"code":{"text":"a reading"},` +
+		`"subject":{"reference":"Patient/` + string(conformancePatient) + `"},` +
+		`"performer":[{"reference":"Practitioner/nobody-here"}]}`
+
+	assertStatus(t, call{
+		method: http.MethodPost, path: fhir.BasePath + "/Observation", body: body,
+	}.send(t, routes), http.StatusCreated)
+
+	answer := call{
+		method: http.MethodPost, path: fhir.BasePath + "/Observation/$validate", body: body,
+	}.send(t, routes)
+
+	assertStatus(t, answer, http.StatusOK)
+
+	if !strings.Contains(answer.Body.String(), "Practitioner/nobody-here") {
+		t.Errorf("a dangling reference was not reported: %s", answer.Body)
+	}
+
+	// An absolute reference names another server's resource, which is not this
+	// server's to follow and not something to report.
+	elsewhere := call{
+		method: http.MethodPost, path: fhir.BasePath + "/Observation/$validate",
+		body: `{"resourceType":"Observation","status":"final","code":{"text":"x"},` +
+			`"subject":{"reference":"https://example.test/fhir/Patient/p1"}}`,
+	}.send(t, routes)
+
+	if strings.Contains(elsewhere.Body.String(), "example.test") {
+		t.Errorf("an absolute reference was reported: %s", elsewhere.Body)
+	}
 }
