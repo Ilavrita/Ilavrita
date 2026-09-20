@@ -56,7 +56,19 @@ single security and Project model, even though they ship in phases.
 - [x] Bundle transaction — every entry happens or none does, entries decided
       and audited one at a time, and `urn:uuid:` references resolved across
       them before anything is written
-- [ ] Bundle batch — entries that succeed or fail independently
+- [x] Bundle batch — every entry settles on its own inside a savepoint, and the
+      response describes each one including the ones that failed
+- [x] Conditional create, update and delete, and conditional references inside a
+      transaction — a search names the target, run under a grant for searching
+      that type
+- [x] Conditional read — `If-None-Match` and `If-Modified-Since` answer `304`
+- [x] `Prefer: return=minimal|representation|OperationOutcome`
+- [ ] Type-level and system-level history — a version's sequence is per
+      resource, so a type's feed needs `last_updated` ordering and a compound
+      cursor rather than a wider query
+- [ ] Patch — JSON Patch, FHIRPath Patch and XML Patch
+- [ ] XML, and `_format` beyond JSON — R4 says a server SHOULD serve both wire
+      formats and this one serves JSON
 - [x] Validation and `$validate` — every resource is checked against its own R4
       base definition, on the operation and on every write alike, including all
       203 of R4's required FHIRPath invariants

@@ -95,8 +95,14 @@ and an architecture that does not have to be rewritten to reach a clustered one.
 | Search parameters | Built-in set, plus any a Project defines with a `SearchParameter`; new ones backfill in the background |
 | LOINC and SNOMED | Not resolved — a code is stored and read back, never looked up or checked |
 | Bundle transaction | Working — all-or-nothing, with `urn:uuid:` references resolved across entries |
-| Bundle batch | Not implemented |
-| Conditional create, update and delete | Not implemented — `If-None-Exist` is refused, never ignored |
+| Bundle batch | Working — every entry settles on its own, inside a savepoint |
+| Conditional create, update and delete | Working — a search names the target, run under a grant for searching that type |
+| Conditional read | Working — `If-None-Match` and `If-Modified-Since` answer `304` |
+| `Prefer: return=` | Working — `minimal`, `representation` and `OperationOutcome` |
+| History filtering | `_since` narrows; `_at` and `_list` are refused, never ignored |
+| Type-level and system-level history | Not implemented |
+| Patch | Not implemented |
+| XML | Not implemented — JSON only |
 | Backup and restore | Working — `ilavrita backup`, `verify-backup`, `restore` |
 | Whole-system history | Not implemented |
 | PostgreSQL, SMART, Bulk Data, HL7v2, DICOM | Out of scope for v0.1 |

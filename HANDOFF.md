@@ -16,6 +16,9 @@ most expensive mistake on this project so far.
 | `GET /fhir/R4/{type}?...`, `POST /fhir/R4/{type}/_search` | Working, over the built-ins plus what the Project defined |
 | `SearchParameter` written by a Project | Working: compiled, indexed, and backfilled by a claimed worker |
 | `POST /fhir/R4` with a `transaction` Bundle | Working, all-or-nothing |
+| `POST /fhir/R4` with a `batch` Bundle | Working, every entry on its own inside a savepoint |
+| Conditional create, update, delete | Working, under a grant for searching the type named |
+| Conditional read, `Prefer: return=` | Working |
 | `POST /fhir/R4/{type}/$validate` | Working: base definitions, required bindings, R4's invariants, declared profiles, dangling references |
 | `ilavrita backup`, `verify-backup`, `restore` | Working |
 | Migrations, seeds and backfills | Idempotent, and recorded in `super_jobs` against the table |
@@ -449,6 +452,27 @@ invariant class is now enforced rather than waived.
 
 Best-practice constraints are not applied. R4 marks them with an extension it puts on exactly
 those, and `dom-6` on every resource ever written is noise that buries the rest.
+
+**11. The REST behaviour R4 expects, most of it. Done.** Conditional create, update and delete;
+conditional references and `ifNoneExist` inside a transaction; conditional read answering `304`;
+`Prefer: return=`; `_since` on a history with `_at` and `_list` refused rather than ignored; and
+`batch`.
+
+Two things in that are worth knowing before changing them. **A condition runs under a grant for
+searching the type it names**, not for writing it — naming a resource by a condition is reading
+it, and running the search under the write grant compiles a Scope that authorizes no search and
+matches nothing, which reads exactly like a condition nobody had met. That bug was written and
+caught here twice, once for conditions and once for reference integrity.
+
+And **a batch entry runs inside a savepoint**, which is what `WithinSavepoint` is for. The request
+already holds a transaction, so rolling the whole of it back for one bad entry would make it a
+transaction and rolling nothing back would leave half an entry behind.
+
+**Type-level and system-level history are not done, and not for want of effort.** `version_seq` is
+per resource, so ordering a type's whole history by it interleaves by version number rather than
+by time and a cursor built from one means nothing across resources. It was written, found to page
+wrongly, and reverted rather than shipped looking like a feed. Doing it properly means ordering by
+`last_updated` with a tiebreaker and a compound cursor.
 
 Search parameters are deliberately a short list — `packages/search/registry.go` is the
 whole of what this build answers, and adding one means adding a projection a write maintains and

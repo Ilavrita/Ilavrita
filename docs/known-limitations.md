@@ -66,13 +66,15 @@ Every other `/fhir/R4` route answers `501 Not Implemented` as an
 | Search | Working, over a declared parameter set; anything outside it is refused, never ignored |
 | `_include`, `_revinclude`, chaining, `_sort` | Not implemented; refused rather than ignored |
 | History paging (`_count`, `_cursor`) | Working; see below |
-| History filtering (`_since`, `_at`, `_list`) | Ignored |
-| Type-level and system-level history | Not implemented |
+| History filtering | `_since` narrows; `_at` and `_list` are refused, never ignored |
+| Type-level and system-level history | Not implemented; see below |
 | Bundle transaction | Working: all-or-nothing; see below |
-| Bundle batch | Not implemented |
-| Conditional create, update, delete | Not implemented; `If-None-Exist` is refused, never ignored |
-| Conditional read (`If-None-Match`, `If-Modified-Since`) | Not implemented; the headers are ignored and the whole resource is returned |
+| Bundle batch | Working: every entry settles on its own; see below |
+| Conditional create, update, delete | Working; see below |
+| Conditional read (`If-None-Match`, `If-Modified-Since`) | Working: `304` with the validators and no body |
+| `Prefer: return=` | Working: `minimal`, `representation`, `OperationOutcome` |
 | Patch | Not implemented |
+| XML, and `_format` beyond JSON | Not implemented; anything but JSON is refused with `406` |
 | Validation and `$validate` | Against the base definitions, required bindings and R4's invariants; profiles partly; see below |
 | Clinical resource types | Served, reachable only through a compartment a policy names |
 | Authentication | Working: password, sessions, TOTP second factor with an administrator recovery path, per-install throttle; see below |
@@ -303,6 +305,73 @@ A stale row is a match for a restriction that no longer exists.
 The statement at `GET /fhir/R4/metadata` advertises what *the caller* may search
 by, so an identified caller sees their own Project's additions. A request
 nothing identified names no Project, so it is told the built-ins.
+
+## A condition names what an interaction is about
+
+A conditional interaction names its target by a search rather than an id, which
+is how a client stays idempotent without holding the ids this server minted.
+Without it a pipeline that retried a create makes a second record of the same
+thing, and nothing downstream can tell which was meant.
+
+- **Create**: `If-None-Exist: <search>`. A match is answered with what is there
+  and nothing is written
+- **Update**: `PUT /Type?<search>`. Nothing matching is a create, which is what
+  `update` does everywhere else here
+- **Delete**: `DELETE /Type?<search>`. Nothing matching is answered as done —
+  the client wanted none matching, and there are none
+- **Inside a transaction**: an entry may state `ifNoneExist`, and a reference
+  written `Patient?identifier=…` is resolved to the resource it identifies
+  before anything is stored
+
+More than one match is `412` in every case: the client asked about a resource
+and there are several, so nothing can be done that is what they meant. No search
+at all is `400`, because without one this would act on every resource of a type.
+
+**A condition runs under a grant for *searching* that type**, not for writing
+it. Naming a resource by a condition is reading it, so a caller who may write a
+type and not search it cannot address one this way — and a condition that
+matched something they cannot read would let them act on it, and learn it
+exists, through a door the read route does not open.
+
+A conditional create inside a bundle settles before anything is written, like
+every other identity: an entry that matched has an identity, so the other
+entries' references point at the resource that is there rather than one made
+beside it.
+
+## A batch settles every entry on its own
+
+A batch and a transaction are the same request shape and the opposite promise. A
+transaction is for things that are only true together — a Patient and their
+Observations. A batch is for a day's unrelated writes, where a client wants the
+ones that worked to have worked.
+
+Each entry runs inside a **savepoint**. The request already holds a transaction,
+so rolling the whole of it back for one bad entry would make this a transaction,
+and rolling nothing back would leave half an entry behind. The savepoint is
+named by the store rather than by anything in the request: a name goes into the
+statement verbatim, and one a request could choose is one a request could write.
+
+A batch answers `200` whatever its entries did, because the request succeeded.
+Which entry did not is the answer, and each failed entry carries an
+`OperationOutcome` saying why — a status alone names which entry went wrong and
+not what about it.
+
+## What this server does not answer about a history
+
+`_since` narrows a history to what changed after a moment, which is what makes a
+type's history worth reading as a feed. `_at` and `_list` are **refused**: a
+caller who narrowed a history and was handed the whole of it has no way to tell,
+and will read it as the answer to what they asked.
+
+**Type-level and system-level history are not implemented**, and the reason is
+worth writing down because it is not effort. A version's sequence number is per
+resource — `PRIMARY KEY (project_id, res_type, res_id, version_seq)`, and the
+schema says there is no global row id — so ordering a type's whole history by it
+interleaves by version *number* rather than by time, and a cursor built from one
+means nothing across resources. A feed like that would look like it worked and
+silently answer out of order. Doing it properly means ordering by
+`last_updated` with a tiebreaker and a compound cursor, which is a different
+piece of work from widening the query.
 
 ## An outside implementation judges what goes on the wire
 
