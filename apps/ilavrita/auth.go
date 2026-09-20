@@ -20,6 +20,7 @@ import (
 // nothing here is a resource, and an OperationOutcome would misdescribe it.
 const (
 	authBasePath = "/auth"
+	claimPath    = "/claim"
 	loginPath    = "/login"
 	logoutPath   = "/logout"
 	sessionPath  = "/session"
@@ -99,6 +100,7 @@ func registerAuthRoutes(routes *router.Router[*core.RequestEvent]) {
 	// cross-origin headers at all.
 	base.Unbind(apis.DefaultCorsMiddlewareId)
 
+	base.POST(claimPath, claimInstall)
 	base.POST(loginPath, logIn)
 	base.POST(logoutPath, logOut)
 	base.GET(sessionPath, describeSession)

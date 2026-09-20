@@ -172,6 +172,15 @@ func startServing(app core.App) error {
 
 	serving = newBackend(db.DB(), app.DataDir())
 
+	// An install that has never been claimed is one nobody can use. The token
+	// that claims it is minted here, once, and handed over through the data
+	// directory rather than the log.
+	if err := provisionInstall(context.Background(), serving.projects, app.DataDir()); err != nil {
+		_ = db.Close()
+
+		return err
+	}
+
 	if err := seedDefinitions(context.Background(), serving.definitions); err != nil {
 		_ = db.Close()
 

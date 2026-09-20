@@ -86,6 +86,7 @@ and an architecture that does not have to be rewritten to reach a clustered one.
 | Project isolation and authorization | Enforced — compartments, element filters, field restriction |
 | Audit trail | Working — every interaction and login, in the transaction that did it |
 | Authentication | Working — password, sessions, TOTP second factor with an administrator recovery path, per-install throttle |
+| Bringing an install into use | Working — one claim token, written to the data directory, spent once through `POST /auth/claim` |
 | Binary payloads | Working — bytes stored outside the database |
 | Subscriptions | Working — `rest-hook`, and `websocket` within one process; queues are claimed, so replicas do not notify twice |
 | Resource validation, `$validate` | Against the R4 base definitions, required bindings and every FHIRPath invariant R4 states |

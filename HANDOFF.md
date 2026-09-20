@@ -207,14 +207,13 @@ None of these are visible from reading the code.
 - **The control plane is a working subset, not the whole surface.** It creates Projects,
   invites identities, grants standing and registers client applications. AccessPolicy authoring,
   link management, credential rotation and every list endpoint are still store-only.
-- **A fresh install cannot be brought into use through its own API.** `project.Bootstrapper`
-  mints and spends the single-use claim token that makes the first Super Admin, and it is
-  constructed in exactly one place: `packages/storage/pocketbase/project_store_test.go`. No route
-  and no CLI command reaches it. Every `/admin` route resolves standing first and `POST
-  /auth/login` needs an identity that already exists, so there is no order in which a new install
-  can be made usable from outside the process. This is why no external conformance tool can be
-  pointed at a running server for anything but the unauthenticated routes, and why
-  `scripts/conformance.sh` captures the authenticated shapes through the Go suite instead.
+- **An install claims itself once, through `POST /auth/claim`.** Startup provisions the Super
+  Project and mints one token, written to `claim-token` in the data directory at 0600 — not to the
+  log, because a credential in a log is a credential wherever logs are shipped and this one makes
+  an administrator. The claim creates the identity as well as the membership, because there is no
+  other way to have one. Whether it can succeed is settled *before* anything is written: this is
+  the only route an install serves before anybody can authenticate, and one that wrote an identity
+  per request would be a way to fill a database from outside. A restart re-arms nothing.
 - **Attachments outside DocumentReference land in the row.** `Media.content`,
   `DiagnosticReport.presentedForm` and `Communication.payload` carry bytes into the resource row,
   bounded only by the 4 MiB one request body may be. `DocumentReference` is refused and sent to

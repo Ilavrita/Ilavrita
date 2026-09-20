@@ -85,6 +85,68 @@ paths:
               schema:
                 $ref: "#/components/schemas/VersionReport"
 
+  /auth/claim:
+    post:
+      tags: [Auth]
+      summary: Claim this install
+      description: |
+        Spends the install's one claim token and makes the first Super Admin.
+
+        An install is created with no members, so every route that resolves
+        standing has nobody to resolve. This is the one request that brings
+        standing into being, and it is not first-signup-wins: whoever reaches
+        the port first is not who owns the host. What proves they do is a token
+        minted when the install was created and written to `claim-token` in the
+        data directory, readable only by the user the server runs as.
+
+        It creates the identity as well as the membership, because there is no
+        other way to have one. Whether the claim can succeed is settled before
+        anything is written: this is the only route an install serves before
+        anybody can authenticate, and one that created an identity for every
+        request would be a way to fill a database from outside.
+
+        Every way this can fail answers the same `403`. A token that is wrong,
+        one that expired and one already spent are the same fact to whoever
+        holds the wrong one, and saying which would say whether this install has
+        been claimed.
+      operationId: claimInstall
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [token, email, password]
+              properties:
+                token:
+                  type: string
+                  description: The token handed over in the data directory.
+                email:
+                  type: string
+                password:
+                  type: string
+      responses:
+        "201":
+          description: The install is claimed and the first Super Admin exists.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [project, identity, membership]
+                properties:
+                  project:
+                    type: string
+                  identity:
+                    type: string
+                  membership:
+                    type: string
+        "400":
+          $ref: "#/components/responses/Invalid"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "500":
+          $ref: "#/components/responses/InternalFailure"
+
   /auth/login:
     post:
       tags: [Authentication]

@@ -210,6 +210,19 @@ func (i Instance) matches(token ClaimToken) bool {
 	return subtle.ConstantTimeCompare([]byte(i.tokenHash), []byte(token.hash())) == 1
 }
 
+// Accepts reports whether this install is still pending and the token is the
+// one on file, so a caller can refuse a claim before writing anything for it.
+//
+// It is not what makes a claim safe: CompleteClaim applies nothing unless the
+// row is still pending, and that is what settles two callers racing the same
+// token. This is what lets a server holding an unclaimed install refuse a wrong
+// token without creating the identity that claim would have been for —
+// otherwise the one unauthenticated route it has writes a row for every request
+// that asks.
+func (i Instance) Accepts(token ClaimToken) bool {
+	return i.state == BootstrapPending && i.matches(token)
+}
+
 // spend returns the install with its claim spent. The hash and the expiry go
 // with it, so the same token cannot be presented a second time.
 func (i Instance) spend() Instance {

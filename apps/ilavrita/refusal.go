@@ -110,6 +110,13 @@ var (
 		"This server cannot search by that SearchParameter. It indexes token, " +
 			"string, reference and date, over an expression naming one element."}
 
+	// One answer for every way a claim can fail. A token that is wrong, one
+	// that has expired and one that was already spent are the same fact to
+	// whoever is holding the wrong one, and telling them which would say
+	// whether this install has been claimed.
+	unclaimable = refusal{http.StatusForbidden, fhir.CodeForbidden,
+		"That is not a claim this install accepts."}
+
 	ambiguousCondition = refusal{http.StatusPreconditionFailed, fhir.CodeConflict,
 		"That condition matches more than one resource, so there is nothing to " +
 			"do that is what you asked for. Narrow it until it matches one."}
@@ -224,6 +231,11 @@ func translate(err error) refusal {
 		return unreadablePayload
 	case errors.Is(err, errInlineAttachment):
 		return inlineAttachment
+	case errors.Is(err, project.ErrClaimTokenInvalid),
+		errors.Is(err, project.ErrClaimTokenExpired),
+		errors.Is(err, project.ErrBootstrapComplete),
+		errors.Is(err, project.ErrNotProvisioned):
+		return unclaimable
 	case errors.Is(err, errAmbiguousCondition):
 		return ambiguousCondition
 	case errors.Is(err, errUnconditioned):

@@ -81,6 +81,11 @@ single security and Project model, even though they ship in phases.
       one, because R4 permits it and provisioning a compartment depends on it
 - [x] Terminology for required bindings — a code is checked against the value set
       its element is bound to, from the specification's own bundled sets
+- [x] Bringing an install into use — one claim token, handed over through the data
+      directory and spent once, which is what an external tool needs before it
+      can authenticate at all
+- [ ] SMART App Launch and an OAuth2 authorization server, with
+      `.well-known/smart-configuration` beside it
 - [ ] Single binary and container image
 
 **Conditional interactions are now the one that matters most.** Several

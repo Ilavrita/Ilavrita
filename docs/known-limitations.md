@@ -408,6 +408,35 @@ build does not project. A modifier that means nothing for the kind it was put on
 parameter types beyond token, string, reference and date, and the date prefixes
 beyond `eq`, `gt`, `lt`, `ge` and `le`.
 
+## An install is claimed once, by whoever holds the host
+
+An install is created with no members. Every route that resolves standing has
+nobody to resolve, `POST /auth/login` needs an identity that already exists, and
+nothing creates the first one — so until this, a fresh install could not be
+brought into use through its own API at all, and no external tool could
+authenticate to it.
+
+Startup provisions the Super Project and mints one claim token. It is written to
+`claim-token` in the data directory at `0600`, and **not to the log**: a
+credential in a log is a credential in every place logs are shipped to, and this
+one makes an administrator of whoever reads it. The data directory is the one
+place whoever runs the server already holds.
+
+`POST /auth/claim` spends it, creating the first identity and the Super Admin
+membership together. It is deliberately not first-signup-wins — whoever reaches
+the port first is not who owns the host.
+
+Two things about how it refuses. **Whether the claim can succeed is settled
+before anything is written**, because this is the only route an install serves
+before anybody can authenticate and one that created an identity for every
+request would be a way to fill a database from outside. And **every failure
+answers the same `403`**: a token that is wrong, one that expired and one
+already spent are the same fact to whoever is holding the wrong one, and saying
+which would say whether this install has been claimed.
+
+A restart re-arms nothing. An install that has been claimed mints no second
+token, and one that has not is not re-armed by being restarted.
+
 ## An outside implementation judges what goes on the wire
 
 The Go suite checks this server against its own reading of R4 — the reading that
