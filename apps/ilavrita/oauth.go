@@ -334,8 +334,23 @@ func sortScopes(stated string) ([]string, []refusedScope) {
 			continue
 		}
 
-		if _, err := authz.ParseScope(one); err != nil {
+		parsed, err := authz.ParseScope(one)
+		if err != nil {
 			refused = append(refused, refusedScope{Scope: one, Reason: reasonFor(err)})
+
+			continue
+		}
+
+		// A person cannot approve a backend service's scope. It narrows against
+		// the standing of whoever asks, and here that is them — so honouring one
+		// would hand a service scope this person's own reach, which is the
+		// widening the whole surface exists to prevent. A service asks for these
+		// through client credentials, where the standing is its own.
+		if parsed.Context == authz.ContextSystem {
+			refused = append(refused, refusedScope{
+				Scope:  one,
+				Reason: "a backend service scope is obtained through client credentials, not by asking a person",
+			})
 
 			continue
 		}
