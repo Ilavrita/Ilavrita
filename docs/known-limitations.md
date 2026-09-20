@@ -82,7 +82,7 @@ Every other `/fhir/R4` route answers `501 Not Implemented` as an
 | Clinical resource types | Served, reachable only through a compartment a policy names |
 | Authentication | Working: password, sessions, TOTP second factor with an administrator recovery path, per-install throttle; see below |
 | SMART App Launch | Working for the standalone launch: authorize, token, PKCE S256, refresh, discovery; see below |
-| SMART Backend Services | Not implemented: `private_key_jwt` is unbuilt, so `system/` scopes are refused rather than granted |
+| SMART Backend Services | Working: `client_credentials` with `private_key_jwt`, RS384 and ES384, so `system/` scopes are granted; see below |
 | OpenID Connect | Not implemented: no `id_token`, so `openid`, `fhirUser` and `profile` are refused by name |
 | Audit trail | Working: every interaction and login, in the transaction that did it |
 | Binary payloads | Working: bytes kept outside the database, placed by `securityContext` |
@@ -529,10 +529,37 @@ than seconds, so gating every push on it would trade a fast signal for a slow on
 on work that mostly cannot break it.
 
 Of Inferno's own test kits, every one layers an implementation guide — US Core,
-SMART App Launch, Da Vinci, CARIN — on top of R4. **SMART App Launch is now
-partly implemented**, so that kit is the first that could apply at all; what it
-would still find missing is named under Authentication below. The others remain
-out of reach because this build implements none of their guides.
+SMART App Launch, Da Vinci, CARIN — on top of R4. **The SMART App Launch kit has
+been run against this build**, at STU2.2, and the others remain out of reach
+because this build implements none of their guides.
+
+What that run says, rather than what it was expected to say:
+
+| Inferno group | Result |
+| --- | --- |
+| SMART on FHIR Discovery | Passes, including both CORS tests |
+| Standalone Launch | Passes: redirect, code, token exchange, response body, CORS |
+| Token Refresh, with and without scopes | Passes |
+| Backend Services authorization | Passes: the valid request and all three refusals |
+| OpenID Connect | Skipped — no `id_token` is issued, so nothing is reached |
+
+Every remaining failure is a TLS check — `standalone_auth_tls`,
+`standalone_token_tls` and `smart_backend_services_token_tls_version` — and the
+run was driven against a plaintext local server. They are a statement about that
+deployment and not about this code.
+
+It found two real defects, and both are fixed. The token endpoint answered
+without `Cache-Control: no-store`, which RFC 6749 section 5.1 requires of any
+response holding a token. And the authorization endpoint read only a query,
+where SMART requires a server to accept a form as well — the Go suite had never
+sent one, because it was written against the same reading of the specification
+that wrote the handler. That is exactly the class of mistake an outside
+implementation exists to catch.
+
+The run is not automated. It needs a seeded database, a consent page and a
+browser driven through the launch; `scripts/seedlaunch` and `scripts/consent`
+exist for that, and both say on every start that they are for a test database
+and must never be deployed.
 
 ## Invariants are checked, and that is most of what R4 says
 
@@ -853,11 +880,27 @@ An approval naming `offline_access` or `online_access` also receives a refresh
 token, rotated on every use. A spent one presented again is a copy somebody else
 is holding, so the grant dies: every rotation of it, and every session it minted.
 
+**A backend service authenticates by signature.** `client_credentials` with
+`private_key_jwt`: no person, no consent, no shared secret — an assertion signed
+over a key the registration published, in RS384 or ES384. A key set is registered
+inline; `jwks_uri` is not read, because fetching one makes every token request
+depend on somebody else's uptime.
+
+Which Project a service belongs to is decided by the signature rather than
+claimed: a client id is unique within a Project, so every registration bearing
+the claimed id is fetched and the assertion verified against each one's keys. Two
+that verify is refused as ambiguous rather than resolved by picking one.
+
+Each assertion's `jti` is spent once and kept until it expires, so a replayed one
+is refused rather than honoured twice.
+
+**Both methods at the authorization endpoint.** SMART requires a server to accept
+an authorization request serialised into the query or into a form, because the
+app chooses which. A form request is answered `303`, the status that means the
+change of method the consent page needs.
+
 **What SMART App Launch does not do here:**
 
-- **No backend services.** `private_key_jwt` is not implemented, so `system/`
-  scopes are refused rather than granted. `packages/project/jwks.go` reads a
-  registration's public keys and nothing uses it yet
 - **No identity token.** `openid`, `fhirUser` and `profile` are refused by name
   rather than granted, because granting them is a promise: a client that asked
   for `openid` would look for an `id_token` and find nothing
