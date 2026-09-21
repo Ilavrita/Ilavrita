@@ -15,12 +15,13 @@ require (
 	//
 	// Run `make bootstrap` (or `git submodule update --init --recursive`) before building.
 	github.com/pocketbase/pocketbase v0.0.0
+	github.com/spf13/cobra v1.10.2
 	golang.org/x/crypto v0.57.0
 	// IDNA (UTS #46) is how packages/project normalises an email domain. One code
 	// path encodes every domain, so an ASCII lookalike cannot skip the validation a
 	// Unicode domain gets.
 	golang.org/x/net v0.59.0
-	modernc.org/sqlite v1.57.0
+	modernc.org/sqlite v1.59.0
 )
 
 require (
@@ -41,7 +42,6 @@ require (
 	github.com/pocketbase/ozzo-validation/v4 v4.3.0 // indirect
 	github.com/remyoudompheng/bigfft v0.0.0-20230129092748-24d4a6f8daec // indirect
 	github.com/spf13/cast v1.10.0 // indirect
-	github.com/spf13/cobra v1.10.2 // indirect
 	github.com/spf13/pflag v1.0.10 // indirect
 	golang.org/x/image v0.46.0 // indirect
 	golang.org/x/oauth2 v0.36.0 // indirect
@@ -49,9 +49,9 @@ require (
 	golang.org/x/sys v0.48.0 // indirect
 	golang.org/x/text v0.42.0 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
-	modernc.org/libc v1.74.4 // indirect
+	modernc.org/libc v1.75.7 // indirect
 	modernc.org/mathutil v1.7.1 // indirect
-	modernc.org/memory v1.12.0 // indirect
+	modernc.org/memory v1.12.1 // indirect
 )
 
 replace github.com/pocketbase/pocketbase => ./third_party/pocketbase
