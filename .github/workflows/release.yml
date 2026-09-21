@@ -129,7 +129,7 @@ jobs:
 
       # Ties the published image back to the workflow run that produced it, so
       # the release artefact and its source can be checked against each other.
-      - uses: actions/attest-build-provenance@v3
+      - uses: actions/attest-build-provenance@v4
         with:
           subject-name: ghcr.io/ilavrita/ilavrita
           subject-digest: ${{ steps.push.outputs.digest }}
