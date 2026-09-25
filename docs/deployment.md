@@ -46,9 +46,22 @@ edit it; never commit a filled-in copy.
 | `ILAVRITA_DATA_DIR` | SQLite database and locally stored files |
 | `ILAVRITA_LOG_LEVEL` | `debug`, `info`, `warn` or `error` |
 | `ILAVRITA_FILE_STORAGE` | `local` or `s3` |
+| `ILAVRITA_PROFILE_DIR` | An implementation guide to hold resources to |
+| `ILAVRITA_TERMINOLOGY_DIR` | CodeSystem and ValueSet JSON to check codes against |
 
 Configuration is not wired up yet; the server currently takes PocketBase's own
 `serve` flags.
+
+The last two change what the server will accept, not only what it reports.
+Validation runs on every create and update, so pointing `ILAVRITA_PROFILE_DIR`
+at a guide makes the server refuse a resource that names one of that guide's
+profiles in `meta.profile` and then breaks it. Resources already stored are not
+re-checked, so a guide added to a running install takes effect on the next write
+and an existing row can be one its own server would now refuse. Set it before
+loading data, or expect to find that out through a failing update.
+
+A resource naming a profile this install does not hold is a warning, not a
+refusal. See [profiles.md](profiles.md) for what is and is not checked.
 
 ## Checking a deployment
 
