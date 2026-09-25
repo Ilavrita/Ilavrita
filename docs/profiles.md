@@ -59,3 +59,16 @@ it — the same reason `scripts/conformance.sh` exists.
 
 No test asserts a number of failures, so a regression shows up as a named example rather
 than a count that somebody edits.
+
+## Agreeing with a second validator
+
+```bash
+python3 scripts/ig/crosscheck.py
+```
+
+Both validators judge the same examples and the disagreement is the finding, reported by
+file name. Ours refusing what HL7's accepts is a bug in ours; the reverse is a rule we do
+not apply yet. It runs in the nightly conformance workflow, and it fails if either happens.
+
+This exists because the eleven-example error above was found by hand. A check run once
+catches a bug once; the same check in CI catches the next one.

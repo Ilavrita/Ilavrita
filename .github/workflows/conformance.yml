@@ -54,10 +54,11 @@ jobs:
     name: What goes on the wire
     runs-on: ubuntu-latest
 
-    # The validator is a Java service behind an HTTP API and starts slowly.
-    # Twenty minutes is generous for the whole run and short enough that a hung
-    # container is reported rather than left holding a runner.
-    timeout-minutes: 20
+    # The validator is a Java service behind an HTTP API and starts slowly, and
+    # slower still once a guide is loaded into it. Thirty-five minutes is
+    # generous and short enough that a hung container is reported rather than
+    # left holding a runner.
+    timeout-minutes: 35
 
     steps:
       - uses: actions/checkout@v7
@@ -80,3 +81,11 @@ jobs:
       # in the log rather than in nothing.
       - name: Validate every shape
         run: ./scripts/conformance.sh
+
+      # A guide's examples are judged by both validators. Ours refusing what
+      # HL7's accepts is a bug in ours; the reverse is a rule we do not apply.
+      - name: Fetch an implementation guide
+        run: ./scripts/ig/fetch.sh
+
+      - name: Agree with a second validator about a guide
+        run: python3 scripts/ig/crosscheck.py
