@@ -153,7 +153,7 @@ func (r *Report) checkMember(
 		return
 	}
 
-	r.checkCardinality(element, value, where+"."+name)
+	r.checkCardinality(structure, element, value, where+"."+name)
 	r.checkBinding(element, value, where+"."+name)
 
 	// An element this build cannot say what is inside is left alone. Walking
@@ -333,17 +333,42 @@ func notInTheSet(element conformance.Element) string {
 // R4's JSON writes a repeating element as an array and a single one as the value
 // itself, always: one of two members is not a matter of taste, it is what tells
 // a reader whether more may follow.
-func (r *Report) checkCardinality(element conformance.Element, value any, where string) {
-	_, isArray := value.([]any)
+//
+// A profile narrowing 0..* to 0..1 bounds the entries, not the shape: the base
+// definition still says array, so a resource writes one holding one entry.
+func (r *Report) checkCardinality(
+	structure conformance.Structure, element conformance.Element, value any, where string,
+) {
+	list, isArray := value.([]any)
+
+	if element.Max == "0" {
+		r.note(SeverityError, where, "This element is not permitted here.")
+
+		return
+	}
+
+	if structure.Profile {
+		if bound, single := atMost(element.Max); single && isArray && len(list) > bound {
+			r.note(SeverityError, where, "This element is bounded to "+element.Max+" here.")
+		}
+
+		return
+	}
 
 	switch {
-	case element.Max == "0":
-		r.note(SeverityError, where, "This element is not permitted here.")
 	case element.Repeats() && !isArray:
 		r.note(SeverityError, where, "This element repeats, so it is written as an array.")
 	case !element.Repeats() && isArray:
 		r.note(SeverityError, where, "This element occurs once, so it is not written as an array.")
 	}
+}
+
+// atMost reads a bounded max, and reports whether it is one. An unbounded "*"
+// bounds nothing.
+func atMost(max string) (int, bool) {
+	bound, err := strconv.Atoi(max)
+
+	return bound, err == nil
 }
 
 // checkRequired reports the elements the definition says a resource must carry.

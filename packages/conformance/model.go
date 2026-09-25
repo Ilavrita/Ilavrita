@@ -123,6 +123,11 @@ type Structure struct {
 	// "primitive-type".
 	Kind string
 
+	// Profile is true for a guide's narrowing of a base definition. A profile
+	// bounds how many of an element there may be; it never changes whether JSON
+	// writes it as an array, which the base definition alone decides.
+	Profile bool
+
 	// Elements is every element beneath the root, by its relative path.
 	Elements map[string]Element
 
@@ -333,6 +338,7 @@ func structureOf(content json.RawMessage, derivation string) (Structure, bool) {
 	}
 
 	structure := Structure{
+		Profile:  held.Derivation == "constraint",
 		Type:     held.ID,
 		Kind:     held.Kind,
 		Elements: map[string]Element{},
