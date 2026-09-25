@@ -282,6 +282,7 @@ func structuresIn(name string, into map[string]Structure) error {
 // snapshotElement is as much of one element as the model keeps.
 type snapshotElement struct {
 	Path             string `json:"path"`
+	ID               string `json:"id"`
 	Min              int    `json:"min"`
 	Max              string `json:"max"`
 	ContentReference string `json:"contentReference"`
@@ -342,6 +343,15 @@ func structureOf(content json.RawMessage, derivation string) (Structure, bool) {
 	for _, element := range held.Snapshot.Element[1:] {
 		path, beneath := strings.CutPrefix(element.Path, root+".")
 		if !beneath {
+			continue
+		}
+
+		// A slice shares its path with the element it slices, so writing one
+		// here would replace that element's own cardinality and types with one
+		// branch's. A snapshot names a slice in the id — "Bundle.entry:Claim"
+		// and everything beneath it — which the path does not say. Slices are
+		// not applied yet; the unsliced element is.
+		if strings.Contains(element.ID, ":") {
 			continue
 		}
 
