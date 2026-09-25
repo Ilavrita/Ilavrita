@@ -28,14 +28,6 @@ func TestTheGuidesOwnExamplesValidate(t *testing.T) {
 
 	t.Setenv(conformance.ProfileDirectory, filepath.Join("..", "..", ".ig", "ndhm", "package"))
 
-	// The guide narrows identifier to 0..1 on these and then writes an array in
-	// its own example. A resource cannot be both, so the guide disagrees with
-	// itself and any validator applying the profile reports it.
-	contradicts := map[string]bool{
-		"Medication": true, "CoverageEligibilityRequest": true,
-		"Invoice": true, "InsurancePlan": true,
-	}
-
 	var checked, refused int
 
 	for _, entry := range entries {
@@ -65,12 +57,7 @@ func TestTheGuidesOwnExamplesValidate(t *testing.T) {
 			}
 
 			refused++
-
-			if contradicts[named.ResourceType] {
-				t.Logf("guide disagrees with itself: %s: %s", entry.Name(), issue.Detail)
-			} else {
-				t.Errorf("%s: %s: %s", entry.Name(), issue.Expression, issue.Detail)
-			}
+			t.Errorf("%s: %s: %s", entry.Name(), issue.Expression, issue.Detail)
 
 			break
 		}

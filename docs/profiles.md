@@ -48,11 +48,14 @@ this build disagreeing with them.
 ./scripts/ig/fetch.sh && go test ./packages/validate/ -run GuidesOwnExamples -v
 ```
 
-Against ABDM 6.5.0: **138 examples checked, 11 refused.** All eleven are the guide
-disagreeing with itself — `Medication`, `CoverageEligibilityRequest`, `Invoice` and
-`InsurancePlan` narrow `identifier` to `0..1` and then write an array in their own
-example. A resource cannot be both. Those four types are named in the test so the
-disagreement is recorded rather than hidden; every other example passes.
+Against ABDM 6.5.0: **138 examples checked, 0 refused**, which is the same verdict the HL7
+validator gives with the guide loaded.
+
+That agreement was not free. An earlier pass refused eleven of them and the reasoning was
+wrong: a profile narrowing `0..*` to `0..1` bounds how many entries an array may hold, it
+does not turn the array into an object. JSON shape is the base definition's to decide and a
+profile never changes it. Checking ourselves against a second implementation is what caught
+it — the same reason `scripts/conformance.sh` exists.
 
 No test asserts a number of failures, so a regression shows up as a named example rather
 than a count that somebody edits.
