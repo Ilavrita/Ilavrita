@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"io/fs"
 	"os"
-	"path/filepath"
 	"strings"
 )
 
@@ -41,16 +40,26 @@ func Supplied(root string) (Terminology, error) {
 // readSupplied walks the directory, reading every CodeSystem and ValueSet it
 // holds. A file that is neither is skipped rather than refused: a release ships
 // its manifest and its examples alongside the definitions.
+//
+// os.Root confines the walk, so a symlink inside a release cannot reach a file
+// outside the directory the operator named.
 func readSupplied(
-	root string, systems map[string]definedCodeSystem, sets map[string]composedValueSet,
+	dir string, systems map[string]definedCodeSystem, sets map[string]composedValueSet,
 ) error {
-	return filepath.WalkDir(root, func(path string, entry fs.DirEntry, err error) error {
+	root, err := os.OpenRoot(dir)
+	if err != nil {
+		return fmt.Errorf("%w: %s: %w", ErrUnreadableDefinitions, dir, err)
+	}
+	defer func() { _ = root.Close() }()
+
+	held := root.FS()
+
+	return fs.WalkDir(held, ".", func(path string, entry fs.DirEntry, err error) error {
 		if err != nil || entry.IsDir() || !strings.HasSuffix(path, ".json") {
 			return err
 		}
 
-		// #nosec G304 -- the operator names this directory; reading beneath it is the feature.
-		content, err := os.ReadFile(path)
+		content, err := fs.ReadFile(held, path)
 		if err != nil {
 			return fmt.Errorf("%w: %s: %w", ErrUnreadableDefinitions, path, err)
 		}

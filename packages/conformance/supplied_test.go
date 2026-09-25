@@ -96,3 +96,28 @@ func TestSuppliedReportsAMissingDirectory(t *testing.T) {
 		t.Error("a missing directory was accepted silently")
 	}
 }
+
+// A release is unpacked by whoever obtained it, and an archive can carry a
+// symlink. The walk is confined so one cannot read outside the directory named.
+func TestSuppliedDoesNotFollowASymlinkOutOfTheDirectory(t *testing.T) {
+	outside := t.TempDir()
+	secret := filepath.Join(outside, "secret.json")
+	if err := os.WriteFile(secret, []byte(`{"resourceType":"ValueSet","url":"http://example.org/vs/secret",
+		"compose":{"include":[{"system":"http://snomed.info/sct"}]}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	root := writeRelease(t)
+	if err := os.Symlink(secret, filepath.Join(root, "escape.json")); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+
+	held, err := Supplied(root)
+	if err != nil {
+		t.Fatalf("a symlink stopped the load: %v", err)
+	}
+
+	if _, resolved := held.Admits("http://example.org/vs/secret"); resolved {
+		t.Error("the walk followed a symlink outside the directory it was given")
+	}
+}
