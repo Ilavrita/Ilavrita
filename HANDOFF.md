@@ -136,12 +136,20 @@ go build ./... && go vet ./... && go test ./...
 golangci-lint run
 ./scripts/verify-openapi.sh   # fails on drift in BOTH directions
 ./scripts/conformance.sh      # the HL7 validator over what the handlers return
+./scripts/ig/fetch.sh         # then: an implementation guide, judged by both validators
+python3 scripts/ig/crosscheck.py
 make ci-local                 # the workflows, via act
 ```
 
-`conformance.sh` needs Docker and is the one gate that does. It is also the only
-one that is not this project marking its own homework, which is why it found two
-defects a green suite had been reporting as correct.
+`conformance.sh` and `crosscheck.py` need Docker and are the gates that do. They
+are also the only ones that are not this project marking its own homework, which
+is why they found three defects a green suite had been reporting as correct.
+
+`crosscheck.py` accepts a finding of HL7's only against a stated reason and
+prints how many each covered, so a class that quietly grows shows up in the
+count. It also refuses to pass vacuously: it proves the guide is loaded and that
+our own test ran before it will report agreement. Both checks earn their keep —
+the first version of it loaded no guide and reported agreement on all 138.
 
 ## 5. Traps that cost real time
 
@@ -187,14 +195,20 @@ None of these are visible from reading the code.
 - **A compartment subject is created by naming it.** A `POST /Patient` mints an id no confined
   grant can name in advance, so it is refused; `PUT /Patient/{id}` under a grant naming that
   patient is how one is provisioned. Correct, and surprising the first time.
-- **A profile is checked as far as its root.** The R4 base definitions and value sets are
-  embedded, seeded at startup and read by the validator, and all 203 of R4's required FHIRPath
+- **A profile is checked for cardinality, not for shape.** The R4 base definitions and value sets
+  are embedded, seeded at startup and read by the validator, and all 203 of R4's required FHIRPath
   invariants are evaluated by `packages/fhirpath`. A resource naming a profile in `meta.profile`
-  has that profile's resource-level invariants applied, and one this install does not hold is
-  reported rather than passed. What is *not* applied is a profile's narrowed cardinality, narrowed
-  types, narrowed bindings, slicing, or any invariant it attaches below the root — an invariant is
-  evaluated with its own element as context, and resolving each one's path through a resource is
-  work nobody has done here.
+  has that profile's resource-level invariants applied, both ends of its narrowed cardinality
+  enforced — a required element that is absent and a bounded one that repeats too often are both
+  refused — and a profile this install does not hold is reported rather than passed. What is *not*
+  applied is a profile's narrowed types, narrowed bindings, slicing, or any invariant it attaches
+  below the root: an invariant is evaluated with its own element as context, and resolving each
+  one's path through a resource is work nobody has done here.
+- **A profile applies only where a resource declares it.** HL7's validator also applies R4's
+  vital-signs profiles to an `Observation` whose code is one of theirs, which this build does not.
+  `scripts/ig/crosscheck.py` counts the difference: fourteen findings across seven examples.
+- **An extension's context is not checked.** Nothing stops an extension appearing on an element its
+  own definition does not allow. Nine findings in the same cross-check.
 - **No LOINC or SNOMED, at all.** There was a directory — an importer that read a release a
   deployment supplied, two tables it landed in, and `$lookup` / `$validate-code` over it — and it
   was removed deliberately. It bought almost nothing: exactly one of R4's required bindings names

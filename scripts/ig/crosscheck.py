@@ -209,10 +209,10 @@ def refused_by_hl7(held):
 
 
 def refused_by_ilavrita():
+    # The test points itself at the guide, so there is nothing to pass it here.
     run = subprocess.run(
         ["go", "test", "./packages/validate/", "-run", "GuidesOwnExamples", "-v", "-count=1"],
         capture_output=True, text=True,
-        env={**os.environ, "ILAVRITA_PROFILE_DIR": GUIDE},
     )
 
     named = {
