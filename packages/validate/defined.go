@@ -1,6 +1,7 @@
 package validate
 
 import (
+	"os"
 	"regexp"
 	"slices"
 	"strconv"
@@ -36,6 +37,15 @@ var numericTypes = map[string]bool{
 // read its own value sets checks no binding, which is silence rather than a
 // refusal: the sets are what this server knows, not what a client did wrong.
 var terminology = sync.OnceValue(func() conformance.Terminology {
+	if root := os.Getenv(conformance.SuppliedDirectory); root != "" {
+		held, err := conformance.Supplied(root)
+		if err != nil {
+			return conformance.Terminology{}
+		}
+
+		return held
+	}
+
 	held, err := conformance.Terminologies()
 	if err != nil {
 		return conformance.Terminology{}

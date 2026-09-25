@@ -5,6 +5,7 @@
 | [Architecture](architecture.md) | How the system is layered and why |
 | [Deployment](deployment.md) | Running Ilavrita, and what is still missing |
 | [Security model](security.md) | Controls, assumptions and what Ilavrita does not claim |
+| [Terminology](terminology.md) | Loading SNOMED CT or LOINC under your own licence |
 | [Supply chain](supply-chain.md) | Verifying a release artefact |
 | [Dependency updates](dependencies.md) | How Dependabot updates are merged |
 | [Known limitations](known-limitations.md) | What does not work yet |
