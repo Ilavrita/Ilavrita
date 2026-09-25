@@ -131,7 +131,7 @@ func assertHistory(t *testing.T, routes http.Handler, resourceType, id string) {
 	bundle := decodeBundle(t, answer)
 	if bundle.ResourceType != "Bundle" || bundle.Type != fhir.BundleHistory ||
 		bundle.Total == nil || *bundle.Total != 3 {
-		t.Fatalf("bundle is a %s %s of %d, want a history Bundle of 3",
+		t.Fatalf("bundle is a %s %s of %v, want a history Bundle of 3",
 			bundle.ResourceType, bundle.Type, bundle.Total)
 	}
 
