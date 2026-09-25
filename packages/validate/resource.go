@@ -74,6 +74,7 @@ func Resource(custom search.Custom, resourceType storage.ResourceType, content [
 	}
 
 	report.againstDefinition(model, string(resourceType), held)
+	report.againstDeclaredProfiles(model, held, string(resourceType))
 
 	return report
 }
