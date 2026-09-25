@@ -40,3 +40,6 @@ api/openapi.bundled.json
 .idea/
 .vscode/*
 !.vscode/extensions.json
+
+# Implementation guides fetched at test time, never committed.
+.ig/
