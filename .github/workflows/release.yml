@@ -153,7 +153,7 @@ jobs:
       # Says what is inside the image, attested to the same digest, so an
       # operator can answer "which version of this dependency did we ship?"
       # without trusting a rebuild.
-      - uses: actions/attest-sbom@v3
+      - uses: actions/attest-sbom@v4
         with:
           subject-name: ghcr.io/ilavrita/ilavrita
           subject-digest: ${{ steps.push.outputs.digest }}
