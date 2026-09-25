@@ -270,7 +270,7 @@ func structuresIn(name string, into map[string]Structure) error {
 			return fmt.Errorf("%w: %s: %w", ErrUnreadableDefinitions, name, err)
 		}
 
-		structure, held := structureOf(entry.Resource)
+		structure, held := structureOf(entry.Resource, "specialization")
 		if held {
 			into[structure.Type] = structure
 		}
@@ -304,7 +304,7 @@ type snapshotElement struct {
 }
 
 // structureOf reads one definition into the elements it declares.
-func structureOf(content json.RawMessage) (Structure, bool) {
+func structureOf(content json.RawMessage, derivation string) (Structure, bool) {
 	var held struct {
 		ResourceType string `json:"resourceType"`
 		ID           string `json:"id"`
@@ -320,10 +320,10 @@ func structureOf(content json.RawMessage) (Structure, bool) {
 		return Structure{}, false
 	}
 
-	// Specializations only. A profile constrains something this build does not
-	// check against profiles, and reading one as if it were the base definition
-	// would check every resource against somebody's narrowing of it.
-	if held.ResourceType != "StructureDefinition" || held.Derivation != "specialization" {
+	// A base definition and a profile are read the same way and kept apart. A
+	// profile read as a base definition would check every resource against
+	// somebody's narrowing of it.
+	if held.ResourceType != "StructureDefinition" || held.Derivation != derivation {
 		return Structure{}, false
 	}
 
