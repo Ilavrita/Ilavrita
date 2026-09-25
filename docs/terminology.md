@@ -41,6 +41,11 @@ Every `.json` file beneath it is read. A `CodeSystem` or a `ValueSet` carrying a
 loaded; anything else — a manifest, examples, notes — is skipped rather than refused,
 because a release ships those alongside the definitions.
 
+The walk is confined by `os.Root`, so a symlink in an unpacked release cannot read a file
+outside the directory named. Symlinks are skipped rather than followed: one pointing
+outside would otherwise fail the whole load, and a release nobody can load leaves
+validation silently deciding nothing.
+
 A supplied definition wins over the embedded one of the same URL. An install that obtained
 a newer release means to use it.
 

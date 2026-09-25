@@ -59,6 +59,13 @@ func readSupplied(
 			return err
 		}
 
+		// A symlink is skipped rather than read. One pointing outside the
+		// directory would fail the whole load, and a release nobody can load
+		// leaves validation silently deciding nothing.
+		if entry.Type()&fs.ModeSymlink != 0 {
+			return nil
+		}
+
 		content, err := fs.ReadFile(held, path)
 		if err != nil {
 			return fmt.Errorf("%w: %s: %w", ErrUnreadableDefinitions, path, err)
