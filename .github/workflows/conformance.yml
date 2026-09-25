@@ -23,6 +23,7 @@ on:
       - "packages/conformance/**"
       - "packages/storage/**"
       - "scripts/conformance.*"
+      - "scripts/ig/**"
       - ".github/workflows/conformance.yml"
   pull_request:
     paths:
@@ -32,6 +33,7 @@ on:
       - "packages/conformance/**"
       - "packages/storage/**"
       - "scripts/conformance.*"
+      - "scripts/ig/**"
       - ".github/workflows/conformance.yml"
 
   # Nightly, so a finding that appears without anybody touching the wire — a new
