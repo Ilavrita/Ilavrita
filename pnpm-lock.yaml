@@ -9,8 +9,8 @@ importers:
   .:
     devDependencies:
       '@redocly/cli':
-        specifier: 2.57.0
-        version: 2.57.0
+        specifier: 2.62.1
+        version: 2.62.1
       turbo:
         specifier: 2.11.7
         version: 2.11.7
@@ -37,8 +37,8 @@ importers:
 
 packages:
 
-  '@redocly/cli@2.57.0':
-    resolution: {integrity: sha512-1d5fVyUaYlMNgCHUoyE2vUyxBhs/jmOHgsX/kFmfWzESw4f/G/OV/SU9E55rU7aUNmw9rHj1vXmL6yUdIn+KKQ==}
+  '@redocly/cli@2.62.1':
+    resolution: {integrity: sha512-KdhRvUGkaom19U83mlRJE10T4svPf8EHCn9AGLgIHxqHgVTyjQMLyrOoIU46pV6Gtvbe3t035ckIDVYeqXC4VQ==}
     engines: {node: '>=22.12.0 || >=20.19.0 <21.0.0', npm: '>=10'}
     hasBin: true
 
@@ -203,7 +203,7 @@ packages:
 
 snapshots:
 
-  '@redocly/cli@2.57.0': {}
+  '@redocly/cli@2.62.1': {}
 
   '@turbo/darwin-64@2.11.7':
     optional: true
