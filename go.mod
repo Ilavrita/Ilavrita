@@ -20,7 +20,7 @@ require (
 	// IDNA (UTS #46) is how packages/project normalises an email domain. One code
 	// path encodes every domain, so an ASCII lookalike cannot skip the validation a
 	// Unicode domain gets.
-	golang.org/x/net v0.60.0
+	golang.org/x/net v0.61.0
 	modernc.org/sqlite v1.60.1
 )
 
