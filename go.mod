@@ -21,7 +21,7 @@ require (
 	// path encodes every domain, so an ASCII lookalike cannot skip the validation a
 	// Unicode domain gets.
 	golang.org/x/net v0.62.0
-	modernc.org/sqlite v1.61.0
+	modernc.org/sqlite v1.61.1
 )
 
 require (
