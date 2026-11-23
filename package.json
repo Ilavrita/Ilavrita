@@ -30,8 +30,8 @@
     "api:verify": "./scripts/verify-openapi.sh"
   },
   "devDependencies": {
-    "@redocly/cli": "2.78.0",
-    "turbo": "2.11.11",
+    "@redocly/cli": "2.82.0",
+    "turbo": "2.11.13",
     "typescript": "7.0.2"
   }
 }
